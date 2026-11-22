@@ -3,7 +3,7 @@ topic: queue.next-action
 question: Where does the recommended next action come from?
 keywords: next action, recommended action, what to do next
 ---
-The next action on an Action Queue row is derived from the incident's own
+The next action on a Problems row is derived from the incident's own
 state, not from a template: what the verdict says, whether an owner exists,
 whether evidence is missing, and whether a ticket is due. A suspected or
 blocked incident is held — its impact is not confirmed, so the action is to
