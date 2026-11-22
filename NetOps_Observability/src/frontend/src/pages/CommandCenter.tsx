@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
-import { api, Incident, CorrObject } from "../services/api";
+import { api, CorrObject } from "../services/api";
 import { signatureNocTitle, entityLabel, friendlyProblemId } from "../components/rca/labels";
 import DataTable, { type Column } from "../components/DataTable";
 import { LogTime } from "../lib/logfmt";
@@ -13,6 +13,7 @@ import {
   type FaultDomain, type EvidenceState, type CcFilters,
   fmtAge, buildItem, isActionableCorr, bySeverityThenAge, filterItems, activeFilterCount,
   startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank, affectedDeviceKeys,
+  type TicketLinks, NO_TICKET_LINKS, indexTicketLinks, QUEUE_PAGE, truncationNote,
 } from "./commandCenter.model";
 import { useDeviceLabels, type DeviceNames } from "../lib/deviceNames";
 
@@ -78,7 +79,10 @@ const ccChip = (text: string, tone: string, title?: string) => (
   <span className="cc-badge" style={{ color: tone, borderColor: tone }} title={title}>{text}</span>
 );
 const OWNER_TONE: Record<OwnerState, string> = { Assigned: "var(--ok)", Recommended: "var(--accent)", Missing: "var(--crit)", Escalated: "var(--warn)" };
-const TICKET_TONE: Record<TicketState, string> = { Ticketed: "var(--ok)", "Ticket needed": "var(--warn)", Eligible: "var(--accent)", "Sync failed": "var(--crit)", "Not eligible": "var(--fg-subtle)" };
+const TICKET_TONE: Record<TicketState, string> = {
+  Ticketed: "var(--ok)", "Ticket pending": "var(--accent)", "Ticket needed": "var(--warn)", Eligible: "var(--accent)",
+  "Sync failed": "var(--crit)", "Not eligible": "var(--fg-subtle)", Unknown: "var(--fg-subtle)",
+};
 
 // The affected devices' display names, in the order the object lists them: the
 // inventory name for an id or a management address, else the friendly label.
@@ -367,7 +371,8 @@ function CcKpi({ n, label, topic, tone, href, onClick, active }: { n: number | s
 // ── Main ─────────────────────────────────────────────────────────────────────────
 export default function CommandCenter() {
   const [corr, setCorr] = useState<CorrObject[]>([]);
-  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [links, setLinks] = useState<TicketLinks>(NO_TICKET_LINKS);
+  const [more, setMore] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -375,19 +380,24 @@ export default function CommandCenter() {
 
   const load = useCallback(async () => {
     try {
-      const [cs, inc] = await Promise.all([
-        api.correlations(200, 2592000, "open"),
-        api.listIncidents({ limit: 500 }).catch(() => [] as Incident[]),
+      // Ticket state comes from the cases' own ticket links; the incident list
+      // (the deprecated incident → ITSM sync) is no longer read here.
+      const [cs, tl] = await Promise.all([
+        api.correlations(QUEUE_PAGE, 2592000, "open"),
+        // Started inside a promise: a failed or missing links read degrades the
+        // Ticket column to what it can honestly say, never the whole queue.
+        Promise.resolve().then(() => api.ticketLinks(2000)).then((r) => indexTicketLinks(r?.links, r?.complete === true)).catch(() => NO_TICKET_LINKS),
       ]);
       setCorr((cs?.data ?? []).filter(isActionableCorr));
-      setIncidents(inc ?? []);
+      setMore(!!cs?.next_cursor);
+      setLinks(tl);
       setErr(null);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoaded(true); }
   }, []);
   useEffect(() => { load(); const id = setInterval(load, 30_000); return () => clearInterval(id); }, [load]);
 
-  const items = useMemo(() => corr.map((c) => buildItem(c)).sort(bySeverityThenAge), [corr]);
+  const items = useMemo(() => corr.map((c) => buildItem(c, Date.now(), links)).sort(bySeverityThenAge), [corr, links]);
   // KPIs/pressure reflect the WHOLE queue; the filter bar narrows only the table.
   const visible = useMemo(() => filterItems(items, filters), [items, filters]);
   // A KPI sets its filter on the queue (and toggles off if already active), so its
@@ -411,7 +421,10 @@ export default function CommandCenter() {
   const blocked = items.filter((i) => i.rca === "Blocked").length;
   const ownerMissing = items.filter((i) => i.owner === "Missing").length;
   const ticketNeeded = items.filter((i) => i.ticket === "Ticket needed").length;
-  const ticketed = incidents.filter((i) => i.sync_status === "synced").length;
+  // From the case's own ticket links (the same join the queue's Ticket column
+  // reads), not the deprecated incident → ITSM sync, so the two never disagree.
+  const ticketed = items.filter((i) => i.ticket === "Ticketed").length;
+  const syncFailed = items.filter((i) => i.ticket === "Sync failed").length;
 
   const pressure = critical >= 3 ? "Severe" : critical >= 1 ? "Elevated" : suspected > 0 ? "Watch" : "Nominal";
   const pressureTone = pressure === "Severe" ? "var(--crit)" : pressure === "Elevated" ? "var(--warn)" : pressure === "Watch" ? "var(--accent)" : "var(--ok)";
@@ -444,7 +457,7 @@ export default function CommandCenter() {
           <CcKpi n={confirmed} label="Confirmed RCA" topic="kpi.confirmed-rca" tone={confirmed ? "var(--crit)" : undefined} onClick={() => applyKpi({ rca: "Confirmed" })} active={kpiActive({ rca: "Confirmed" })} />
           <CcKpi n={ownerMissing} label="Owner missing" topic="kpi.owner-missing" tone={ownerMissing ? "var(--crit)" : "var(--ok)"} onClick={() => applyKpi({ owner: "Missing" })} active={kpiActive({ owner: "Missing" })} />
           <CcKpi n={blocked} label="RCA blocked" topic="kpi.rca-blocked" tone={blocked ? "var(--warn)" : "var(--ok)"} onClick={() => applyKpi({ rca: "Blocked" })} active={kpiActive({ rca: "Blocked" })} />
-          <CcKpi n={`${ticketed}/${ticketNeeded || 0}`} label="Ticketed" topic="kpi.ticketed" href="#/admin/integrations" />
+          <CcKpi n={`${ticketed}/${ticketed + ticketNeeded}`} label="Ticketed" topic="kpi.ticketed" href="#/admin/integrations" />
         </div>
         {err && <p className="cc-err">{err}</p>}
       </div>
@@ -458,6 +471,7 @@ export default function CommandCenter() {
         {loaded && items.length > 0 && (
           <FilterBar filters={filters} setFilters={setFilters} total={items.length} shown={visible.length} />
         )}
+        {loaded && more && <p className="cc-trunc" role="status" data-testid="queue-truncated">{truncationNote(corr.length, more)}</p>}
         {!loaded ? (
           <div className="cc-empty">Loading…</div>
         ) : items.length === 0 ? (
@@ -489,7 +503,7 @@ export default function CommandCenter() {
           <CcKpi n={ticketed} label="Ticketed" topic="ticket.ticketed" tone={ticketed ? "var(--ok)" : undefined} />
           <CcKpi n={ticketNeeded} label="Ticket needed" topic="ticket.needed" tone={ticketNeeded ? "var(--warn)" : undefined} />
           <CcKpi n={items.filter((i) => i.ticket === "Not eligible").length} label="Not eligible" topic="ticket.not-eligible" />
-          <CcKpi n={incidents.filter((i) => i.sync_status === "failed").length} label="Sync failed" topic="ticket.sync-failed" tone={incidents.some((i) => i.sync_status === "failed") ? "var(--crit)" : undefined} href="#/admin/integrations" />
+          <CcKpi n={syncFailed} label="Sync failed" topic="ticket.sync-failed" tone={syncFailed ? "var(--crit)" : undefined} href="#/admin/integrations" />
         </div>
       </div>
     </div>
