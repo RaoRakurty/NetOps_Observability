@@ -86,7 +86,7 @@ func NewWorker(store Store, resolve ConnResolver, warnf, errf func(msg string, f
 		warnf:       warnf,
 		errf:        errf,
 		store:       store,
-		adapters:    map[string]Adapter{"servicenow": NewServiceNowAdapter(), "pagerduty": NewPagerDutyAdapter(), "slack": NewSlackAdapter(), "jira": NewJiraAdapter()},
+		adapters:    map[string]Adapter{"servicenow": NewServiceNowAdapter(), "pagerduty": NewPagerDutyAdapter(), "slack": NewSlackAdapter(), "teams": NewTeamsAdapter(), "jira": NewJiraAdapter()},
 		resolveConn: resolve,
 		workerID:    "ticket-" + randHexID()[:8],
 		batch:       16,

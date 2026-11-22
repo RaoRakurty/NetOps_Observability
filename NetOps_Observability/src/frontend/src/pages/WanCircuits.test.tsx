@@ -22,7 +22,9 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
-import type { WanCircuit, WanEndpoint, WanMeasurementPolicy } from "../services/api";
+import type { ProbePath, WanCircuit, WanEndpoint, WanInterfaceRow, WanMeasurementPolicy } from "../services/api";
+import { buildMeasuredIndex } from "./paths/measuredFold";
+import type { MeasuredState } from "./paths/useMeasuredPaths";
 
 const mockApi = vi.hoisted(() => ({
   wanInterfaces: vi.fn(),
@@ -143,52 +145,111 @@ describe("routes", () => {
   });
 });
 
-// ── the derived paths ───────────────────────────────────────────────────────
+// ── the measured paths, on their rows (2026-11-22) ──────────────────────────
+//
+// The "Measured paths" section only said whether a link was measured, and the
+// Measured paths tab showed the prober's traces apart from the circuit. Both
+// now live in the rows: "held" in the Measured-to cell, the trace in a Path
+// column that opens hop by hop.
 
-describe("measured paths", () => {
-  it("renders one row per interface→target link with both ends", async () => {
-    render(<WanCircuits />);
-    const sec = await waitFor(() => {
-      const s = section("wan-measured-paths");
-      if (!within(s).queryByText("10.1.1.2")) throw new Error("not read yet");
-      return s;
-    });
-    expect(within(sec).getAllByText("wan-edge-1").length).toBeGreaterThan(0);
-    expect(within(sec).getByText("spine-1")).toBeTruthy();
-    expect(within(sec).getByText("Ethernet9")).toBeTruthy();
-    expect(within(sec).getByText("203.0.113.1")).toBeTruthy();
+function wanRow(over: Partial<WanInterfaceRow> = {}): WanInterfaceRow {
+  return {
+    device: "wan-edge-1", interface: "Gi0/0/2", address: "203.0.113.2", site: "London",
+    in_bps: 1000, out_bps: 2000, util_pct: 12, has_util: true, oper_up: true, has_oper: true,
+    target: "203.0.113.1", target_kind: "next_hop", has_target: true,
+    latency_ms: 12, jitter_ms: 1, loss_pct: 0, qoe: 9, availability_pct: 100,
+    has_latency: true, has_jitter: true, has_loss: true, has_qoe: true, has_availability: true,
+    source: "traceroute", source_label: "Traceroute", tier: 2, tier_label: "Active path probe",
+    ...over,
+  } as WanInterfaceRow;
+}
+
+const TRACE: ProbePath = {
+  dst: "203.0.113.1", method: "icmp", vantage_id: "v1", site: "London", reached: true, changed: false,
+  ts: new Date().toISOString(),
+  hops: [{ ttl: 1, ip: "10.0.0.1", rtt_ms: 1, loss_pct: 0 }, { ttl: 2, ip: "203.0.113.1", rtt_ms: 9, loss_pct: 0 }],
+};
+const ELSEWHERE: ProbePath = { ...TRACE, dst: "8.8.8.8", site: "", reached: false, hops: [{ ttl: 1, ip: "10.0.0.1", rtt_ms: 1, loss_pct: 0 }] };
+
+const probed = (paths: ProbePath[], error: string | null = null): MeasuredState =>
+  ({ index: buildMeasuredIndex(paths, [], []), error, loaded: true });
+
+describe("measured paths on the rows", () => {
+  it("has no Measured paths section any more", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
+    render(<WanCircuits measured={probed([TRACE])} />);
+    await screen.findByText("Gi0/0/2");
+    expect(document.querySelector('[data-section="wan-measured-paths"]')).toBeNull();
+    expect(screen.queryByText("Measured paths")).toBeNull();
   });
 
-  it("chips each path with the provenance vocabulary — peer, ISP next-hop, anchor", async () => {
+  it("marks a link the registry holds but does not measure as held, in its own row", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow({ interface: "Ethernet3", target: "1.1.1.1", target_kind: "anchor" }), wanRow()] });
     render(<WanCircuits />);
-    const sec = await waitFor(() => {
-      const s = section("wan-measured-paths");
-      if (!within(s).queryByText("Peer")) throw new Error("not read yet");
-      return s;
-    });
-    expect(within(sec).getAllByText("ISP next-hop").length).toBeGreaterThan(0);
-    expect(within(sec).getByText("Anchor")).toBeTruthy();
-    // The house vocabulary: a next-hop is an ownership handoff to the ISP, and
-    // the word "boundary" is reserved for spine zones.
-    const chip = within(sec).getAllByText("ISP next-hop")[0];
-    // UI-words sweep 4: the row states the target; the ownership handoff moved
-    // into ai/skills/explain/wan.next-hop.md behind the section's `(i)`.
-    expect(chip.getAttribute("title")).toContain("The ISP next-hop you declared");
-    expect(within(sec).getByRole("button", { name: "Ask Iris about Derived target" })).toBeTruthy();
-    expect(sec.textContent ?? "").not.toMatch(/boundary/i);
-    expect(sec.textContent ?? "").not.toMatch(/\bhub\b|\bspoke\b/i);
+    const held = await screen.findByTestId("wan-held");
+    expect(held.getAttribute("title")).toBe("In the registry, not being measured");
+    expect(screen.getAllByTestId("wan-held")).toHaveLength(1);
   });
 
-  it("explains what has to be true before anything is derived, when nothing is", async () => {
-    mockApi.wanCircuits.mockResolvedValue({ circuits: [] });
+  it("puts the prober's path to the row's target in a Path column", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
+    render(<WanCircuits measured={probed([TRACE])} />);
+    const cell = await screen.findByTestId("path-cell");
+    expect(within(cell).getByTestId("path-verdict").textContent).toBe("Reached");
+    expect(cell.textContent).toContain("2 hops");
+    expect(screen.getByText("Path")).toBeTruthy();
+  });
+
+  it("opens the row's path hop by hop, with where it goes and when it was traced", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
+    render(<WanCircuits measured={probed([TRACE])} />);
+    fireEvent.click(await screen.findByText("Gi0/0/2"));
+    const panel = screen.getByTestId("path-panel");
+    expect(panel.className).toContain("open");
+    const detail = within(panel).getByTestId("path-detail");
+    expect(within(detail).getByRole("heading", { name: "To the measurement target" })).toBeTruthy();
+    expect(detail.textContent).toContain("From prober v1 to 203.0.113.1");
+    expect(detail.textContent).toMatch(/traced as of \d\d:\d\d/);
+    expect(within(detail).getByTestId("paths-ribbon")).toBeTruthy();
+    expect(within(detail).getByLabelText("Path hops")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("path-panel").className).not.toContain(" open");
+  });
+
+  it("lists a path no row claims apart, collapsed, and opens it too", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
+    render(<WanCircuits measured={probed([TRACE, ELSEWHERE])} />);
+    const box = await screen.findByTestId("paths-other");
+    expect(box.tagName).toBe("DETAILS");
+    expect((box as HTMLDetailsElement).open).toBe(false);
+    expect(within(box).getByText("Measured paths to other targets (1)")).toBeTruthy();
+    expect(within(box).getByTestId("path-verdict").textContent).toBe("Not reached");
+    fireEvent.click(within(box).getByTestId("paths-other-open"));
+    expect(within(screen.getByTestId("path-panel")).getByRole("heading", { name: "To 8.8.8.8" })).toBeTruthy();
+  });
+
+  it("shows a dash for a row with no measured path, and opens nothing", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow({ target: "198.51.100.9" })] });
+    render(<WanCircuits measured={probed([TRACE])} />);
+    const cell = await screen.findByTestId("path-cell");
+    expect(cell.textContent).toBe("—");
+    fireEvent.click(screen.getByText("Gi0/0/2"));
+    expect(screen.getByTestId("path-panel").className).not.toContain(" open");
+  });
+
+  it("says in one line when the paths could not be read, and keeps the rows", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
+    render(<WanCircuits measured={{ index: null, error: "Measured paths could not be read.", loaded: true }} />);
+    expect((await screen.findByTestId("paths-read-error")).textContent).toContain("Measured paths could not be read.");
+    expect(screen.getByText("Gi0/0/2")).toBeTruthy();
+  });
+
+  it("has no Path column outside the Paths page", async () => {
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
     render(<WanCircuits />);
-    await waitFor(() => {
-      expect(within(section("wan-measured-paths")).getByText(/Nothing has been derived yet\./)).toBeTruthy();
-    });
-    // The CLAIM stays on screen; what must be true before a path is derived is
-    // ai/skills/explain/wan.nothing-derived.md, reachable from the `(i)` beside it.
-    expect(within(section("wan-measured-paths"))
-      .getByRole("button", { name: "Ask Iris about Nothing derived yet" })).toBeTruthy();
+    await screen.findByText("Gi0/0/2");
+    expect(screen.queryByTestId("path-cell")).toBeNull();
+    expect(screen.queryByTestId("path-panel")).toBeNull();
   });
 });
 
@@ -287,22 +348,25 @@ describe("endpoint registry", () => {
 // ── section independence ────────────────────────────────────────────────────
 
 describe("each section owns its own failure", () => {
-  it("a dead registry read leaves the paths on screen, in an operator sentence", async () => {
+  it("a dead registry read leaves the interface table on screen, in an operator sentence", async () => {
     mockApi.wanEndpoints.mockRejectedValue(new Error(
       '500 Internal Server Error: {"error":"dial tcp 10.0.0.9:2379: connect: connection refused"}',
     ));
+    mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
     render(<WanCircuits />);
     await waitFor(() => expect(within(section("wan-endpoints")).getByRole("alert")).toBeTruthy());
     const said = within(section("wan-endpoints")).getByRole("alert").textContent ?? "";
     expect(said).toContain("The service did not answer.");
     expect(said).not.toContain("10.0.0.9");
-    expect(within(section("wan-measured-paths")).getAllByText("wan-edge-1").length).toBeGreaterThan(0);
+    expect(screen.getByText("Gi0/0/2")).toBeTruthy();
   });
 
-  it("a dead paths read leaves the registry on screen", async () => {
+  it("a dead held read says so in one line and leaves the registry on screen", async () => {
     mockApi.wanCircuits.mockRejectedValue(new Error("503 Service Unavailable: {}"));
     render(<WanCircuits />);
-    await waitFor(() => expect(within(section("wan-measured-paths")).getByRole("alert")).toBeTruthy());
+    const note = await screen.findByTestId("wan-held-error");
+    expect(note.getAttribute("role")).toBe("alert");
+    expect(note.textContent).not.toContain("503");
     expect(await within(section("wan-endpoints")).findByText("London")).toBeTruthy();
   });
 });

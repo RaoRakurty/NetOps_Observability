@@ -3,7 +3,9 @@
 
 // PathData — the "Path data" drawer of Investigate → Paths (Paths redesign P5),
 // modelled on Explore → Flows' "About this data": which of the four sources
-// behind the tabs are on, and the console page where each is turned on. Read
+// behind the tabs are on, and the console page where each is turned on. Below
+// them, the steps that choose what the prober traces (PathsSetup — the empty
+// state of the Measured paths tab until that tab was retired on 2026-11-22). Read
 // once each time the drawer opens; a source that cannot be read says so and is
 // never shown as off. Every number is the caller's own workspace's: the three
 // reads are tenant-scoped on the server.
@@ -12,6 +14,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../services/api";
 import AskIris from "../../components/AskIris";
 import Icon from "../../components/Icon";
+import PathsSetup from "../../components/PathsSetup";
 import { pathDataItems, type PathDataFacts, type SourceState } from "./pathsModel";
 
 const EMPTY: PathDataFacts = {
@@ -88,6 +91,10 @@ export default function PathData({ open, onClose }: { open: boolean; onClose: ()
                 </li>
               ))}
             </ol>
+            <section className="paths-data-setup" data-testid="paths-data-setup">
+              <h3>What gets traced</h3>
+              <PathsSetup />
+            </section>
           </div>
         )}
       </aside>

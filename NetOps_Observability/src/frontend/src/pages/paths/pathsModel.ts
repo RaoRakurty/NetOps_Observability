@@ -6,28 +6,35 @@
 // site filter, and what the "Path data" drawer says is on or off. No React, no
 // IO beyond the storage handle a caller passes in — every rule is unit-tested.
 
-/** The three tabs, in display order. The ids ARE the URL: #/investigate/paths/<id>. */
-export type PathsTab = "measured" | "tunnels" | "wan-circuits";
+/** The two tabs, in display order. The ids ARE the URL: #/investigate/paths/<id>.
+ *  Measured paths was a third tab until 2026-11-22; each measured path is now on
+ *  the WAN circuit or tunnel row it measures (measuredFold.ts). */
+export type PathsTab = "tunnels" | "wan-circuits";
 
 export const PATHS_TABS: readonly { id: PathsTab; label: string }[] = [
-  { id: "measured", label: "Measured paths" },
   { id: "tunnels", label: "Tunnels" },
   { id: "wan-circuits", label: "WAN circuits" },
 ];
+
+/** The retired Measured paths tab's id: an old bookmark opens WAN circuits,
+ *  whose rows carry the path SLA and the measured path. */
+export const RETIRED_MEASURED_TAB = "measured";
 
 /** The leaf's route; a tab is the third segment. */
 export const PATHS_ROUTE = "investigate/paths";
 
 /**
  * The tab a hash opens. Reads the THIRD segment of `#/investigate/paths/<tab>`;
- * anything else (no tab, an unknown one, a query string) opens Measured paths.
+ * the retired "measured" opens WAN circuits; anything else (no tab, an unknown
+ * one, a query string) opens Tunnels, the first tab.
  * Legacy hashes are rewritten to this form before the page sees them
  * (nav.tsx LEGACY_ROUTE_ALIAS), so only canonical spellings arrive here.
  */
 export function tabFromHash(hash: string): PathsTab {
   const path = hash.replace(/^#\/?/, "").split("?")[0];
   const seg = path.split("/")[2] ?? "";
-  return PATHS_TABS.some((t) => t.id === seg) ? (seg as PathsTab) : "measured";
+  if (seg === RETIRED_MEASURED_TAB) return "wan-circuits";
+  return PATHS_TABS.some((t) => t.id === seg) ? (seg as PathsTab) : "tunnels";
 }
 
 /** The hash that opens a tab. */
@@ -183,7 +190,7 @@ export function pathDataItems(f: PathDataFacts): PathDataItem[] {
       ? "Could not be read."
       : f.pathDiscovery
         ? (f.tracing ? `On. Tracing ${plural(f.tracing, "target")}.` : "On. No targets traced yet.")
-        : "Off. Measured paths stay empty until a platform administrator turns it on.",
+        : "Off. The Path column stays empty until a platform administrator turns it on.",
   };
   const stamp: PathDataItem = {
     id: "stamp", title: "Path SLA probes", href: FEATURES_HREF, where: "Platform › Configuration › Features",

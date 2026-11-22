@@ -367,7 +367,6 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/DeviceDetailPage.tsx",
     "pages/DeviceNeighbors.tsx",
     "pages/protocols/ProtocolsPage.tsx",
-    "pages/NetworkPath.tsx",
     "pages/NewMonitor.tsx",
     // sweep 5 — everything that was left: the BGP surfaces, the RCA workspace and
     // the account/tenant gates, Reports, the reliability scorecard, the legacy

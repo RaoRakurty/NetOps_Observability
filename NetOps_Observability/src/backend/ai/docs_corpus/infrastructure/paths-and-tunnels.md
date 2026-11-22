@@ -1,43 +1,55 @@
 ---
 title: Trace paths and tunnels
-description: Read measured hop-by-hop paths and path SLA probes, and read overlay tunnel health.
+description: Read overlay tunnel health and WAN circuit SLA, each row with its measured hop-by-hop path.
 page_type: task
 sidebar_position: 6
 ---
 
 # Trace paths and tunnels
 
-**Investigate → Paths** is one page with three tabs that answer how traffic actually gets there: **Measured paths** for measured hop-by-hop paths and path SLA, **Tunnels** for overlay circuit health, and **WAN circuits** for per-circuit SLA on the underlay. Every number on it comes from a measurement, and an empty board says that nothing is measured rather than going blank. (Until 2026-11 these were three separate pages, the first and third labelled **Flow Trace** and **WAN Paths**; old bookmarks still open the matching tab.)
+**Investigate → Paths** is one page with two tabs that answer how traffic actually gets there: **Tunnels** for overlay circuit health and **WAN circuits** for per-circuit SLA on the underlay. Each row carries the hop-by-hop path the prober measured to it, in a **Path** column you open from the row. Every number on the page comes from a measurement, and an empty board says that nothing is measured rather than going blank. (Until 2026-11 these were separate pages labelled **Flow Trace**, **Tunnels** and **WAN Paths**, and the measured paths had a **Measured paths** tab of their own; old bookmarks still open a tab, and a **Measured paths** bookmark opens **WAN circuits**.)
 
 The header above the tabs is shared:
 
-- **Site** narrows the open tab to one site: a tunnel with either end there, a WAN interface on a router there, or a measured path whose target is there. The list shows the sites the open tab has rows for, and rows with no site appear only under **All sites**. A site's name and its short form match each other, so *DC East* and *dc-east* are one site. Your choice is remembered in this browser and stays chosen when you switch tabs.
-- **Path data** opens a panel that says which of the four sources behind the tabs is on (path discovery, path SLA probes, SD-WAN tunnels, WAN circuit measurement), with numbers, and links to the console page that turns each one on. A source that cannot be read at that moment shows **Unknown**, never **Off**.
-- The time range is the console's own range at the top of the screen; the Measured paths charts follow it.
+- **Site** narrows the open tab to one site: a tunnel with either end there, or a WAN interface on a router there. The list shows the sites the open tab has rows for, and rows with no site appear only under **All sites**. A site's name and its short form match each other, so *DC East* and *dc-east* are one site. Your choice is remembered in this browser and stays chosen when you switch tabs.
+- **Path data** opens a panel that says which of the four sources behind the tabs is on (path discovery, path SLA probes, SD-WAN tunnels, WAN circuit measurement), with numbers, and links to the console page that turns each one on. A source that cannot be read at that moment shows **Unknown**, never **Off**. Below the sources, **What gets traced** holds the steps that choose which of your devices are traced.
 
 ## Before you begin
 
-- An authenticated session in your tenant. Both pages read tenant-scoped stores, so another tenant's paths and tunnels are never returned.
+- An authenticated session in your tenant. Both tabs read tenant-scoped stores, so another tenant's paths and tunnels are never returned.
 - Path discovery is off by default. A platform administrator turns on **Path discovery** under **Platform → Configuration → Features → Active measurement** ([Turn Correlix features on and off](/administration/features)); the prober service applies it within about 15 seconds.
-- What gets traced is your workspace's own choice. While no path is measured, **Measured paths** shows three numbered steps: whether Path discovery is on, your branch edges by site (pre-ticked) to trace, and when the first trace appears. Adding them puts them on your Digital Experience target list with path tracing on; each path is then traced every minute and only your workspace sees it.
+- What gets traced is your workspace's own choice. **Path data → What gets traced** shows three numbered steps: whether Path discovery is on, your branch edges by site (pre-ticked) to trace, and where the first trace appears. Adding them puts them on your Digital Experience target list with path tracing on; each path is then traced every minute and only your workspace sees it.
 - Path SLA needs **Active path probes (STAMP)** on the same page, a target with STAMP probing on, and a STAMP reflector at the far end.
 - Correlix never traces or probes an address that must not receive test packets (the server itself, link-local and cloud metadata addresses, multicast), and an internal address only when it belongs to a device in your own inventory.
 - Service checks (HTTP, ICMP, TCP and certificate expiry) live on **Operations → Digital Experience → Synthetics**, not on these pages.
 
 ## Steps
 
-### Step 1 - Read Path Behavior Health
+### Step 1 - Read a row's measured path {#measured-paths}
 
-Open **Investigate → Paths** and select the **Measured paths** tab. The first board asks whether each path is behaving normally right now compared with its own typical behaviour. It uses an adaptive baseline rather than a fixed threshold, carries a confidence and a likely owner per path, and sorts worst first.
+Each WAN circuit and tunnel row has a **Path** column: the state of the path the prober measured to that row, and its hop count. A row claims a path this way:
 
-### Step 2 - Read a path hop by hop
+- A **WAN circuit** row claims the path to its measurement target (the peer, ISP next-hop or anchor its latency, jitter and loss are measured to) and the path to its router.
+- A **tunnel** row claims the path to the device at either end.
 
-The **Hop by hop** board shows the measured path to each configured destination: a ribbon from the prober to the target, with the hop table underneath. The trace runs from the platform's measurement point toward each target. To trace between two of your own devices instead, use [Path Trace on the topology canvas](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path).
+A destination is matched to a device only through your own inventory, on the device's exact address; when two of your devices share an address, the path names neither. A row with more than one path shows the worst one, with **+1** (and so on) for the rest.
 
-1. Find the panel for your destination. Its title is the target followed by the hop count of that trace.
-2. Read the ribbon. Each hop that answered is a node with its round-trip time; a hop that did not answer is drawn as **No reply**. The ribbon is marked **Measured** because every hop on it was observed by a probe. Where loss starts and lasts to the end of the path, that hop is marked **Loss starts here** and the link into it is drawn broken. Loss at a single hop that later hops do not show is that router declining to answer probes, not loss on the path, so it is not marked. A path that never reached its target is marked where the answers stop.
-3. Read the badges. **reached** means the trace arrived. **incomplete** means it ran out first. A **path changed** badge means the route differs from the previously observed one, which is worth correlating with whatever else changed at that time.
-4. Read the hop table:
+The state reads, worst first:
+
+| State | What it means |
+|---|---|
+| **Not reached** | The trace ran out before the target answered. |
+| **Loss from hop N** | Loss starts at that hop and lasts to the end of the path. Loss at one hop that later hops do not show is that router declining to answer probes, not loss on the path, so it is not counted. |
+| **Route changed** | The route differs from the previously observed one, which is worth correlating with whatever else changed at that time. |
+| **Degraded** / **Severe** | The path behaves worse than its own typical behaviour (an adaptive baseline, not a fixed threshold). |
+| **Reached** | The trace arrived, with nothing above. |
+
+A row with no measured path shows a dash.
+
+Select a row with a path to open it. The panel shows each of the row's paths, worst first, headed by where it goes (**To the measurement target**, **To the router**, **To End A (device)**), from which prober, by which method, the hop count, and when it was traced:
+
+1. Read the ribbon. Each hop that answered is a node with its round-trip time; a hop that did not answer is drawn as **No reply**. The ribbon is marked **Measured** because every hop on it was observed by a probe. Where loss starts and lasts to the end of the path, that hop is marked **Loss starts here** and the link into it is drawn broken. A path that never reached its target is marked where the answers stop.
+2. Read the hop table:
 
 | Column | What it shows |
 |---|---|
@@ -46,11 +58,14 @@ The **Hop by hop** board shows the measured path to each configured destination:
 | **RTT** | Round-trip time to that hop, or a dash where the hop did not answer. |
 | **Loss** | Per-hop loss where the prober measures it, or a dash where it does not. |
 
-5. Look for the jump in RTT between consecutive hops. That segment is where the delay is added.
+3. Look for the jump in RTT between consecutive hops. That segment is where the delay is added.
+4. Where the path has a health reading, the card under the table says whether it is behaving normally compared with its own typical behaviour, with a confidence, a likely owner and the evidence.
 
-The trace is Paris-consistent, so on a load-balanced network the path shown is one real path rather than an artifact of per-probe re-hashing.
+Press **Esc** or the close button to go back to the table. The trace runs from the platform's measurement point toward each target, and it is Paris-consistent, so on a load-balanced network the path shown is one real path rather than an artifact of per-probe re-hashing. To trace between two of your own devices instead, use [Path Trace on the topology canvas](/infrastructure/topology-canvas#path-trace--resolve-an-ab-path).
 
-With path discovery off, the board reads **No paths yet** and says that path discovery is not switched on for this installation. `/api/probe/paths` answers with an empty list rather than an error:
+A path no row on the open tab claims (a catalogue target that is neither a WAN target nor a tunnel end) is listed under **Measured paths to other targets**, collapsed, under the table; select its target to open it the same way. If the paths cannot be read at that moment, one line says so and the Path column shows a dash; the rows stay.
+
+With path discovery off, `/api/probe/paths` answers with an empty list rather than an error:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
@@ -61,13 +76,9 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 []
 ```
 
-### Step 3 - Read path SLA
+Path SLA from active probes (delay, jitter and loss) is in the **Latency**, **Jitter** and **Loss** columns of **WAN circuits**, each row naming the tier that measured it ([Measure WAN paths](/infrastructure/wan-interface-metrics)).
 
-Below the traces, four charts show the standards-based path SLA per target from active probes: round-trip delay, one-way delay, jitter and PDV, and packet loss. They feed the Path Behavior Health board above.
-
-Service checks measure a service, not a path, so the page links to **Operations → Digital Experience → Synthetics** for them instead of repeating their charts.
-
-### Step 4 - Read tunnels {#tunnels}
+### Step 2 - Read tunnels {#tunnels}
 
 Select the **Tunnels** tab. It lists overlay circuits, **one row per tunnel**, and refreshes every 15 seconds. An SD-WAN tunnel is reported by both of its edges; the page folds the two reports into one row under the same tunnel identity the correlation engine uses, so a row and an RCA case about that tunnel name the same thing. IPsec and GRE tunnels read from device telemetry appear as before.
 
@@ -87,6 +98,7 @@ Select the **Tunnels** tab. It lists overlay circuits, **one row per tunnel**, a
 | **QoE** | A 0 to 10 experience score. Green at 8 and above, amber at 5, red below. |
 | **Quality as of** | When the quality reading was taken, with its age, for example *as of 16:30 (40 min ago)*. |
 | **Case** | When an open correlation case names this tunnel, a chip with its confidence that opens the case in **Investigate → RCA**. |
+| **Path** | The measured path to either end's device, as in Step 1. Select the row to open it. |
 
 5. Sort by any column to bring the worst tunnel to the top. The table opens with down tunnels first, then tunnels whose ends disagree.
 
@@ -96,7 +108,7 @@ If path quality or open cases cannot be read at that moment, the page says so in
 
 ## What you see
 
-Every destination you configured has a traceroute panel, the SLA charts carry your probe targets, and each overlay circuit you operate has a Tunnels row whose status matches reality.
+Every destination you trace shows on the WAN circuit or tunnel row it measures (or under **Measured paths to other targets**), WAN circuit rows carry the path SLA, and each overlay circuit you operate has a Tunnels row whose status matches reality.
 
 Where no collector populates tunnel state, the page says so rather than implying there are no tunnels, and `/api/tunnels` returns the column metadata with an empty result:
 
@@ -130,7 +142,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 The page states it as `No tunnels reported yet. SD-WAN tunnels come from Infrastructure › NMS Integrations.`, with a link to that page: SD-WAN tunnels appear once a controller integration is connected, and IPsec and GRE tunnels once a device reports them.
 
-Three states to keep apart. A trace reading **incomplete** means the destination or an intermediate hop never answered, which is a fact about the probe rather than a fault. A hop reading a dash for loss means the method measures loss end to end and not per hop. An empty Tunnels table means nothing is exporting tunnel state, not that every tunnel is down.
+Three states to keep apart. A path reading **Not reached** means the destination or an intermediate hop never answered, which is a fact about the probe rather than a fault. A hop reading a dash for loss means the method measures loss end to end and not per hop. An empty Tunnels table means nothing is exporting tunnel state, not that every tunnel is down.
 
 ## Related
 

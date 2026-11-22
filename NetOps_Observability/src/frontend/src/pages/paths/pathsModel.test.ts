@@ -8,12 +8,18 @@ import {
 } from "./pathsModel";
 
 describe("tabs and the hash", () => {
-  it("reads the tab from the third segment, Measured paths by default", () => {
+  it("reads the tab from the third segment, Tunnels by default", () => {
+    expect(PATHS_TABS.map((t) => t.id)).toEqual(["tunnels", "wan-circuits"]);
     expect(tabFromHash("#/investigate/paths/tunnels")).toBe("tunnels");
     expect(tabFromHash("#/investigate/paths/wan-circuits?q=x")).toBe("wan-circuits");
-    expect(tabFromHash("#/investigate/paths")).toBe("measured");
-    expect(tabFromHash("#/investigate/paths/nonsense")).toBe("measured");
-    expect(tabFromHash("")).toBe("measured");
+    expect(tabFromHash("#/investigate/paths")).toBe("tunnels");
+    expect(tabFromHash("#/investigate/paths/nonsense")).toBe("tunnels");
+    expect(tabFromHash("")).toBe("tunnels");
+  });
+
+  it("opens WAN circuits for the retired Measured paths tab (2026-11-22)", () => {
+    expect(tabFromHash("#/investigate/paths/measured")).toBe("wan-circuits");
+    expect(tabFromHash("#/investigate/paths/measured?x=1")).toBe("wan-circuits");
   });
 
   it("round-trips every tab", () => {

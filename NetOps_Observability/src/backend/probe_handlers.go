@@ -953,7 +953,7 @@ const maxProbeSuggestions = 200
 
 // handleProbeTargetSuggestions serves GET /api/probe/targets/suggested: the
 // caller's OWN inventory edges (routers, firewalls, cloud gateways) with an
-// address, by site, pre-ticked by the Measured paths setup steps — plus
+// address, by site, pre-ticked by the Paths "Path data" setup steps — plus
 // whether path discovery is on and how many of the caller's catalogue targets
 // already trace their path. Per-tenant data (§3a): requirePerm + the device
 // visibility rule; the catalogue read is the caller's own tenant's.

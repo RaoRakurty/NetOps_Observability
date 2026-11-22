@@ -7,6 +7,8 @@
 // group and so read as a fourth "path" page; it is the case workbench and sits
 // beside RCA. P5 (2026-11-21): the three Paths leaves became ONE leaf, "Paths",
 // with three tabs (#/investigate/paths/<tab>); every old address lands on its tab.
+// 2026-11-22: the Measured paths tab was retired (each measured path is on the
+// WAN circuit or tunnel row it measures); its old addresses open WAN circuits.
 
 import { describe, it, expect } from "vitest";
 import { NAV, resolveRoute, canonicalHash, navDestinations } from "./nav";
@@ -19,11 +21,10 @@ const investigate = () => {
 };
 
 describe("Investigate → Paths", () => {
-  it("is one leaf with the three measurement tabs, in order", () => {
+  it("is one leaf with the two measurement tabs, in order", () => {
     const leaf = investigate().find((l) => l.id === "paths");
     expect(leaf?.label).toBe("Paths");
     expect(leaf?.subItems?.map((x) => [x.id, x.label])).toEqual([
-      ["measured", "Measured paths"],
       ["tunnels", "Tunnels"],
       ["wan-circuits", "WAN circuits"],
     ]);
@@ -55,10 +56,11 @@ describe("Investigate → Paths", () => {
 
   it("every old address lands on the Paths leaf AND on its own tab", () => {
     const cases: [string, string][] = [
-      ["#/investigate/flowtrace", "measured"],
+      ["#/investigate/flowtrace", "wan-circuits"],
+      ["#/investigate/paths/measured", "wan-circuits"],
       ["#/investigate/tunnels", "tunnels"],
       ["#/investigate/wan-paths", "wan-circuits"],
-      ["#/infrastructure/flowtrace", "measured"],
+      ["#/infrastructure/flowtrace", "wan-circuits"],
       ["#/infrastructure/tunnels", "tunnels"],
       ["#/infrastructure/wan-circuits", "wan-circuits"],
       ["#/topology/tunnels", "tunnels"],
@@ -78,7 +80,7 @@ describe("Investigate → Paths", () => {
   });
 
   it("the canonical tab addresses are already canonical and resolve to the leaf", () => {
-    for (const tab of ["measured", "tunnels", "wan-circuits"]) {
+    for (const tab of ["tunnels", "wan-circuits"]) {
       const hash = `#/investigate/paths/${tab}`;
       expect(canonicalHash(hash)).toBeNull();
       expect(resolveRoute(hash).leaf?.id).toBe("paths");
@@ -87,6 +89,7 @@ describe("Investigate → Paths", () => {
 
   it("⌘K offers each tab as its own destination", () => {
     const routes = navDestinations().map((d) => d.route);
-    for (const tab of ["measured", "tunnels", "wan-circuits"]) expect(routes).toContain(`investigate/paths/${tab}`);
+    for (const tab of ["tunnels", "wan-circuits"]) expect(routes).toContain(`investigate/paths/${tab}`);
+    expect(routes).not.toContain("investigate/paths/measured");
   });
 });

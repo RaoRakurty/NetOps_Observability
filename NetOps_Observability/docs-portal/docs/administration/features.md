@@ -41,7 +41,7 @@ before they turn **on**. Turning any feature
 
 | Switch | What it does |
 |---|---|
-| **Path discovery** | The Correlix prober traces the hop-by-hop path to each path target every minute, so **Measured paths** and root-cause analysis can see where a path breaks. |
+| **Path discovery** | The Correlix prober traces the hop-by-hop path to each path target every minute, so each WAN circuit and tunnel row under **Investigate → Paths** carries its path, and root-cause analysis can see where a path breaks. |
 | **Active path probes (STAMP)** | The prober sends standard STAMP test packets to each probe target to measure latency, jitter and loss. |
 
 Both send test packets from this Correlix server into your network, so they

@@ -321,6 +321,7 @@ func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
 			ServiceNow: serviceNowConfig{Enabled: true, InstanceURL: "https://dev.example.service-now.com", User: "u", Password: "p"},
 			PagerDuty:  pagerDutyRCAConfig{Enabled: true, RoutingKey: "RK-global"},
 			Slack:      slackRCAConfig{Enabled: true, WebhookURL: "https://hooks.slack.com/services/T/G/x"},
+			Teams:      teamsRCAConfig{Enabled: true, WebhookURL: "https://global.webhook.office.com/webhookb2/x"},
 			Jira:       jiraConfig{Enabled: true, BaseURL: "https://global.atlassian.net", Email: "noc@example.com", APIToken: "tok", ProjectKey: "NOC"},
 		},
 	})
@@ -329,7 +330,7 @@ func TestGlobalTenant_AllDestinationsResolve(t *testing.T) {
 	if canon != TenantGlobal {
 		t.Fatalf("canonicalCorrTenant(\"\") = %q, want %q", canon, TenantGlobal)
 	}
-	for _, sys := range []string{"servicenow", "pagerduty", "slack", "jira"} {
+	for _, sys := range []string{"servicenow", "pagerduty", "slack", "teams", "jira"} {
 		cfg, ok := store.SystemConfigFor(canon, sys)
 		if !ok {
 			t.Fatalf("global tenant cannot resolve %s connection — single-org deployments broken", sys)

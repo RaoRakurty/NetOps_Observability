@@ -20,9 +20,9 @@ import (
 // ValidateIncidentPolicy bounds the operator-supplied policy (zero-trust input).
 func ValidateIncidentPolicy(p IncidentPolicy) error {
 	switch p.ExternalSystem {
-	case "servicenow", "pagerduty", "slack", "jira":
+	case "servicenow", "pagerduty", "slack", "teams", "jira":
 	default:
-		return errPolicy("external_system must be servicenow, pagerduty, slack, or jira")
+		return errPolicy("external_system must be servicenow, pagerduty, slack, teams, or jira")
 	}
 	if p.MinVerdict != "suspected" && p.MinVerdict != "confirmed" {
 		return errPolicy("min_verdict must be suspected or confirmed")
