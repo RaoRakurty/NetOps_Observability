@@ -109,7 +109,7 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       render: (it) => <span className="cc-sevdot" style={{ background: SEV_TONE[it.sev] }} title={it.sev} />,
     },
     {
-      key: "pid", header: "Problem", width: 104,
+      key: "pid", header: "ID", width: 104,
       sortValue: (it) => shortProblemId(it.corr.correlation_id), text: (it) => it.corr.correlation_id,
       render: (it) => (
         <a className="cc-pid-link" href={rcaHref(it.corr.correlation_id)}
@@ -118,7 +118,7 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       ),
     },
     {
-      key: "title", header: "Incident", width: "minmax(220px,1.6fr)",
+      key: "title", header: "Problem", width: "minmax(220px,1.6fr)",
       sortValue: (it) => signatureNocTitle(it.corr.top_hypothesis),
       text: (it) => signatureNocTitle(it.corr.top_hypothesis),
       render: (it) => (
@@ -421,7 +421,7 @@ export default function CommandCenter() {
         </div>
         <div className="cc-kpis">
           {/* KPIs filter the queue below (same data → counts always match) and toggle. */}
-          <CcKpi n={items.length} label="Correlated incidents" topic="kpi.correlated-incidents" onClick={() => setFilters({})} active={activeFilterCount(filters) === 0} />
+          <CcKpi n={items.length} label="Open problems" topic="kpi.correlated-incidents" onClick={() => setFilters({})} active={activeFilterCount(filters) === 0} />
           <CcKpi n={critical} label="Critical" topic="kpi.critical" tone={critical ? "var(--crit)" : undefined} onClick={() => applyKpi({ sev: "crit" })} active={kpiActive({ sev: "crit" })} />
           <CcKpi n={untriaged} label="Untriaged" topic="kpi.untriaged" tone={untriaged ? "var(--warn)" : undefined} onClick={() => applyKpi({ untriaged: true })} active={kpiActive({ untriaged: true })} />
           <CcKpi n={suspected} label="Suspected RCA" topic="kpi.suspected-rca" tone={suspected ? "var(--warn)" : undefined} onClick={() => applyKpi({ rca: "Suspected" })} active={kpiActive({ rca: "Suspected" })} />
@@ -435,8 +435,8 @@ export default function CommandCenter() {
 
       <div className="cc-panel">
         <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Action Queue</h3>
-          <AskIris topic="queue.action-queue" label="Action Queue" />
+          <h3 className="cc-panel-t">Problems</h3>
+          <AskIris topic="queue.action-queue" label="Problems" />
           <span className="cc-panel-meta"><a href="#/operations/queue">Open as page →</a></span>
         </div>
         {loaded && items.length > 0 && (
@@ -456,7 +456,7 @@ export default function CommandCenter() {
               rowKey={(it) => it.corr.correlation_id}
               rowHeight={34}
               height={queueHeight}
-              ariaLabel="Action Queue — correlated incidents"
+              ariaLabel="Problems — correlated cases that need action"
               rowAccent={(it) => (it.sev === "crit" ? "var(--crit)" : it.sev === "major" ? "var(--warn)" : undefined)}
               onRowClick={(it) => setOpen((cur) => (cur === it.corr.correlation_id ? null : it.corr.correlation_id))}
               expandedKey={open}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// ActionQueue — Operations → Action Queue (2026-08 nav redesign). The Command
+// ActionQueue — Operations → Problems (was "Action Queue"; renamed 2026-11-22). The Command
 // Center's triage queue promoted to a first-class routed page: before this, the
 // queue was a panel inside the Command Center with NO route of its own, so it
 // could not be bookmarked, linked from a ticket, or set as a landing page.
@@ -55,8 +55,8 @@ export default function ActionQueue() {
     <div className="dm-board cc-board">
       <div className="cc-panel">
         <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Action Queue</h3>
-          <AskIris topic="queue.action-queue" label="Action Queue" />
+          <h3 className="cc-panel-t">Problems</h3>
+          <AskIris topic="queue.action-queue" label="Problems" />
           <span className="cc-panel-meta"><a href="#/overview/home">KPIs in Command Center →</a></span>
         </div>
         {err && <p className="cc-err">{err}</p>}
@@ -81,7 +81,7 @@ export default function ActionQueue() {
               rowKey={(it) => it.corr.correlation_id}
               rowHeight={34}
               height={queueHeight}
-              ariaLabel="Action Queue — correlated incidents"
+              ariaLabel="Problems — correlated cases that need action"
               rowAccent={(it) => (it.sev === "crit" ? "var(--crit)" : it.sev === "major" ? "var(--warn)" : undefined)}
               onRowClick={(it) => setOpen((cur) => (cur === it.corr.correlation_id ? null : it.corr.correlation_id))}
               expandedKey={open}
