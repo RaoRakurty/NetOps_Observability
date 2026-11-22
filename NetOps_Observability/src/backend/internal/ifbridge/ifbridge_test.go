@@ -424,6 +424,93 @@ func TestMergeEmptyIsEmpty(t *testing.T) {
 	}
 }
 
+func TestRoleAndKindAreAClosedSet(t *testing.T) {
+	for in, want := range map[string]string{
+		"transport": RoleTransport, " Transport ": RoleTransport, "service": RoleService,
+		"loopback": RoleLoopback, "": "", "wan": "", "transport\x00": "", "<script>": "",
+	} {
+		if got := CleanRole(in); got != want {
+			t.Errorf("CleanRole(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{
+		"iana-iftype-ethernet-csmacd": KindEthernet, "ethernetCsmacd": KindEthernet,
+		"iana-iftype-sw-loopback": KindLoopback, "softwareLoopback": KindLoopback,
+		"iana-iftype-tunnel": KindTunnel, "tunnel": KindTunnel, "iana-iftype-other": KindOther,
+		"": "", "iana-iftype-ppp": "", "x" + strings.Repeat("y", 300): "",
+	} {
+		if got := CleanKind(in); got != want {
+			t.Errorf("CleanKind(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRoleAndKindSurviveIngestSnapshotAndSanitize(t *testing.T) {
+	s := NewStore()
+	s.Ingest("global", "i", "vmanage", recs("vedge-20", "matched", t0,
+		// vEdge lists an interface once per address family: the role rides the fold.
+		Row{IfIndex: "1", IfName: "ge0/0", VRF: "0", Addrs: []string{"200.20.2.20/24"}, Role: "transport"},
+		Row{IfIndex: "1", IfName: "ge0/0", VRF: "0", Addrs: []string{"-"}},
+		Row{IfName: "system", VRF: "0", Addrs: []string{"10.255.255.20/32"}, Role: "loopback"},
+		Row{IfName: "ge0/1", VRF: "100", Addrs: []string{"192.168.100.25/30"}, Role: "bogus", Kind: "iana-iftype-tunnel"},
+	), t0)
+	st, _ := s.Snapshot(map[string]string{"vedge-20": "global"}, t0)
+	by := map[string]Row{}
+	for _, r := range st.Devices["vedge-20"].Rows {
+		by[r.IfName] = r
+	}
+	if by["ge0/0"].Role != RoleTransport || by["system"].Role != RoleLoopback {
+		t.Fatalf("roles lost: %+v", by)
+	}
+	if by["ge0/1"].Role != "" || by["ge0/1"].Kind != KindTunnel {
+		t.Fatalf("an unknown role must state nothing, a known kind stays: %+v", by["ge0/1"])
+	}
+	// A loaded state is re-validated: a tampered role is dropped, a good one kept.
+	st.Devices["vedge-20"].Rows[0].Role = "TRANSPORT"
+	st.Devices["vedge-20"].Rows[1].Kind = "not-a-kind"
+	st.Sanitize(t0)
+	for _, r := range st.Devices["vedge-20"].Rows {
+		if r.Role != "" && r.Role != RoleTransport && r.Role != RoleLoopback && r.Role != RoleService {
+			t.Fatalf("Sanitize kept role %q", r.Role)
+		}
+		if r.Kind != "" && r.Kind != KindTunnel && r.Kind != KindEthernet && r.Kind != KindLoopback && r.Kind != KindOther {
+			t.Fatalf("Sanitize kept kind %q", r.Kind)
+		}
+	}
+}
+
+func TestMergeExposesTheRawRowsAsACopy(t *testing.T) {
+	s := NewStore()
+	s.Ingest("global", "i", "vmanage", recs("cedge-40", "matched", t0,
+		Row{IfName: "GigabitEthernet1", VRF: "0", Addrs: []string{"200.40.1.40"}, Kind: "iana-iftype-ethernet-csmacd"},
+		Row{IfName: "Tunnel1", VRF: "0", Addrs: []string{"200.40.1.40"}, Kind: "iana-iftype-tunnel"},
+	), t0)
+	st, _ := s.Snapshot(map[string]string{"cedge-40": "global"}, t0)
+	m := Merge(SNMP{}, st, gi, nil)
+	rows := m.NMS["cedge-40"].Rows
+	if len(rows) != 2 {
+		t.Fatalf("raw rows %+v", rows)
+	}
+	// Both ports keep the shared address, which the one-name address map cannot.
+	kinds := map[string]string{}
+	for _, r := range rows {
+		kinds[r.IfName] = r.Kind
+		if len(r.Addrs) != 1 || r.Addrs[0] != "200.40.1.40" || r.VRF != "0" {
+			t.Fatalf("row %+v", r)
+		}
+	}
+	if kinds["Tunnel1"] != KindTunnel || kinds["GigabitEthernet1"] != KindEthernet {
+		t.Fatalf("kinds %v", kinds)
+	}
+	rows[0].Addrs[0] = "9.9.9.9"
+	if st.Devices["cedge-40"].Rows[0].Addrs[0] == "9.9.9.9" {
+		t.Fatal("Merged.NMS aliases the bridge state")
+	}
+	if len(Merge(SNMP{}, NewState(), gi, nil).NMS) != 0 {
+		t.Fatal("an empty state exposes rows")
+	}
+}
+
 func TestMetricsClosedLabelSetZeroFilled(t *testing.T) {
 	m := NewMetrics()
 	m.Set(map[StatKey]int{{SourceNMS, MergeBridged}: 14}, map[string]int{OutcomeDeviceUnresolved: 3}, SnapshotStats{Stale: 2, Truncated: 1})
