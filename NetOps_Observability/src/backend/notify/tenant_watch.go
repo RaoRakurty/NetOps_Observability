@@ -29,8 +29,9 @@ package notify
 // log. The tenant lanes are NOT registered on the Dispatcher (that list is the
 // platform-global audience, which keeps receiving exactly what it did); each
 // send is handed to the pool as its own job. The channel names on those
-// counters are the two fixed values "tenant-slack" and "tenant-pagerduty", so
-// the metric cardinality does not grow with the tenant count.
+// counters are the three fixed values "tenant-slack", "tenant-teams" and
+// "tenant-pagerduty", so the metric cardinality does not grow with the tenant
+// count.
 //
 // SECRETS: a lane's webhook URL / routing key is a bearer secret. It is held
 // only inside the channel that sends, and every error leaving that channel is
@@ -49,11 +50,17 @@ import (
 	"netops/backend/models"
 )
 
-// Tenant lane systems. They are the only two the RCA lanes carry.
+// Tenant lane systems — the only three the RCA lanes carry. Slack and Teams
+// are CHAT lanes (a message, no resolve semantics); PagerDuty pages.
 const (
 	TenantLaneSlack     = "slack"
+	TenantLaneTeams     = "teams"
 	TenantLanePagerDuty = "pagerduty"
 )
+
+// chatLane reports a lane that posts a message rather than paging: an episode
+// end goes there as a "cleared" message, and Iris notices go there.
+func chatLane(system string) bool { return system == TenantLaneSlack || system == TenantLaneTeams }
 
 // tenantWatchMaxEpisodes bounds the open-episode register (§9). Far above any
 // real number of simultaneously open watch alerts; reaching it is counted and
@@ -77,8 +84,8 @@ type TenantWatchDeps struct {
 	// alerts for. It must be keyed by that tenant only; the router has already
 	// refused platform/empty tenants before it asks.
 	Lanes func(tenant string) []TenantLane
-	// Build makes the raw sender for a lane. nil → the real Slack / PagerDuty
-	// senders. Tests inject fakes so no real webhook is ever called.
+	// Build makes the raw sender for a lane. nil → the real Slack / Teams /
+	// PagerDuty senders. Tests inject fakes so no real webhook is ever called.
 	Build func(l TenantLane) Channel
 	// Log receives routing events (never a secret). nil discards; the counters
 	// are still kept.
@@ -139,6 +146,8 @@ func buildTenantLaneSender(l TenantLane) Channel {
 	switch l.System {
 	case TenantLaneSlack:
 		return NewSlack(l.Secret)
+	case TenantLaneTeams:
+		return NewTeamsCard(l.Secret)
 	case TenantLanePagerDuty:
 		return NewPagerDuty(l.Secret)
 	}
@@ -228,8 +237,8 @@ func (r *TenantWatchRouter) Fire(tenant string, a models.Alert) {
 // reached. With no recorded start (the process restarted, or the register
 // evicted it), PagerDuty still gets the close — closing an incident that was
 // never opened is a no-op at the destination, and suppressing a close is never
-// safe — but Slack gets nothing: a "cleared" message for an alert the channel
-// was never told about is noise.
+// safe — but Slack and Teams get nothing: a "cleared" message for an alert the
+// channel was never told about is noise.
 func (r *TenantWatchRouter) Resolve(tenant string, a models.Alert) {
 	if r == nil || r.d == nil {
 		return
@@ -283,7 +292,7 @@ func (r *TenantWatchRouter) lanesFor(tenant string) []TenantLane {
 		if strings.TrimSpace(l.Secret) == "" {
 			continue
 		}
-		if l.System != TenantLaneSlack && l.System != TenantLanePagerDuty {
+		if !chatLane(l.System) && l.System != TenantLanePagerDuty {
 			continue
 		}
 		out = append(out, l)
@@ -340,8 +349,8 @@ func (r *TenantWatchRouter) rememberClosedLocked(key string) {
 	}
 }
 
-// enqueue hands one send to the Dispatcher's bounded pool. Slack has no
-// resolve semantics, so an episode end goes to Slack as a plain message that
+// enqueue hands one send to the Dispatcher's bounded pool. Slack and Teams have
+// no resolve semantics, so an episode end goes there as a plain message that
 // says it cleared; PagerDuty gets a real resolve (same dedup key).
 func (r *TenantWatchRouter) enqueue(tenant string, l TenantLane, a models.Alert, resolve bool) {
 	inner := r.deps.Build(l)
@@ -352,20 +361,21 @@ func (r *TenantWatchRouter) enqueue(tenant string, l TenantLane, a models.Alert,
 		return
 	}
 	ch := &tenantLaneChannel{system: l.System, tenant: tenant, secret: l.Secret, next: inner}
-	if resolve && l.System == TenantLaneSlack {
-		r.d.deliverJob(sendJob{ch: ch, alert: slackClearedCopy(a)})
+	if resolve && chatLane(l.System) {
+		r.d.deliverJob(sendJob{ch: ch, alert: chatClearedCopy(a)})
 		return
 	}
 	r.d.deliverJob(sendJob{ch: ch, alert: a, resolve: resolve})
 }
 
-// Notice hands ONE informational message to the tenant's Slack lanes, outside
-// any episode — the result of a triggered Iris investigation (tracker 337
-// N-I2). Never PagerDuty: a finished investigation is something to read, not a
-// page. tenant MUST be server-stamped; the platform realm and wildcards are
-// refused exactly as for Fire. It returns how many lanes it was queued to, so
-// the caller can say "not announced: no Slack lane" honestly; delivery outcome
-// rides the dispatcher's existing tenant-slack counters.
+// Notice hands ONE informational message to the tenant's chat lanes (Slack,
+// Teams), outside any episode — the result of a triggered Iris investigation
+// (tracker 337 N-I2). Never PagerDuty: a finished investigation is something to
+// read, not a page. tenant MUST be server-stamped; the platform realm and
+// wildcards are refused exactly as for Fire. It returns how many lanes it was
+// queued to, so the caller can say "not announced: no chat lane" honestly;
+// delivery outcome rides the dispatcher's existing tenant-slack / tenant-teams
+// counters.
 func (r *TenantWatchRouter) Notice(tenant string, a models.Alert) int {
 	if r == nil || r.d == nil {
 		return 0
@@ -377,7 +387,7 @@ func (r *TenantWatchRouter) Notice(tenant string, a models.Alert) int {
 	}
 	n := 0
 	for _, l := range r.lanesFor(t) {
-		if l.System != TenantLaneSlack {
+		if !chatLane(l.System) {
 			continue
 		}
 		r.enqueue(t, l, a, false)
@@ -386,10 +396,10 @@ func (r *TenantWatchRouter) Notice(tenant string, a models.Alert) int {
 	return n
 }
 
-// slackClearedCopy makes the episode-end message read as a clear even when the
+// chatClearedCopy makes the episode-end message read as a clear even when the
 // evaluator's resolution summary does not say so (a cloud monitor's resolve
 // carries its OK reading).
-func slackClearedCopy(a models.Alert) models.Alert {
+func chatClearedCopy(a models.Alert) models.Alert {
 	c := a
 	s := strings.TrimSpace(a.Summary)
 	low := strings.ToLower(s)
@@ -407,7 +417,7 @@ func (r *TenantWatchRouter) WriteMetrics(w io.Writer) {
 	if r == nil {
 		return
 	}
-	fmt.Fprintf(w, "# HELP netops_notify_tenant_watch_total Tenant watch alerts (BGP-watch prefix classes, cloud monitors) by routing outcome toward the tenant's own Slack/PagerDuty lanes. Delivery success/failure of the queued sends is netops_notify_sent_total / netops_notify_failures_total with channel=\"tenant-slack\" or \"tenant-pagerduty\".\n")
+	fmt.Fprintf(w, "# HELP netops_notify_tenant_watch_total Tenant watch alerts (BGP-watch prefix classes, cloud monitors) by routing outcome toward the tenant's own Slack/Teams/PagerDuty lanes. Delivery success/failure of the queued sends is netops_notify_sent_total / netops_notify_failures_total with channel=\"tenant-slack\", \"tenant-teams\" or \"tenant-pagerduty\".\n")
 	fmt.Fprintf(w, "# TYPE netops_notify_tenant_watch_total counter\n")
 	for _, kv := range []struct {
 		outcome string

@@ -126,16 +126,21 @@ func ValidTransition(from, to string) bool {
 
 // Incident is one operational problem (the internal record).
 type Incident struct {
-	ID             string     `json:"id"`
-	TenantID       string     `json:"tenant_id"`
-	Title          string     `json:"title"`
-	Description    string     `json:"description,omitempty"`
-	Severity       string     `json:"severity"`
-	Status         string     `json:"status"`
-	SourceType     string     `json:"source_type"`
-	SourceID       string     `json:"source_id,omitempty"`
-	DedupKey       string     `json:"dedup_key,omitempty"`
-	Owner          string     `json:"owner,omitempty"`
+	ID          string `json:"id"`
+	TenantID    string `json:"tenant_id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Severity    string `json:"severity"`
+	Status      string `json:"status"`
+	SourceType  string `json:"source_type"`
+	SourceID    string `json:"source_id,omitempty"`
+	DedupKey    string `json:"dedup_key,omitempty"`
+	Owner       string `json:"owner,omitempty"`
+	// DeviceID is WHERE the incident is: the device the firing alert named
+	// (tracker 438). Stamped server-side from the alert, never from a request
+	// body; "" for stack, Digital Experience and manual incidents. The UI shows
+	// the device's inventory name, read through the caller's own tenant scope.
+	DeviceID       string     `json:"device_id,omitempty"`
 	Occurrences    int        `json:"occurrences"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
@@ -189,6 +194,23 @@ type Input struct {
 	DedupKey    string // explicit; empty → derived
 	Owner       string
 	Actor       string // who/what raised it (audit/timeline)
+	// DeviceID is the firing device (alert-born incidents only). Server-side
+	// callers set it; no HTTP body maps onto it. Over MaxDeviceIDLen → dropped.
+	DeviceID string
+}
+
+// MaxDeviceIDLen mirrors the column's CHECK (migration 0080): a longer id is
+// not a device id we minted, so it is dropped rather than truncated into a
+// different one.
+const MaxDeviceIDLen = 256
+
+// CleanDeviceID trims a device id and drops one the column would refuse.
+func CleanDeviceID(id string) string {
+	t := strings.TrimSpace(id)
+	if len(t) > MaxDeviceIDLen {
+		return ""
+	}
+	return t
 }
 
 // Query parameterizes a tenant-scoped listing (newest-last-seen first).

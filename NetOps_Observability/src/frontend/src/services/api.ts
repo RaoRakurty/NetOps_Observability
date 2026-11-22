@@ -627,6 +627,9 @@ export type Incident = {
   source_type: string;
   source_id?: string;
   owner?: string;
+  /** WHERE (tracker 438): the device the firing alert named, stamped by the
+   *  server; absent for stack, Digital Experience and manual incidents. */
+  device_id?: string;
   occurrences: number;
   created_at: string;
   updated_at: string;
@@ -8080,6 +8083,8 @@ export const api = {
     request<ItsmConfig>("/api/itsm/pagerduty-rca", { method: "PUT", body: JSON.stringify(c) }),
   saveItsmSlackRCA: (c: { enabled: boolean; webhook_url?: string; watch_alerts?: boolean }) =>
     request<ItsmConfig>("/api/itsm/slack-rca", { method: "PUT", body: JSON.stringify(c) }),
+  saveItsmTeamsRCA: (c: { enabled: boolean; webhook_url?: string; watch_alerts?: boolean }) =>
+    request<ItsmConfig>("/api/itsm/teams-rca", { method: "PUT", body: JSON.stringify(c) }),
   saveItsmConfig: (c: ItsmConfigInput) =>
     request<ItsmConfig>("/api/notify/itsm", { method: "PUT", body: JSON.stringify(c) }),
 
@@ -10842,10 +10847,11 @@ export type NmsStateRow = {
 
 // watch_alerts: whether this lane also receives the tenant's OWN watch alerts
 // (BGP-watch prefix classes, cloud monitors) — the effective value, default
-// applied server-side (Slack on, PagerDuty off). Tracker 359.
+// applied server-side (Slack and Teams on, PagerDuty off). Tracker 359.
 export type ItsmPagerDutyRCA = { enabled: boolean; has_routing_key?: boolean; configured?: boolean; watch_alerts?: boolean };
 export type ItsmSlackRCA = { enabled: boolean; has_webhook?: boolean; configured?: boolean; watch_alerts?: boolean };
-export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig; pagerduty?: ItsmPagerDutyRCA; slack?: ItsmSlackRCA };
+export type ItsmTeamsRCA = { enabled: boolean; has_webhook?: boolean; configured?: boolean; watch_alerts?: boolean };
+export type ItsmConfig = { servicenow: ItsmServiceNowConfig; jira: ItsmJiraConfig; pagerduty?: ItsmPagerDutyRCA; slack?: ItsmSlackRCA; teams?: ItsmTeamsRCA };
 export type ItsmConfigInput = {
   servicenow: Omit<ItsmServiceNowConfig, "has_password" | "configured">;
   jira: Omit<ItsmJiraConfig, "has_token" | "configured">;

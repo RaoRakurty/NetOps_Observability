@@ -39,6 +39,7 @@ export function destinationsOf(cfg: ItsmConfig | undefined): Destination[] {
     { id: "jira", name: "Jira", on: !!(cfg?.jira?.configured && cfg.jira.enabled) },
     { id: "pagerduty", name: "PagerDuty", on: !!(cfg?.pagerduty?.enabled && cfg.pagerduty.has_routing_key) },
     { id: "slack", name: "Slack", on: !!(cfg?.slack?.enabled && cfg.slack.has_webhook) },
+    { id: "teams", name: "Microsoft Teams", on: !!(cfg?.teams?.enabled && cfg.teams.has_webhook) },
   ];
 }
 

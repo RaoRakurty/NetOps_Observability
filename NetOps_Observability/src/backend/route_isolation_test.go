@@ -685,6 +685,7 @@ var routeIsolationLedger = map[string]string{
 	// ticketing_http_test.go.
 	"/api/itsm/pagerduty-rca":     "scoped",
 	"/api/itsm/slack-rca":         "scoped",
+	"/api/itsm/teams-rca":         "scoped", // teams_rca_isolation_test.go (cross-org + write-only webhook)
 	"/api/logs/export":            "scoped",
 	"/api/logs/export/rows":       "scoped",
 	"/api/logs/indices":           "scoped",

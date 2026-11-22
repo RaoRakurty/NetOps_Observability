@@ -149,3 +149,46 @@ credential outside the sealed store.
 
 See `architecture.md` for how the platform channel lane relates to the
 tenant-scoped RCA incident lane.
+
+## 6. Tenant-scoped problem destination (a customer's own channel)
+
+Sections 1–5 are the PLATFORM channel, the operator's own, and only a platform
+administrator configures it. A CUSTOMER tenant connects its own Teams channel
+under **Administration → Integrations → Paging for problems → Teams
+channel connection**. A tenant administrator can do this; it reaches only that
+tenant's config.
+
+1. In Teams, open the target channel → **Workflows** → **Post to a channel when
+   a webhook request is received** → finish the wizard and copy the URL. A
+   classic Incoming Webhook URL also works.
+2. Paste it into the connection card, tick **Enabled**, then **Save**. API:
+   `PUT /api/itsm/teams-rca` `{"enabled":true,"webhook_url":"https://…"}`.
+   - The URL must be https.
+   - It is write-only: reads return only `has_webhook`, and a blank URL on a
+     later save keeps the stored one.
+   - It is checked against the SSRF guard when you save it and again on every
+     connection.
+3. Add an incident policy with **External system = teams** (Administration →
+   RCA Tickets → rules). Without a policy nothing posts.
+
+What posts:
+- **Root causes.** One card per lifecycle transition (opened, materially
+  updated, resolved), never one per raw alert. Each card leads with the Problem
+  ID (`Opened: [P-XXXXXX] <cause>`), then the verdict and its confidence, the
+  scope, the recommended action and an **Open in Correlix** link.
+- **Cloud incident notices,** when they are on.
+- **Your own watches.** BGP prefix alerts on your watchlist and your cloud
+  monitors: one message when the alert starts and one when it clears. This is
+  on by default, as for Slack. To stop it, untick **Also post my own watches
+  here** (`"watch_alerts": false`).
+
+Delivery and observability:
+- Cards are Adaptive Cards in the `{"type":"message","attachments":[…]}`
+  envelope. Both Workflows and classic webhooks render them.
+- Failures retry through the ticket outbox (root causes) or the notify
+  dispatcher's pool (watches): a 429 honours `Retry-After`, any other 4xx is
+  permanent, and 5xx errors are retried.
+- Delivery counters are `netops_notify_*_total{channel="tenant-teams"}`. No log
+  line or error ever carries the webhook URL.
+- The webhook is stored write-only, but not yet field-sealed at rest (tracker
+  456).
