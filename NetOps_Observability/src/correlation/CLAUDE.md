@@ -710,8 +710,8 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   system-ips apart. Older records without the hint bind as before. **The trap lane**
   (`trap.sdwan.bfd`, vEdge only) binds the bare pair; only `CORR_IDENTITY_CANON`'s
   `tunnel` axis scopes it (tracker 430, so dormant until P6-H), from the T4c rows —
-  which age out with the 30-minute `ctloverlay.Window`, so 30 minutes into a controller
-  outage the trap is bare again. Total system-ip reuse across two fabrics exports no
+  which are exported for sessions seen in the last 24 h (`ctloverlay.LinkWindow`), so
+  the trap keeps its scope through a controller outage up to a day long. Total system-ip reuse across two fabrics exports no
   rows (the Go resolver says ambiguous) and the axis abstains, so those traps still
   share one bare node.
 - **Recoveries are clears.** An SD-WAN transition back to a good state, and a cleared

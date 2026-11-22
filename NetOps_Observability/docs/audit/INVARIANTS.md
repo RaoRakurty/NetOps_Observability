@@ -989,8 +989,8 @@ and `rules_hash` unchanged.
   The merged trap + controller node alone is not confirmed (D1). BUILD, asserted as a
   reviewed shift.
 
-Residuals, stated: the T4c rows age out after the 30-minute `ctloverlay.Window` (a
-controller outage longer than that leaves traps bare again); total system-ip reuse across
+Residuals, stated: the T4c rows are exported for 24 h (`ctloverlay.LinkWindow`, #327), so
+only a controller outage longer than a day leaves traps bare again; total system-ip reuse across
 two fabrics exports no rows, so those traps still share one bare node.
 
 **NOT proven on the rig.** Needs `CORR_IDENTITY_CANON` on (P6-H) and a real BFD flap,
