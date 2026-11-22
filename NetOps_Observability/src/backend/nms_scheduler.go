@@ -346,7 +346,8 @@ func (s *server) ingestNMSInterfaces(tenant, integrationID, sourceSystem string,
 	for _, c := range ifaces {
 		recs = append(recs, ifbridge.Record{
 			DeviceID: c.DeviceID, Resolve: c.Resolve, At: c.Time,
-			Row: ifbridge.Row{IfIndex: c.IfIndex, IfName: c.IfName, VRF: c.VRF, Alias: c.Description, Addrs: c.Addrs},
+			Row: ifbridge.Row{IfIndex: c.IfIndex, IfName: c.IfName, VRF: c.VRF, Alias: c.Description, Addrs: c.Addrs,
+				Role: c.PortRole, Kind: c.IfType},
 		})
 	}
 	s.ifBridge.Ingest(tenant, integrationID, sourceSystem, recs, time.Now())
