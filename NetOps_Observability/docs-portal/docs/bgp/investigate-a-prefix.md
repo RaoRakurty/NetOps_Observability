@@ -26,7 +26,7 @@ it, its update churn, and who the registry says owns it.
 
 ## Steps
 
-1. Go to **Analytics → Metric Dashboards → BGP Operations**.
+1. Go to **Analytics → Metric Dashboards → Protocol Monitoring → BGP**.
 2. Type the prefix or ASN into the **Prefix or ASN** box, or select one of the
    watched chips beneath it.
 3. Select **Investigate**.

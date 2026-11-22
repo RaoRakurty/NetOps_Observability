@@ -964,8 +964,32 @@
           "bgp/rpki"
         ]
       },
-      "nav": "analytics/bgp-ops",
-      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 BGP Operations"
+      "nav": "analytics/protocols/bgp",
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Protocol Monitoring \u2192 BGP (was BGP Operations)"
+    },
+    {
+      "id": "docs-150",
+      "category": "docs",
+      "question": "Which OSPF adjacencies are down or flapping right now?",
+      "expect": {
+        "slugs": [
+          "investigate/igp-health"
+        ]
+      },
+      "nav": "analytics/protocols/ospf",
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Protocol Monitoring \u2192 OSPF"
+    },
+    {
+      "id": "docs-151",
+      "category": "docs",
+      "question": "Where do I see IS-IS adjacencies that went down or flapped?",
+      "expect": {
+        "slugs": [
+          "investigate/igp-health"
+        ]
+      },
+      "nav": "analytics/protocols/isis",
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Protocol Monitoring \u2192 IS-IS"
     },
     {
       "id": "docs-072",

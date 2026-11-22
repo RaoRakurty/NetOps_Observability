@@ -3,7 +3,7 @@ topic: bgp.next-steps
 question: How is the "What to do next" list built?
 keywords: what to do next, bgp actions, next steps, bgp to-do list
 ---
-Every line on the BGP Operations to-do list comes from a measurement already
+Every line on the Protocol Monitoring BGP to-do list comes from a measurement already
 shown elsewhere on the same screen: the health bar above, the watchlist check,
 and the announcement and withdrawal window. It never adds a finding a panel
 below is not also showing, and it is ordered worst first and capped at five so

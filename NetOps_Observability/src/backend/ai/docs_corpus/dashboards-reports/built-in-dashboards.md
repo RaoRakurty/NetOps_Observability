@@ -45,11 +45,12 @@ The board starts fleet-wide and narrows through the scope bar: choose a device, 
 
 ### BGP Metrics
 
-Answers whether routing is converged and stable. Also at **Analytics → Metric Dashboards → Protocol Monitoring**. It covers three routing planes: BGP session health with peer state, established-state transitions and prefixes received; OSPF neighbor and interface state; and IS-IS adjacency state and adjacency counts per device. A device-context row carries system uptime and interfaces up.
+Answers whether routing is converged and stable, at **Analytics → Metric Dashboards → Protocol Monitoring**. It has three tabs:
 
-The state panels are stepped lines. A flat line at the top value is healthy, and any step down is a session or adjacency event worth correlating against the **Events** tab on **Explore → Logs**.
+- **BGP** — the routing-outage screen: sessions down or flapping, routing status, RPKI, AS paths, churn and ownership. Session trends (peer state, session changes, prefixes received) sit in a closed group at the bottom. See [BGP operations](/bgp/overview).
+- **OSPF** and **IS-IS** — each opens on **Needs attention**: the adjacencies that are down now, went down as their last reported change, or flapped in the window, with the device name, its site and the open problem that names it. Counts, evidence coverage and the full adjacency and per-device tables follow; state trends sit in a closed group.
 
-**Analytics → Metric Dashboards → BGP Operations** is the consolidated routing-outage screen: routing status, RPKI, AS paths, churn and ownership in one place. See [BGP operations](/bgp/overview).
+A count that nothing collects reads "not collected", never 0. **Ask Iris** beside the counts explains where each fact comes from and what each state number means.
 
 ### WAN circuits
 

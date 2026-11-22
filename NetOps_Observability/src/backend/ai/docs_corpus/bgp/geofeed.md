@@ -23,7 +23,7 @@ the registry object and parses it conservatively.
 
 ## Steps
 
-1. Go to **Analytics → Metric Dashboards → BGP Operations**.
+1. Go to **Analytics → Metric Dashboards → Protocol Monitoring → BGP**.
 2. Investigate a prefix or an ASN.
 3. Read the **Geofeed (RFC 8805)** section in the right-hand column.
 4. Check the chips for rows scanned, rows kept and rows dropped before reading

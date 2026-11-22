@@ -22,7 +22,7 @@ a wall of path strings with one picture of who is carrying the prefix today.
 
 ## Steps
 
-1. Go to **Analytics → Metric Dashboards → BGP Operations**.
+1. Go to **Analytics → Metric Dashboards → Protocol Monitoring → BGP**.
 2. Investigate a prefix.
 3. Read **Current paths from route collectors** in the left column. The graph is
    at the top, the per-path table beneath it.
