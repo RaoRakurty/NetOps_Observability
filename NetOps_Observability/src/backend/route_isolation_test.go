@@ -726,6 +726,7 @@ var routeIsolationLedger = map[string]string{
 	"/api/wan/endpoints":     "scoped",
 	"/api/wan/circuits":      "scoped",
 	"/api/wan/policy":        "scoped",
+	"/api/wan/marks":         "scoped",
 	"/api/topology/links":    "scoped",
 	"/api/topology/view":     "scoped",
 	"/api/topology/graph":    "scoped",

@@ -216,8 +216,9 @@ function PathsSection({ panel, onRetry, q, site = "" }: {
 
 const ENDPOINT_CAP = 25;
 
-function EndpointsSection({ panel, onRetry, q, site = "" }: {
+function EndpointsSection({ panel, onRetry, q, site = "", canEdit = null, onMarked }: {
   panel: Panel<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>; onRetry: () => void; q: string; site?: string;
+  canEdit?: boolean | null; onMarked?: () => void;
 }) {
   const all = useMemo(
     () => sortEndpoints(panel.data?.endpoints ?? []).filter((e) => matchesSite(site, e.site)),
@@ -266,6 +267,7 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
                       <th>Device</th><th>Interface</th><th>Why WAN</th><th>Address</th>
                       <th>Far end targets</th><th>Site</th>
                       <th>Measured to</th><th>Derived from</th>
+                      {canEdit === true && onMarked && <th>Decide</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -279,6 +281,9 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
                         <td>{e.site || dash}</td>
                         <td style={mono} title={e.target_label ?? ""}>{e.target || dash}</td>
                         <td><KindChip kind={endpointKind(e)} /></td>
+                        {canEdit === true && onMarked && (
+                          <td><MarkButtons ep={e} offerWan={false} onMarked={onMarked} /></td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -299,8 +304,40 @@ function EndpointsSection({ panel, onRetry, q, site = "" }: {
 // address, the port facing a WAN router, or a WAN router with nothing confirmed.
 // Never measured; collapsed by default so they never read as WAN circuits.
 
-function PossibleSection({ panel, site = "" }: {
+/** Mark / Not WAN for one interface. Rendered only with infrastructure write
+ *  access; a refused write says why instead of failing silently. */
+function MarkButtons({ ep, offerWan, onMarked }: {
+  ep: WanEndpoint; offerWan: boolean; onMarked: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!ep.device_id) return null;
+  const mark = async (m: "wan" | "not_wan") => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setWanMark(ep.device_id ?? "", ep.interface, m);
+      onMarked();
+    } catch (e) {
+      setError(operatorError(e, "The mark could not be saved."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      {offerWan && (
+        <button type="button" className="btn sm" disabled={busy} onClick={() => mark("wan")}>Mark as WAN</button>
+      )}
+      <button type="button" className="btn sm" disabled={busy} onClick={() => mark("not_wan")}>Not WAN</button>
+      {error && <span role="alert" style={{ color: "var(--bad)" }}>{error}</span>}
+    </span>
+  );
+}
+
+function PossibleSection({ panel, site = "", canEdit, onMarked }: {
   panel: Panel<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>; site?: string;
+  canEdit: boolean | null; onMarked: () => void;
 }) {
   const rows = useMemo(
     () => sortCandidates(panel.data?.candidates).filter((e) => matchesSite(site, e.site)),
@@ -316,7 +353,10 @@ function PossibleSection({ panel, site = "" }: {
       <p className="wan-line">Not measured until someone marks them as WAN.</p>
       <table className="dp-tbl">
         <thead>
-          <tr><th>Device</th><th>Interface</th><th>Address</th><th>Why it might be WAN</th></tr>
+          <tr>
+            <th>Device</th><th>Interface</th><th>Address</th><th>Why it might be WAN</th>
+            {canEdit === true && <th>Decide</th>}
+          </tr>
         </thead>
         <tbody>
           {rows.map((e) => (
@@ -325,6 +365,7 @@ function PossibleSection({ panel, site = "" }: {
               <td style={mono}>{e.interface}</td>
               <td style={mono}>{e.address || dash}</td>
               <td title={wanWhyTitle(e)}>{wanBasisLabel(e.wan_basis)}</td>
+              {canEdit === true && <td><MarkButtons ep={e} offerWan onMarked={onMarked} /></td>}
             </tr>
           ))}
         </tbody>
@@ -579,6 +620,12 @@ export default function WanCircuits({ site = "", onSites }: {
     return () => { live = false; };
   }, []);
 
+  // A mark changes which interfaces are WAN, so both derived reads run again.
+  const afterMark = useCallback(() => {
+    reloadEndpoints();
+    reloadCircuits();
+  }, [reloadEndpoints, reloadCircuits]);
+
   // A saved policy is a NEW projection, so both derived reads run again.
   const afterPolicySave = useCallback(() => {
     reloadPolicy();
@@ -746,8 +793,8 @@ export default function WanCircuits({ site = "", onSites }: {
       )}
 
       <PathsSection panel={circuits} onRetry={reloadCircuits} q={q} site={site} />
-      <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} />
-      <PossibleSection panel={endpoints} site={site} />
+      <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} canEdit={canEdit} onMarked={afterMark} />
+      <PossibleSection panel={endpoints} site={site} canEdit={canEdit} onMarked={afterMark} />
       <PolicySection panel={policy} onRetry={reloadPolicy} canEdit={canEdit} onSaved={afterPolicySave} />
     </div>
   );

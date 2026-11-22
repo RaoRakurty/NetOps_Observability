@@ -5971,7 +5971,18 @@ export interface VrfInterfacesResponse {
  *  (GET /api/wan/endpoints). `target_kind` is the PROVENANCE of the measurement
  *  target: a directly-connected peer, an operator-declared ISP next-hop, or a
  *  public reachability anchor. */
+/** An operator's mark on one interface (GET/PUT /api/wan/marks). */
+export type WanInterfaceMark = {
+  tenant_id?: string;
+  device_id: string;
+  interface: string;
+  mark: "wan" | "not_wan";
+  updated_by?: string;
+  updated_at?: string;
+};
+
 export type WanEndpoint = WanWhy & {
+  device_id?: string;
   device: string;
   interface: string;
   address: string;
@@ -6990,6 +7001,17 @@ export const api = {
   // × policy); only the policy is persisted, so a PUT here changes what every
   // WAN surface measures next.
   wanEndpoints: () => request<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>(`/api/wan/endpoints`),
+  // Operator marks: "wan" confirms an interface, "not_wan" hides it. The server
+  // stamps the owner from the device and the author from the token.
+  wanMarks: () => request<{ marks: WanInterfaceMark[] }>(`/api/wan/marks`),
+  setWanMark: (deviceId: string, iface: string, mark: "wan" | "not_wan") =>
+    request<WanInterfaceMark>(`/api/wan/marks`, {
+      method: "PUT", body: JSON.stringify({ device_id: deviceId, interface: iface, mark }),
+    }),
+  clearWanMark: (deviceId: string, iface: string) =>
+    request<{ ok: boolean }>(`/api/wan/marks?device_id=${encodeURIComponent(deviceId)}&interface=${encodeURIComponent(iface)}`, {
+      method: "DELETE",
+    }),
   wanCircuits: () => request<{ circuits: WanCircuit[] }>(`/api/wan/circuits`),
   wanPolicy: () => request<WanMeasurementPolicy>(`/api/wan/policy`),
   setWanPolicy: (policy: WanMeasurementPolicy) =>

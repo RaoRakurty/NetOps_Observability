@@ -31,6 +31,7 @@ const mockApi = vi.hoisted(() => ({
   wanCircuits: vi.fn(),
   wanPolicy: vi.fn(),
   setWanPolicy: vi.fn(),
+  setWanMark: vi.fn(),
   permissions: vi.fn(),
 }));
 
@@ -58,7 +59,7 @@ const PEER_EP = ep({
 });
 /** A possible interface: the port facing a WAN router (2026-11-22: not measured). */
 const LINKED_CANDIDATE = ep({
-  device: "core-sw-2", interface: "Ethernet4", address: "10.2.2.4", measurable_addr: "10.2.2.4",
+  device_id: "core-sw-2-9f1", device: "core-sw-2", interface: "Ethernet4", address: "10.2.2.4", measurable_addr: "10.2.2.4",
   connected_to_wan: true, wan_confidence: "possible", wan_basis: "linked",
   wan_reason: "Directly connected to wan-edge-1, which looks like a WAN router — this is usually the LAN side.",
 });
@@ -216,6 +217,34 @@ describe("endpoint registry", () => {
     expect(within(box).getByText("core-sw-2")).toBeTruthy();
     expect(within(box).getByText("Faces a WAN router").getAttribute("title")).toContain("usually the LAN side");
     expect(within(section("wan-endpoints")).queryByText("core-sw-2")).toBeNull();
+  });
+
+  it("marks a possible interface as WAN, then re-reads what is WAN", async () => {
+    mockApi.wanEndpoints.mockResolvedValue({ endpoints: [PEER_EP], candidates: [LINKED_CANDIDATE] });
+    mockApi.setWanMark.mockResolvedValue({ device_id: "core-sw-2-9f1", interface: "Ethernet4", mark: "wan" });
+    render(<WanCircuits />);
+    const box = await screen.findByTestId("wan-possible");
+    fireEvent.click(await within(box).findByRole("button", { name: "Mark as WAN" }));
+    await waitFor(() => expect(mockApi.setWanMark).toHaveBeenCalledWith("core-sw-2-9f1", "Ethernet4", "wan"));
+    await waitFor(() => expect(mockApi.wanEndpoints).toHaveBeenCalledTimes(2));
+    expect(mockApi.wanCircuits).toHaveBeenCalledTimes(2);
+  });
+
+  it("says why a mark was refused, and offers no buttons without write access", async () => {
+    mockApi.wanEndpoints.mockResolvedValue({ endpoints: [PEER_EP], candidates: [LINKED_CANDIDATE] });
+    mockApi.setWanMark.mockRejectedValue(new Error("not found"));
+    render(<WanCircuits />);
+    const box = await screen.findByTestId("wan-possible");
+    fireEvent.click(await within(box).findByRole("button", { name: "Not WAN" }));
+    expect(await within(box).findByRole("alert")).toBeTruthy();
+    cleanup();
+
+    mockApi.permissions.mockResolvedValue({ role: "viewer", permissions: { infrastructure: 1 } });
+    render(<WanCircuits />);
+    const ro = await screen.findByTestId("wan-possible");
+    await waitFor(() => expect(mockApi.permissions).toHaveBeenCalled());
+    expect(within(ro).queryByRole("button", { name: "Mark as WAN" })).toBeNull();
+    expect(within(ro).queryByRole("button", { name: "Not WAN" })).toBeNull();
   });
 
   it("shows no possible section when there is nothing possible", async () => {

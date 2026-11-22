@@ -77,6 +77,11 @@ like a WAN router, the port facing a WAN router (usually its LAN side), or the
 ports of a WAN-looking router where nothing is confirmed yet. These are not
 measured.
 
+With `infrastructure:write` each possible interface has **Mark as WAN** and
+**Not WAN**, and each registry row has **Not WAN**. A mark is stored for the
+device's tenant and outranks every other fact: an interface marked WAN is
+measured from the next read, and one marked not WAN disappears from both lists.
+
 Both derived sections are empty until an interface has an address and either a
 neighbour on the wire, a declared ISP next-hop or a reachability anchor. The empty
 state says which of the three is missing.
