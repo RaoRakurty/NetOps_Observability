@@ -53,7 +53,8 @@ async function mockApi(page: Page) {
 test("each tab deep-links, and the tab is written to the address bar", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/analytics/protocols/isis");
-  await expect(page.getByTestId("protocols-page")).toBeVisible();
+  // First paint compiles the lazy page chunk on the cold dev server (CI): the repo-wide 30 s first-paint wait.
+  await expect(page.getByTestId("protocols-page")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("protocols-tab-isis")).toHaveAttribute("aria-selected", "true");
   await page.getByTestId("protocols-tab-ospf").click();
   await expect(page).toHaveURL(/#\/analytics\/protocols\/ospf$/);
@@ -62,7 +63,8 @@ test("each tab deep-links, and the tab is written to the address bar", async ({ 
 test("the old BGP Operations address opens the BGP tab", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/analytics/bgp-ops");
-  await expect(page.getByTestId("protocols-page")).toBeVisible();
+  // First paint compiles the lazy page chunk on the cold dev server (CI): the repo-wide 30 s first-paint wait.
+  await expect(page.getByTestId("protocols-page")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("protocols-tab-bgp")).toHaveAttribute("aria-selected", "true");
   // No second page title inside the tab.
   await expect(page.getByRole("heading", { name: "BGP Operations" })).toHaveCount(0);
@@ -71,7 +73,7 @@ test("the old BGP Operations address opens the BGP tab", async ({ page }) => {
 test("OSPF leads with what needs attention: device by name, site, why, and the open problem", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/analytics/protocols/ospf");
-  await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible({ timeout: 30_000 });
   const panel = page.locator("table.igp-attention");
   await expect(panel.getByText("core-1")).toBeVisible();
   await expect(panel.getByText("DC East")).toBeVisible();
@@ -105,7 +107,7 @@ for (const theme of ["light", "indigo"] as const) {
     await page.addInitScript((t) => localStorage.setItem("netops.theme", t), theme);
     await mockApi(page);
     await page.goto("/#/analytics/protocols/ospf");
-    await expect(page.locator("table.igp-attention").getByText("core-1")).toBeVisible();
+    await expect(page.locator("table.igp-attention").getByText("core-1")).toBeVisible({ timeout: 30_000 });
     expect(await textBelowFloor(page, "[data-testid=protocols-page]")).toEqual([]);
   });
 }

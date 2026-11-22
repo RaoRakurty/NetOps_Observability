@@ -380,6 +380,12 @@ describe("BogonsPanel", () => {
     render(<BogonsPanel />);
     await waitFor(() => expect(screen.getByText(/Nothing is watching for these addresses/i)).toBeTruthy());
   });
+
+  it("reads a reply missing its sightings, set or feed as unreadable instead of crashing", async () => {
+    bgpBogons.mockResolvedValue({});
+    render(<BogonsPanel />);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/bogon listing could not be read/));
+  });
 });
 
 // ── section identity (one-page outage view, 2026-09-03) ─────────────────────
