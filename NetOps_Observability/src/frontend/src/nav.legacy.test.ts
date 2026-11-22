@@ -79,9 +79,13 @@ const LEGACY: [string, string, string][] = [
   // canvas, not silently fall back to the Devices inventory.
   ["#/infrastructure/topology", "investigate", "topology"],
   ["#/infrastructure/geomap", "infrastructure", "sites"],
-  ["#/infrastructure/flowtrace", "investigate", "flowtrace"],
-  ["#/infrastructure/wan-circuits", "investigate", "wan-paths"],
-  ["#/infrastructure/tunnels", "investigate", "tunnels"],
+  ["#/infrastructure/flowtrace", "investigate", "paths"],
+  ["#/infrastructure/wan-circuits", "investigate", "paths"],
+  ["#/infrastructure/tunnels", "investigate", "paths"],
+  // Paths redesign P5 (2026-11-21): the three Paths leaves became one leaf's tabs.
+  ["#/investigate/flowtrace", "investigate", "paths"],
+  ["#/investigate/tunnels", "investigate", "paths"],
+  ["#/investigate/wan-paths", "investigate", "paths"],
   // Security (unchanged ids)
   ["#/security/vuln", "security", "vuln"],
   ["#/security/threat", "security", "threat"],
@@ -173,7 +177,7 @@ const LEGACY: [string, string, string][] = [
   ["#/alerts/active", "operations", "alerts"],
   ["#/alerts/incidents", "operations", "incidents"],
   ["#/topology/map", "infrastructure", "sites"],
-  ["#/topology/tunnels", "investigate", "tunnels"],
+  ["#/topology/tunnels", "investigate", "paths"],
   ["#/topology-canvas", "investigate", "topology"],
 ];
 
