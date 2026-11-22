@@ -60,6 +60,7 @@ import logging
 import math
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -5091,6 +5092,46 @@ OFFLOAD_ADMISSION_WAITS = 0        # calls that had to wait for a slot
 OFFLOAD_ADMISSION_WAIT_MAX_S = 0.0
 OFFLOAD_ABANDONED = 0              # in-flight calls left behind by offload_stop
 
+# GIL hand-off (tracker 429(a), 2026-11-22). `await asyncio.sleep(0)` hands the
+# LOOP to other coroutines, never the GIL to other THREADS: the loop's next
+# select() is a zero-timeout syscall, and a thread waiting for the GIL restarts
+# its switch-interval timer on every release it loses the race for (CPython's
+# convoy, bpo-7946). Under a buffered backlog the consume task never blocks, so
+# the loop thread releases the GIL every few tens of microseconds and wins it
+# straight back — and an offloaded run_window can wait for seconds before it
+# runs at all. Seen on CI as engine_cycle parked in
+# `await loop.run_in_executor(...)` for 10 s while consume served 800,396
+# polls (80 k/s, i.e. with no thread sharing the GIL). The offload plane's whole
+# premise (`_offload`: work is "scheduled at the interpreter's switch interval")
+# held only while consume had something to wait for.
+# When offloaded work is queued or running, consume's cooperative yield blocks
+# in the selector for this long instead of 0 — long enough for the waiting
+# thread to wake and take the GIL, which it then keeps for one switch interval.
+# At most once per `sys.getswitchinterval()` of loop time, so consume keeps at
+# least the share the interpreter's own switching would give it. 0 disables.
+CORR_CONSUME_GIL_HANDOFF_S = max(0.0, float(os.environ.get("CORR_CONSUME_GIL_HANDOFF_S", "0.001")))
+CONSUME_GIL_HANDOFFS = 0           # cooperative yields that blocked to hand the GIL over
+_CONSUME_LAST_HANDOFF = 0.0        # monotonic time of the last hand-off
+
+
+def _consume_yield_delay(now: float | None = None) -> float:
+    """How long consume's cooperative yield should block in the selector.
+
+    0.0 (a plain loop yield) unless offloaded work is waiting for, or holding,
+    an executor thread AND the last hand-off is at least one switch interval
+    old. The two dicts are read without `_OFFLOAD_LOCK`: their truthiness is a
+    single atomic read under the GIL, and a stale answer costs one yield of
+    lateness or one extra millisecond, never correctness."""
+    global _CONSUME_LAST_HANDOFF, CONSUME_GIL_HANDOFFS
+    if CORR_CONSUME_GIL_HANDOFF_S <= 0.0 or not (_OFFLOAD_PENDING or _OFFLOAD_RUNNING):
+        return 0.0
+    now = time.monotonic() if now is None else now
+    if now - _CONSUME_LAST_HANDOFF < sys.getswitchinterval():
+        return 0.0
+    _CONSUME_LAST_HANDOFF = now
+    CONSUME_GIL_HANDOFFS += 1
+    return CORR_CONSUME_GIL_HANDOFF_S
+
 
 class _OffloadGate:
     """Bounded admission for the offload plane. Strictly FIFO, never refuses.
@@ -5233,6 +5274,7 @@ def offload_stats() -> dict[str, object]:
         wait_max, exec_max = OFFLOAD_WAIT_MAX_S, OFFLOAD_EXEC_MAX_S
         adm_waits, adm_wait_max = OFFLOAD_ADMISSION_WAITS, OFFLOAD_ADMISSION_WAIT_MAX_S
         abandoned = OFFLOAD_ABANDONED
+        gil_handoffs = CONSUME_GIL_HANDOFFS
     workers, workers_src = _offload_max_workers()
     with _OFFLOAD_STATE_LOCK:
         gate = _OFFLOAD_GATE
@@ -5254,6 +5296,10 @@ def offload_stats() -> dict[str, object]:
         "admission_waits_total": adm_waits,
         "admission_wait_max_s": round(adm_wait_max, 6),
         "abandoned_total": abandoned,
+        # tracker 429(a): consume yields that blocked so a waiting offload
+        # thread could take the GIL. Climbing = the engine's offloaded work is
+        # competing with a consume backlog that never waits on the broker.
+        "gil_handoffs_total": gil_handoffs,
         "oldest_queued_age_s": round(now - min(pending), 6) if pending else 0.0,
         "submitted_total": submitted,
         "started_total": started,
@@ -12618,10 +12664,12 @@ async def consume() -> None:
                 # task into a session-timeout ejection. Hand the loop back
                 # every CORR_CONSUME_YIELD_EVERY_N messages (arithmetic at the
                 # constant).
+                # The yield also hands the GIL to an offload thread that is
+                # waiting for it (tracker 429(a), `_consume_yield_delay`).
                 since_yield += 1
                 if since_yield >= CORR_CONSUME_YIELD_EVERY_N:
                     since_yield = 0
-                    await asyncio.sleep(0)
+                    await asyncio.sleep(_consume_yield_delay())
         except asyncio.CancelledError:
             with contextlib.suppress(Exception):
                 await _commit(force=True)  # clean shutdown: nothing replays
@@ -15824,6 +15872,9 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_offload_abandoned_total Calls still in flight when the plane was stopped.",
         "# TYPE corr_offload_abandoned_total counter",
         f"corr_offload_abandoned_total {off['abandoned_total']}",
+        "# HELP corr_offload_gil_handoffs_total Consume yields that blocked briefly so a waiting offload thread could take the GIL.",
+        "# TYPE corr_offload_gil_handoffs_total counter",
+        f"corr_offload_gil_handoffs_total {off['gil_handoffs_total']}",
         "# HELP corr_offload_wait_seconds Time between submission and start of execution.",
         "# TYPE corr_offload_wait_seconds summary",
         f'corr_offload_wait_seconds{{quantile="0.5"}} {off["wait_p50_s"]:.6f}',

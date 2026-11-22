@@ -29,7 +29,7 @@ import (
 func TestTeamsRCADestination_CrossOrgIsolation(t *testing.T) {
 	t.Setenv("SSRF_ALLOW_PRIVATE", "true") // no DNS in the save-time URL pre-check
 	srv, s := newTestServerState(t)
-	s.itsmCfg = newITSMConfigStore(s, t.TempDir()+"/itsm.json")
+	s.itsmCfg = newITSMConfigStore(nil, t.TempDir()+"/itsm.json")
 	admin := login(t, srv, "admin", "Passw0rd!2345").Token
 
 	type fx struct{ tenantID, token, opToken string }

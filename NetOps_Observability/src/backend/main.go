@@ -1597,7 +1597,7 @@ func newServer() *server {
 	// MONITORING-END
 	// ITSM config store — seeds from env on first run, then admin-UI editable;
 	// builds + swaps the ServiceNow/Jira connectors into srv + the notifier.
-	srv.itsmCfg = newITSMConfigStore(srv, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
+	srv.itsmCfg = newITSMConfigStore(vault, envOr("ITSM_CONFIG_FILE", "/data/itsm_config.json"))
 	// Tenant watch-alert delivery (tracker 359) reads each tenant's RCA lanes
 	// from the store just built and sends through the notifier's pool.
 	srv.tenantWatch = newTenantWatchRouter(srv)
