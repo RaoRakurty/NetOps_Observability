@@ -10,12 +10,12 @@
 import { test, expect, type Page } from "@playwright/test";
 
 // The Action Queue renders through the shared DataTable primitive (ae0668a):
-// data rows are div[role=row].dtv-row inside the grid labelled "Action Queue —
-// correlated incidents" — not the old hand-rolled <tr.cc-row> table. Scoping to
+// data rows are div[role=row].dtv-row inside the grid labelled "Problems —
+// correlated cases that need action" — not the old hand-rolled <tr.cc-row> table. Scoping to
 // the named grid keeps the locator anchored to the queue (the accessible
 // contract), not to whatever other tables the page may grow.
 const queueRows = (page: Page) =>
-  page.getByRole("grid", { name: "Action Queue — correlated incidents" }).locator(".dtv-row");
+  page.getByRole("grid", { name: "Problems — correlated cases that need action" }).locator(".dtv-row");
 
 const TENANT = "t_acme";
 
@@ -95,7 +95,7 @@ test("operator sees only actionable customer-network incidents", async ({ page }
   await expect(rows).toHaveCount(1);
 
   // The confirmed incident is the survivor; the filtered objects never appear.
-  await expect(page.locator(".cc-kpi-n").first()).toHaveText("1"); // Correlated incidents KPI
+  await expect(page.locator(".cc-kpi-n").first()).toHaveText("1"); // Open problems KPI
   await expect(page.getByText("edge-9")).toHaveCount(0);     // single-signal noise filtered
   await expect(page.getByText("clickhouse")).toHaveCount(0); // internal-stack filtered (#76)
 

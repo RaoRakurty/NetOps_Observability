@@ -165,7 +165,7 @@ steadily is itself worth investigating.
      and a score, and its detail view offers **View logs** back to where you
      came from.
    - **Investigate → RCA** for a candidate whose window covers the timestamp.
-   - **Overview → Home** if it correlated and matters. It is in the Action Queue
+   - **Overview → Home** if it correlated and matters. It is in the Problems list
      with an owner and a next action.
 3. Going the other way, from an alert or a finding to the logs, use the **View
    logs** button on the detail view. It opens that device's syslog pre-scoped.

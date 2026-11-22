@@ -1,7 +1,7 @@
 ---
 title: Start a shift
 sidebar_label: Start a shift
-description: Read the Command Center, work the Action Queue in priority order, and follow the decision path for when the queue is empty and a user still reports a problem.
+description: Read the Command Center, work the Problems list in priority order, and follow the decision path for when the queue is empty and a user still reports a problem.
 page_type: task
 sidebar_position: 2
 ---
@@ -14,7 +14,7 @@ queue, and a decision path for the cases the queue does not yet cover.
 
 ## Before you begin
 
-- **An account with access to the operations surfaces.** The Action Queue,
+- **An account with access to the operations surfaces.** The Problems list,
   Active Alerts and Incidents are all tenant-scoped to your account.
 - **Devices already reporting.** If the inventory is empty, start with
   [Onboard your first device](/getting-started/quickstart).
@@ -40,7 +40,7 @@ The pressure chip is derived from counts, not from a judgement: three or more
 criticals reads Severe, one or two reads Elevated, any suspected case with no
 critical reads Watch, and nothing outstanding reads Nominal.
 
-### Step 2 — Work the Action Queue
+### Step 2 — Work the Problems list
 
 The queue holds correlated incidents, not raw alerts, sorted by severity and
 then by age.
@@ -92,7 +92,7 @@ case rather than to assign it.
 
 ### Step 3 — Read the queue's silence correctly
 
-An empty Action Queue means no correlated incident needs action. It does not
+An empty Problems list means no correlated incident needs action. It does not
 mean the network is quiet, and the page says so: *The queue groups raw alerts
 into incidents, none have correlated.* The surfaces below hold what has not
 grouped yet.
@@ -114,7 +114,7 @@ happened and want everything around that moment in order.
 
 Stop at the first case that matches.
 
-1. **The Action Queue has rows.** Work them as in Step 2.
+1. **The Problems list has rows.** Work them as in Step 2.
 2. **The queue is empty and alerts are firing.** Open **Operations → Active
    Alerts**. Repeated firings collapse into episodes, so a condition that has
    fired forty times is one row to triage once. Read the **Active episodes**,
