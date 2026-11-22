@@ -50,6 +50,7 @@ type (
 	jiraConfig         = ticketing.JiraConfig
 	pagerDutyRCAConfig = ticketing.PagerDutyRCAConfig
 	slackRCAConfig     = ticketing.SlackRCAConfig
+	teamsRCAConfig     = ticketing.TeamsRCAConfig
 	itsmConfigStore    = ticketing.ITSMConfigStore
 )
 
@@ -156,6 +157,15 @@ func (s *server) handleITSMSlackRCA(w http.ResponseWriter, r *http.Request) {
 	handleITSMRCADest(s, w, r, "slack",
 		func(key string, in slackRCAConfig) error { return s.itsmCfg.SetSlackRCA(key, in) },
 		func(in slackRCAConfig) bool { return in.Enabled })
+}
+
+// handleITSMTeamsRCA serves PUT /api/itsm/teams-rca — the explicit mutation
+// path for a tenant's Microsoft Teams problem destination. Same gate and
+// tenant keying as Slack and PagerDuty; the webhook URL is write-only.
+func (s *server) handleITSMTeamsRCA(w http.ResponseWriter, r *http.Request) {
+	handleITSMRCADest(s, w, r, "teams",
+		func(key string, in teamsRCAConfig) error { return s.itsmCfg.SetTeamsRCA(key, in) },
+		func(in teamsRCAConfig) bool { return in.Enabled })
 }
 
 // handleITSMConfig serves GET/PUT /api/notify/itsm, scoped to the caller's tenant.
