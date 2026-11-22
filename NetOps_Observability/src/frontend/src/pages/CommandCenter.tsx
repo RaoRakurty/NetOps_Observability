@@ -12,8 +12,9 @@ import {
   type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
   type FaultDomain, type EvidenceState, type CcFilters,
   fmtAge, buildItem, isActionableCorr, bySeverityThenAge, filterItems, activeFilterCount,
-  startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank,
+  startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank, affectedDeviceKeys,
 } from "./commandCenter.model";
+import { useDeviceLabels, type DeviceNames } from "../lib/deviceNames";
 
 // Action Queue filter bar — narrows the queue over data already in memory (no
 // refetch). Facets map 1:1 to the columns an operator triages by.
@@ -79,10 +80,19 @@ const ccChip = (text: string, tone: string, title?: string) => (
 const OWNER_TONE: Record<OwnerState, string> = { Assigned: "var(--ok)", Recommended: "var(--accent)", Missing: "var(--crit)", Escalated: "var(--warn)" };
 const TICKET_TONE: Record<TicketState, string> = { Ticketed: "var(--ok)", "Ticket needed": "var(--warn)", Eligible: "var(--accent)", "Sync failed": "var(--crit)", "Not eligible": "var(--fg-subtle)" };
 
-const impactLabel = (a: ActionItem["affected"]): string => {
-  const devs = new Set([...a.devices, ...a.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim()))].filter(Boolean));
+// The affected devices' display names, in the order the object lists them: the
+// inventory name for an id or a management address, else the friendly label.
+export const impactDevices = (a: ActionItem["affected"], labels: DeviceNames | null = null): string[] =>
+  [...new Set(affectedDeviceKeys(a).map((k) => labels?.get(k) ?? entityLabel(k)))];
+
+// Names the devices a problem is on (owner ask 2026-11-22: "why are we not
+// mentioning the device name"): the first two by name, then a count, then sites.
+export const impactLabel = (a: ActionItem["affected"], labels: DeviceNames | null = null): string => {
+  const names = impactDevices(a, labels);
   const parts: string[] = [];
-  if (devs.size) parts.push(`${devs.size} device${devs.size > 1 ? "s" : ""}`);
+  if (names.length) {
+    parts.push(names.slice(0, 2).join(", ") + (names.length > 2 ? ` +${names.length - 2}` : ""));
+  }
   parts.push(a.sites.length ? `${a.sites.length} site${a.sites.length > 1 ? "s" : ""}` : "site unknown");
   return parts.join(" · ");
 };
@@ -98,10 +108,9 @@ const impactLabel = (a: ActionItem["affected"]): string => {
 // the model's exported ranks (sevRank/rcaRank/evidenceRank/ownerRank/ticketRank
 // — ascending = work-this-first), time from timeRank (epoch), impact/occurrence
 // from real counts, and free text A–Z.
-const blastRadius = (a: ActionItem["affected"]): number =>
-  new Set([...a.devices, ...a.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim()))].filter(Boolean)).size;
+const blastRadius = (a: ActionItem["affected"]): number => affectedDeviceKeys(a).length;
 
-export function queueColumns(openKey: string | null): Column<ActionItem>[] {
+export function queueColumns(openKey: string | null, labels: DeviceNames | null = null): Column<ActionItem>[] {
   return [
     {
       key: "sev", header: "Sev", width: 62,
@@ -135,10 +144,14 @@ export function queueColumns(openKey: string | null): Column<ActionItem>[] {
       render: (it) => ccChip(it.rca, RCA_TONE[it.rca], `confidence ${(it.corr.top_confidence * 100).toFixed(0)}%`),
     },
     {
-      key: "impact", header: "Impact", width: 150,
+      key: "impact", header: "Impact", width: "minmax(180px,1.1fr)",
       // Widest blast radius first — the operator's real ordering, not the label's spelling.
-      sortValue: (it) => -blastRadius(it.affected), text: (it) => impactLabel(it.affected),
-      render: (it) => <span className="cc-mono cc-dim">{impactLabel(it.affected)}</span>,
+      sortValue: (it) => -blastRadius(it.affected), text: (it) => impactLabel(it.affected, labels),
+      render: (it) => (
+        <span className="cc-mono cc-dim" title={impactDevices(it.affected, labels).join(", ") || undefined}>
+          {impactLabel(it.affected, labels)}
+        </span>
+      ),
     },
     {
       key: "fault", header: "Domain", width: 132,
@@ -248,7 +261,9 @@ function CreateTicketButton({ corrId, label = "Create ticket", cls = "cc-btn cc-
 
 export function ExpandPanel({ it }: { it: ActionItem }) {
   const c = it.corr;
-  const devs = [...new Set([...it.affected.devices, ...it.affected.paths.flatMap((p) => p.split(/->|→/).map((x) => x.trim()))])].filter(Boolean);
+  const devs = affectedDeviceKeys(it.affected);
+  const labels = useDeviceLabels();
+  const devLabel = (d: string) => labels?.get(d) ?? entityLabel(d);
   // Evidence brief (UI-4): lazily pull the same RCA path view the detail renders and
   // surface WHAT correlated — the lead human reason — not just a signal count.
   const [ev, setEv] = useState<{ reason: string; domains: string[] } | null>(null);
@@ -273,7 +288,7 @@ export function ExpandPanel({ it }: { it: ActionItem }) {
           <h5 className="cc-eh">Impacted entities</h5>
           {devs.length ? <div className="cc-chips">{devs.slice(0, 12).map((d) => (
             <a key={d} className="cc-pill cc-mono cc-pill-link" href={deviceStatusHref(d)}
-              title={`Open ${entityLabel(d)} status`} onClick={(e) => e.stopPropagation()}>{entityLabel(d)}</a>
+              title={`Open ${devLabel(d)} status`} onClick={(e) => e.stopPropagation()}>{devLabel(d)}</a>
           ))}</div>
             : <p className="cc-dim">Blast radius not mapped yet.</p>}
         </div>
@@ -378,7 +393,8 @@ export default function CommandCenter() {
   // A KPI sets its filter on the queue (and toggles off if already active), so its
   // count and the rows shown always come from the SAME data — they can't disagree.
   // Columns depend on `open` only for the row's expand caret.
-  const columns = useMemo(() => queueColumns(open), [open]);
+  const labels = useDeviceLabels();
+  const columns = useMemo(() => queueColumns(open, labels), [open, labels]);
   // Size the queue viewport to its rows (capped) so a short queue has no dead
   // space and a long one windows; expanding a row makes room for its detail.
   const queueHeight = useMemo(

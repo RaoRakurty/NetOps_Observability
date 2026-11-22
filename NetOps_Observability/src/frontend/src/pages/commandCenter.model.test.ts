@@ -9,7 +9,7 @@
 import { describe, it, expect } from "vitest";
 import { corrObject } from "../test/factories";
 import {
-  fmtAge, parseAffected, parseMissing, deriveRca, deriveEvidence, deriveFault,
+  fmtAge, parseAffected, parseMissing, affectedDeviceKeys, deriveRca, deriveEvidence, deriveFault,
   deriveOwner, deriveTicket, deriveSev, buildItem, isActionableCorr, bySeverityThenAge,
   filterItems, needsAction, activeFilterCount, isUntriaged,
   startedAt, sevRank, rcaRank, evidenceRank, ownerRank, ticketRank,
@@ -264,5 +264,23 @@ describe("defensive parsing + buildItem", () => {
     expect(it.ticket).toBe("Ticket needed");
     expect(it.nextAction).toBe("Assign owner · escalate");
     expect(it.ageMs).toBe(60 * 60 * 1000);
+  });
+});
+
+describe("affectedDeviceKeys — the devices a problem is on (owner ask 2026-11-22)", () => {
+  it("takes devices, both path ends and each interface's device part, unique, in order", () => {
+    const a = parseAffected(JSON.stringify({
+      devices: ["edge-1"], paths: ["edge-1->core-2"],
+      interfaces: ["192.168.222.104:if3", "192.168.222.104:if4294967295", "edge-9:Gi1"],
+    }));
+    expect(affectedDeviceKeys(a)).toEqual(["edge-1", "core-2", "192.168.222.104", "edge-9"]);
+  });
+
+  it("an object that lists only interfaces still names its devices (the lab case)", () => {
+    expect(affectedDeviceKeys(parseAffected('{"interfaces":["192.168.222.103:if3"]}'))).toEqual(["192.168.222.103"]);
+  });
+
+  it("keeps an IPv6 address whole instead of cutting it at the first colon", () => {
+    expect(affectedDeviceKeys(parseAffected('{"interfaces":["2001:db8::1"]}'))).toEqual(["2001:db8::1"]);
   });
 });

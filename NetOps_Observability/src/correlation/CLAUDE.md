@@ -153,8 +153,11 @@ not incident creation" and D3: a row emits `crit` only for a raise the vendor ca
 critical; everything else is `warn`, below the open floor, and can still join a
 component. `controller_*` and resource recoveries arrive as `<kind>_clear`;
 interface and BGP keep the device lane's `state=up` convention (tracker 380). A BFD
-trap binds `<tloc pair>` without the controller's `@instance`, so it meets vManage's
-report through the device token (rank 7), not as one node.
+trap binds `<tloc pair>` without the controller's `@instance`, and its device token is
+its observer, which `Node.tokens()` drops: the bare node shares no token with vManage's
+`<pair>@<ci>` node or the endpoint devices, and `adjacency_key()` keys only `@` ids, so
+with canonicalisation off it grounds to NOTHING (an island; tracker 430). The canon
+`tunnel` axis (§1) makes it the controller's node.
 
 **BGP transition semantics (tracker 387, 2026-11-10).** Owner rule: only an ESTABLISHED
 session going down is a session failure. The receiver decodes the peer from the row index
@@ -277,7 +280,13 @@ the window filters (e.g. M:8157-8161).
   `<device>:<peer>`, also for the A4 `bgp_session_not_established` check derived from
   it; D2 host → device id; D4 `<device>:<port key>`; D5 controller peer → its
   address), `canonicalize_series` (the metric-lane key; digits are an ifIndex only
-  when the source declares `index`). Rewrites `entity_id` + the raw device token only,
+  when the source declares `index`), and the `tunnel` axis (tracker 430): a TRAP PATH
+  signal with `tunnel_scheme=tloc_pair` and a bare pair becomes `<pair>@<ci>` when
+  exactly ONE controller instance's `sdwan_bfd` rows for that pair, in the signal's own
+  tenant bucket of topology_links.json (`main.cached_tunnel_scope_for`, never ∪ global,
+  mtime-cached, stat-throttled), name the trap's sender as an endpoint; no row →
+  `abstain_unknown`, several → `abstain_ambiguous`, a scope for another tenant →
+  `abstain_conflict`; the bare token is swapped for the scoped one. Rewrites `entity_id` + the raw device token only,
   never `native_id`/`signal_id`; stamps `attrs["canon"]={raw,basis}` on a rewrite
   only; abstains (keeps the raw spelling) on unknown/ambiguous/generic/conflicting
   identities; refuses a resolver not scoped to the signal's tenant.
@@ -698,7 +707,13 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   controller_events.py binds PATH kinds to `<tunnel_id>@<controller_instance>` when
   the `tunnel_scheme=tloc_pair` hint is present. Both ends of one session are now ONE
   node (rank-1 shared identity). The `@instance` scope keeps two overlays that reuse
-  system-ips apart. Older records without the hint bind as before.
+  system-ips apart. Older records without the hint bind as before. **The trap lane**
+  (`trap.sdwan.bfd`, vEdge only) binds the bare pair; only `CORR_IDENTITY_CANON`'s
+  `tunnel` axis scopes it (tracker 430, so dormant until P6-H), from the T4c rows —
+  which are exported for sessions seen in the last 24 h (`ctloverlay.LinkWindow`), so
+  the trap keeps its scope through a controller outage up to a day long. Total system-ip reuse across two fabrics exports no
+  rows (the Go resolver says ambiguous) and the axis abstains, so those traps still
+  share one bare node.
 - **Recoveries are clears.** An SD-WAN transition back to a good state, and a cleared
   vManage alarm, arrive as `<kind>_clear` at info. They bind to the fault's entity and
   build_nodes skips them. Before T0 they were fault-kind evidence that kept a recovered
@@ -736,6 +751,9 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   own id, so a tunnel incident grounds to its edge devices AUTHORITATIVELY instead of
   through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
   deliberately not exported: on a full mesh they would weld the fabric (#99 class).
+  The rows are exported for sessions seen in the last 24 h (`ctloverlay.LinkWindow`,
+  tracker 430), not the drawing's 30-minute `Window`, so a tunnel keeps its rank-3 rows
+  through the outage it is evidence of; a stale row grounds only a node that names it.
   ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since the
   controller fan-in, 3.5.0 since owner D1–D3, 3.6.0 since the tracker-397 control-session
   rung); byte-identical when no tunnel rows exist. The verdict tier still
