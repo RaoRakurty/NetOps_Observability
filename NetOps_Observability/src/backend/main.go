@@ -1050,6 +1050,15 @@ func newServer() *server {
 	// ENABLE_SNMP_COLLECTION drives both SNMP version collectors; the v2c/v3
 	// split is by per-device credential profile, not a separate toggle.
 	snmpOn := os.Getenv("ENABLE_SNMP_COLLECTION") == "true"
+	// Tracker 371 R2: the trap receiver's RECEIVE-ONLY identity targets for
+	// controller-only devices — one per profile the device's owner may use
+	// (owner-strict). Installed on the receiver only, never on the pool's
+	// TargetFunc, so nothing polls them.
+	pool.SetTrapReceiveOnlyTargets(func() []collectors.Target {
+		return snmpcred.ReceiveOnlyTargets(d.Devices(), snmpCredsRef, func(dev models.Device) bool {
+			return dev.Source == devmon.SourceController
+		})
+	})
 	pool.Enable("snmpv2c", snmpOn)
 	pool.Enable("snmpv3", snmpOn)
 	pool.Enable("gnmi", os.Getenv("ENABLE_GNMI_COLLECTION") == "true")

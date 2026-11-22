@@ -237,6 +237,13 @@ agent_addr|none`). Stage [1]: `handle_snmptrap`'s `device_for_ip(host)` recovery
 ONLY for a record without that field (an older receiver); a stamped `none` is a refusal
 and stays unattributed (`ingest.traps_recanon_declined`). The receiver also stamps
 `interface`/`ifindex`/`interface_basis`; `_trap_interface` still reads the varbinds.
+**Controller-only devices (tracker 371 R2).** After every direct rung, the receiver
+consults RECEIVE-ONLY identity targets: one per profile a controller-only device's OWNER
+may use (`snmpcred.ReceiveOnlyTargets`, owner-strict), never polled. They prove strictly —
+their own community only (never `SNMP_COMMUNITY`/`public`), v3 only by an HMAC verified
+with that device's own candidate (a failed guess keeps the unknown-sender outcome, never
+refuses the trap) — and an address any other device holds names nobody. The trap then
+carries the `ctl-*` id, whose registry row (R1) gives the owner's tenant.
 
 **Raw evidence is durable.** `corr_signals` is written BEFORE the aggregation plane and
 the window filters (e.g. M:8157-8161).

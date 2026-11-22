@@ -1035,8 +1035,14 @@ engine). `internal/devidentity` now decides its rows; `telemetry_enrichment.go` 
   off still writes (`TestNMSOnlyInstallWithSNMPDiscoveryOffWritesTheRegistry`). Counted:
   `netops_tenant_registry_controller_rows{tier,outcome}`, `netops_tenant_registry_held_total{reason}`. BUILD.
 
+- R2: a trap from a controller-only device is credential-proven by RECEIVE-ONLY identity targets — one per
+  profile its owner may use (`snmpcred.ReceiveOnlyTargets`, owner-strict), consulted only after every direct
+  rung, never polled. Their own community only (never `SNMP_COMMUNITY`/`public`/the env default, never
+  another owner's), v3 only by an HMAC verified with that device's own candidate, an address any other device
+  holds names nobody, and a failed v3 guess keeps the unknown-sender outcome (`collectors/
+  snmptrap_receive_only_test.go`, `internal/snmpcred/receive_only_test.go`). BUILD.
+
 **NOT PROVEN:** the lab cannot show it — its eight edges are tenant-owned SNMP devices since the 396
 cut-over, so none is controller-only. **NOT COVERED:** tenant-owned controller-only syslog and flows stay
-unattributed by design until tracker 372; a trap from a controller-only device still needs a credential to
-prove (tracker 371 R2).
+unattributed by design until tracker 372.
 
