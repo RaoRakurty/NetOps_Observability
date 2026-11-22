@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"netops/backend/collectors"
+	"netops/backend/internal/changeledger"
 	"netops/backend/internal/ifbridge"
 	"netops/backend/internal/metricval"
 	"netops/backend/models"
@@ -269,6 +271,9 @@ func (s *server) wanProjectAll(ctx context.Context, vis deviceVisibility) (wanPr
 		}
 	}
 
+	// The operator's marks, each device's read under the device's own tenant.
+	marks := s.wanMarksFor(visible)
+
 	var proj wanProjection
 	ids := make([]string, 0, len(visible))
 	for id := range visible {
@@ -279,11 +284,11 @@ func (s *server) wanProjectAll(ctx context.Context, vis deviceVisibility) (wanPr
 		d := visible[id]
 		rows := ev.NMS[id].Rows
 		if len(ifaddr[id]) == 0 && len(rows) == 0 {
-			continue
+			continue // no interface known at all (a mark alone names no address to measure)
 		}
 		in := wan.DeviceInputs{
 			DeviceID: id, Name: d.Name, Candidate: candidate[id],
-			AddrIf: ifaddr[id], NextHops: pol.NextHops, Linked: linked[id],
+			AddrIf: ifaddr[id], NextHops: pol.NextHops, Linked: linked[id], Marks: marks[id],
 		}
 		for _, r := range rows {
 			in.Rows = append(in.Rows, wan.IfRow{Name: r.IfName, VRF: r.VRF, Role: r.Role, Kind: r.Kind, Alias: r.Alias, Addrs: r.Addrs})
@@ -919,5 +924,201 @@ func (s *server) handleWanPolicy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, req)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+// ---- operator WAN marks (tenantKV, one row per tenant/device/interface) ----
+
+// wanMarkStore persists operator WAN marks, tenant-scoped by the shared tenantKV
+// primitive. A mark is OWNED by the device's tenant (stamped from the inventory),
+// and is only ever read under that tenant.
+type wanMarkStore struct {
+	kv *tenantKV[wan.InterfaceMark]
+}
+
+func newWanMarkStore(path string) (*wanMarkStore, error) {
+	if path == "" {
+		path = "/data/wan_marks.json"
+	}
+	kv, err := newTenantKV[wan.InterfaceMark](path,
+		func(m wan.InterfaceMark) string { return m.TenantID },
+		func(m wan.InterfaceMark) string { return wan.MarkKey(m.DeviceID, m.Interface) })
+	if err != nil {
+		return nil, err
+	}
+	return &wanMarkStore{kv: kv}, nil
+}
+
+// byDevice returns tenant's marks keyed device id → interface → mark. A nil
+// store marks nothing (a partially-built server, never a panic).
+func (s *wanMarkStore) byDevice(tenant string) map[string]map[string]string {
+	if s == nil || s.kv == nil {
+		return nil
+	}
+	out := map[string]map[string]string{}
+	for _, m := range s.kv.All(tenant, false) {
+		if !wan.ValidMark(m.Mark) {
+			continue // a stored row is re-validated (§3: never trust cached data)
+		}
+		if out[m.DeviceID] == nil {
+			out[m.DeviceID] = map[string]string{}
+		}
+		out[m.DeviceID][m.Interface] = m.Mark
+	}
+	return out
+}
+
+// list returns tenant's marks on the given devices, sorted.
+func (s *wanMarkStore) list(tenant string, devices map[string]bool) []wan.InterfaceMark {
+	if s == nil || s.kv == nil {
+		return nil
+	}
+	var out []wan.InterfaceMark
+	for _, m := range s.kv.All(tenant, false) {
+		if devices[m.DeviceID] && wan.ValidMark(m.Mark) {
+			out = append(out, m)
+		}
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].DeviceID != out[b].DeviceID {
+			return out[a].DeviceID < out[b].DeviceID
+		}
+		return out[a].Interface < out[b].Interface
+	})
+	return out
+}
+
+func (s *wanMarkStore) put(m wan.InterfaceMark) error {
+	if s == nil || s.kv == nil {
+		return errors.New("wan mark store is not configured")
+	}
+	return s.kv.Upsert(m)
+}
+
+func (s *wanMarkStore) remove(tenant, deviceID, iface string) bool {
+	if s == nil || s.kv == nil {
+		return false
+	}
+	return s.kv.Delete(tenant, false, wan.MarkKey(deviceID, iface))
+}
+
+// wanMarksFor indexes the marks of the visible devices, each read under the
+// device's OWN tenant: device id → interface → mark.
+func (s *server) wanMarksFor(visible map[string]models.Device) map[string]map[string]string {
+	byTenant := map[string]map[string]map[string]string{}
+	out := map[string]map[string]string{}
+	for id, d := range visible {
+		t := deviceTenant(d)
+		idx, ok := byTenant[t]
+		if !ok {
+			idx = s.wanMarks.byDevice(t)
+			byTenant[t] = idx
+		}
+		if m := idx[id]; len(m) > 0 {
+			out[id] = m
+		}
+	}
+	return out
+}
+
+// handleWanMarks serves /api/wan/marks — the operator's per-interface WAN marks.
+//
+//	GET                                   the marks on devices the caller can see
+//	PUT    {device_id, interface, mark}   mark one interface "wan" or "not_wan"
+//	DELETE ?device_id=…&interface=…       clear one mark
+//
+// §3a: the caller must be able to SEE the device (404 otherwise — never reveal
+// another tenant's id); the mark is owned by the device's tenant, stamped from
+// the inventory and never from the body; writes need infrastructure:write. An
+// operator scoped into a restricted tenant sees no device, so reads nothing and
+// writes nothing.
+func (s *server) handleWanMarks(w http.ResponseWriter, r *http.Request) {
+	level := LevelRead
+	if r.Method != http.MethodGet {
+		level = LevelWrite
+	}
+	claims, ok := s.requirePerm(w, r, "infrastructure", level)
+	if !ok {
+		return
+	}
+	vis := s.deviceVisibilityFor(claims)
+	visibleDevice := func(id string) (models.Device, bool) {
+		if vis.deny || id == "" {
+			return models.Device{}, false
+		}
+		d, found := s.discovery.Get(id)
+		if !found || !vis.visible(d) {
+			return models.Device{}, false
+		}
+		return d, true
+	}
+	switch r.Method {
+	case http.MethodGet:
+		out := []wan.InterfaceMark{}
+		if !vis.deny {
+			byTenant := map[string]map[string]bool{}
+			for _, d := range vis.filter(s.discovery.Devices()) {
+				t := deviceTenant(d)
+				if byTenant[t] == nil {
+					byTenant[t] = map[string]bool{}
+				}
+				byTenant[t][d.ID] = true
+			}
+			tenants := make([]string, 0, len(byTenant))
+			for t := range byTenant {
+				tenants = append(tenants, t)
+			}
+			sort.Strings(tenants)
+			for _, t := range tenants {
+				out = append(out, s.wanMarks.list(t, byTenant[t])...)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"marks": out})
+	case http.MethodPut:
+		var req struct {
+			DeviceID  string `json:"device_id"`
+			Interface string `json:"interface"`
+			Mark      string `json:"mark"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("bad body: %w", err))
+			return
+		}
+		d, seen := visibleDevice(strings.TrimSpace(req.DeviceID))
+		if !seen {
+			http.NotFound(w, r)
+			return
+		}
+		ifn, okName := wan.CleanInterfaceName(req.Interface)
+		if !okName {
+			writeError(w, http.StatusBadRequest, errors.New("interface must be a name of 1 to 128 printable characters"))
+			return
+		}
+		if !wan.ValidMark(req.Mark) {
+			writeError(w, http.StatusBadRequest, errors.New(`mark must be "wan" or "not_wan"`))
+			return
+		}
+		m := wan.InterfaceMark{
+			TenantID: deviceTenant(d), // the device's owner, NOT the body or the caller
+			DeviceID: d.ID, Interface: ifn, Mark: req.Mark,
+			UpdatedBy: claims.Sub, UpdatedAt: time.Now().UTC(),
+		}
+		if err := s.wanMarks.put(m); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		changeledger.SetTarget(r.Context(), "device", d.ID) // the change ledger's target (N-D2)
+		writeJSON(w, http.StatusOK, m)
+	case http.MethodDelete:
+		d, seen := visibleDevice(strings.TrimSpace(r.URL.Query().Get("device_id")))
+		ifn, okName := wan.CleanInterfaceName(r.URL.Query().Get("interface"))
+		if !seen || !okName || !s.wanMarks.remove(deviceTenant(d), d.ID, ifn) {
+			http.NotFound(w, r)
+			return
+		}
+		changeledger.SetTarget(r.Context(), "device", d.ID)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errors.New("GET, PUT or DELETE"))
 	}
 }

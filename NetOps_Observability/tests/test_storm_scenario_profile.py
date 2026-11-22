@@ -230,8 +230,11 @@ def test_flap_recovery_cycles_really_cycle(scen):
     assert ospf
     assert all(i["flap_cycles"] == 3 for i in ospf)
     dev = ospf[0]["cause_entity"]["device"]
+    # Tracker 380: the recovery legs classify as ospf_adjacency_change_clear —
+    # the same identity, so the cycle is read across both spellings.
     states = [e.state for e in scen.events
-              if e.device == dev and e.symptom == "ospf_adjacency_change"]
+              if e.device == dev
+              and e.symptom.removesuffix("_clear") == "ospf_adjacency_change"]
     assert states.count("up") >= 2 and states.count("down") >= 3
     # the sequence must actually alternate at least twice
     changes = sum(1 for a, b in itertools.pairwise(states) if a != b)
@@ -1229,8 +1232,10 @@ DEFAULT_SCENARIO_DIGEST = (
     # COMBINED (wire + annotations) — was
     # f9d126d41c3fdf209dcba5b37c402a7f0ba19352f420e95289948972c36c33be before
     # tracker 184. The WIRE HALF IS UNCHANGED (proved below); what moved is the
-    # expectation half, rev A-2026-08-29-183 → B-2026-09-02-184.
-    "b1e0695a60bde1e51927135e38f77eee67934316aa1602c762d1836268ec359b")
+    # expectation half, rev A-2026-08-29-183 → B-2026-09-02-184. Tracker 380 moved
+    # it again (B → C-2026-11-22-380), wire still unchanged; it was
+    # b1e0695a60bde1e51927135e38f77eee67934316aa1602c762d1836268ec359b.
+    "e38ac14935da9944b0d0c3d79482aafada9423877e1afa2161fd31c800bef13d")
 
 # THE QUALIFICATION'S IDENTITY (V1 §3 erratum). SHA-256 over the injected plan
 # alone — t, device, appname, message, severity, incident_id, role, etype — the
@@ -1246,6 +1251,9 @@ DEFAULT_SCENARIO_DIGEST = (
 #   post-184 wire        93b614f8b169cffd9bd00671099da52e1705471430c5cfc337729ebade2b13cd  (identical)
 #   pre-184  combined    f9d126d41c3fdf209dcba5b37c402a7f0ba19352f420e95289948972c36c33be  (== the old pin, so the revert was faithful)
 #   post-184 combined    b1e0695a60bde1e51927135e38f77eee67934316aa1602c762d1836268ec359b
+#   post-380 combined    e38ac14935da9944b0d0c3d79482aafada9423877e1afa2161fd31c800bef13d
+#     (tracker 380, 2026-11-22: the wire digest is unchanged — only the derived
+#     expectation moved, an `up` classifying as `<kind>_clear`; EXPECTATION_REV C)
 #
 # The pre-184 combined value reproducing the old pin exactly is what makes the
 # wire equality above evidence rather than assertion.
@@ -1258,8 +1266,8 @@ DEFAULT_SCENARIO_WIRE_DIGEST = (
 # but it must never move silently, because it decides what a scorer may charge
 # the engine with.
 DEFAULT_SCENARIO_EXPECTATION_DIGEST = (
-    "da5e2fc12d82ae58c876fabdfd9ea3745164417ba6fb2611701b296648fe09e0")
-DEFAULT_SCENARIO_EXPECTATION_REV = "B-2026-09-02-184"
+    "9618f6ea41edab9fe73908fd6ad95fc4942ee93d355b9ed0c0015390b08737fc")
+DEFAULT_SCENARIO_EXPECTATION_REV = "C-2026-11-22-380"
 
 
 def _rung(name: str, devices: int = DEVICES, window_s: int = WINDOW_S,

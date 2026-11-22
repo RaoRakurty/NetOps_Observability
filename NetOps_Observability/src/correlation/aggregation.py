@@ -168,7 +168,28 @@ from signals import Signal
 # The aggregation-policy version (memo §21). It identifies the KEY and the
 # CLASSIFIER; any change to either must bump it, because a replay of archived
 # deltas is only meaningful against the policy that produced them.
-AGG_POLICY_VERSION = "p3.k3.v1"
+AGG_POLICY_VERSION = "p3.k3.v2"
+
+# Tracker 380 (p3.k3.v2): the device-lane link/adjacency recoveries are clears now
+# (`link_state_change_clear` …). Their IDENTITY is the base kind, so the recovery
+# stays on the same K1 identity as the down it recovers from — exactly the identity
+# both had when the up was the fault kind with `state=up`. The rename is one-to-one,
+# so the forwarded set is unchanged. Only these six: a metric episode's clear keeps
+# its own identity, as before. Mirrored by `scripts/enterprise_outage_chain.py`.
+RECOVERY_CLEAR_BASE: dict[str, str] = {
+    "link_state_change_clear": "link_state_change",
+    "bgp_adjacency_change_clear": "bgp_adjacency_change",
+    "ospf_adjacency_change_clear": "ospf_adjacency_change",
+    "isis_adjacency_change_clear": "isis_adjacency_change",
+    "routing_adjacency_change_clear": "routing_adjacency_change",
+    "vtep_state_change_clear": "vtep_state_change",
+}
+
+
+def identity_kind(kind: str) -> str:
+    """The kind a K1 identity is keyed on (tracker 380): a device-lane recovery
+    clear folds onto its base kind; every other kind is itself."""
+    return RECOVERY_CLEAR_BASE.get(kind, kind)
 
 # The event-time bucket width. 60 s == the harness's AGG_BUCKET_S_K3, and the
 # §6b ladder was measured with it.
@@ -295,8 +316,9 @@ class AggKey(NamedTuple):
 
 def ident_key(sig: Signal) -> tuple[str, str]:
     """The K1 identity WITHIN a tenant — `(entity_id, kind)`. The tenant is the
-    store, so it is not repeated in the key (see `_TenantAgg`)."""
-    return (sig.entity_id, sig.kind)
+    store, so it is not repeated in the key (see `_TenantAgg`). A device-lane
+    recovery clear shares its base kind's identity (tracker 380)."""
+    return (sig.entity_id, identity_kind(sig.kind))
 
 
 def parsed_state(sig: Signal) -> str:
@@ -645,7 +667,7 @@ class AggPlane:
         # and it is the frontier the transition classifier actually reads. The
         # displacement reported against the declared lateness is the larger of
         # the two violations, so a late arrival is never under-reported.
-        ik = (key[1], key[2])
+        ik = (key[1], identity_kind(key[2]))
         ident = tenant.idents.get(ik)
         in_order = prev is None or order >= prev.frontier
         ident_in_order = ident is None or order >= ident.frontier

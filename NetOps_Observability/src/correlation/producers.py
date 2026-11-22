@@ -295,6 +295,9 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # already names, and the recoveries the device lane now reports (build_nodes skips them).
     "bfd_session_flap", "bfd_session_flap_clear", "device_resource_anomaly_clear",
     "controller_bfd_down_clear", "controller_control_connection_loss_clear",
+    # tracker 380: the device-lane link/adjacency recoveries, reported as clears like
+    # every other lane's (emit.clear_when). build_nodes skips them.
+    "link_state_change_clear", "bgp_adjacency_change_clear", "ospf_adjacency_change_clear", "isis_adjacency_change_clear", "routing_adjacency_change_clear", "vtep_state_change_clear",
     # generic-alarm keystone (#80 §4)
     "device_alarm",
     # metric episodes (main.py metric_identity + C6 flow)
@@ -1327,7 +1330,7 @@ class _Emission:
     """
 
     __slots__ = (
-        "attr_plan", "content_tag", "entity_id", "entity_id_else",
+        "attr_plan", "clear_when", "content_tag", "entity_id", "entity_id_else",
         "entity_type", "entity_type_else", "entity_when", "fidelity", "generic",
         "kind", "metric", "modality", "native_id", "omit_empty", "rule_id",
         "severity", "source", "tokens", "tokens_fallback", "tokens_only",
@@ -1347,6 +1350,7 @@ class _Emission:
         self.severity = emit.severity
         self.attr_plan = emit.attr_plan
         self.omit_empty = emit.omit_empty
+        self.clear_when = emit.clear_when
         self.kind = emit.kind
         self.metric = emit.metric_name
         self.modality = _MODALITIES[emit.modality]
@@ -1407,16 +1411,26 @@ def _build_signal(
     attrs["rules_hash"] = RULES_HASH_TAG
     attrs["fidelity"] = em.fidelity
     _count_emission(em.rule_id, em.generic, em.source)
+    kind = em.kind
+    clear = em.clear_when
+    if clear is not None and clear(ctx):
+        # Tracker 380: a device-lane RECOVERY is a clear — `<kind>_clear` at info,
+        # as the controller lanes report one. Same entity, tokens, native_id and
+        # attrs, so the signal_id is the one the up line always had.
+        kind = kind + "_clear"
+        severity = Severity.INFO
+    else:
+        severity = em.severity(ctx)
     return Signal(
         tenant_id=tenant,
         ts=ts,
         source=source,
-        kind=em.kind,
+        kind=kind,
         observer=observer,
         modality_class=em.modality,
         entity_type=etype,
         entity_id=eid,
-        severity=em.severity(ctx),
+        severity=severity,
         native_id=native,
         entity_tokens=_tokens_of(em, ctx, owner),
         metric_name=em.metric,

@@ -110,7 +110,50 @@ directly.
 **Cross-origin.** Your app and Correlix are usually different origins, so add
 your app's origin to `CORS_ALLOWED_ORIGINS`. Correlix reflects only explicitly
 allowlisted origins — never a wildcard — so a missing entry fails loudly in the
-browser console rather than half-working.
+browser console rather than half-working. That allowlist is set at install
+time today; customers never edit the environment, so a Platform setting for it
+is tracker row 439 and the setup page says "your Correlix administrator must
+allow each app's web address" rather than naming the variable.
+
+### 5a. One tag for hundreds of apps (2026-11-22)
+
+`data-app` is optional. Without it the snippet labels each page by its
+**hostname** (lower-cased, `[a-z0-9.-]`, ≤ 64 characters; nothing else from the
+URL is read), and every event carries `app_source: "attribute" | "hostname"`
+(closed set, validated at the API; stored in `netops.experience_events.app_source`).
+So the tag can be injected ONCE at a shared layer in front of every app — a load
+balancer, reverse proxy, CDN edge or tag manager — and each app is still named.
+
+**Who does it.** The customer's proxy or web team, once, through their normal
+change process. Correlix never applies a rule: it does not write to customer
+systems. Digital Experience › Data Health › **Real-user setup** hands them:
+
+1. **Get a key** — generates an `ingest:experience` key (administrators only;
+   anyone else is told who can), shown once.
+2. **The tag** — with the appliance address and the key filled in, no `data-app`.
+3. **Add it once** — copy-paste starting points for NGINX (`sub_filter`), F5
+   BIG-IP (iRule + stream profile), Citrix NetScaler (rewrite policy),
+   Envoy/Istio (Lua filter), Cloudflare (Worker `HTMLRewriter`), Akamai
+   (EdgeWorker `html-rewriter`) and Google Tag Manager (Custom HTML), plus the
+   two Content-Security-Policy lines (`script-src`, `connect-src`). They are
+   starting points to test in staging, not drop-in configs.
+4. **Is it working?** — `GET /api/dem/rum/sources`: for the caller's tenant
+   only, which apps sent events in the last 24 h ("Sending") and which sent some
+   in the last 7 days but none since ("Went quiet"), with counts, last seen and
+   how each was named. A store that cannot be read says so; it is never an
+   empty list that reads as "nothing installed".
+
+### 5b. Single-page apps (2026-11-22)
+
+A single-page app loads once and then changes "page" through the History API, so
+a page-load beacon alone saw one view per visit. The snippet now wraps
+`history.pushState` / `replaceState` (once per page, even if the tag is present
+twice) and listens for `popstate`; each change of the **collapsed** route (the
+same `route()` rule as page loads, so `/orders/1f9c/pay` → `/orders/:id/pay`) is
+a `navigation` event with `action: "route_change"` and `duration_ms` = time
+from the URL change to the second animation frame after it (the next paint).
+A query-string, fragment or id-only change is not a new view.
+`data-spa="off"` turns it off.
 
 Manual events:
 

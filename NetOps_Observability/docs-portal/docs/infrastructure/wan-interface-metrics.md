@@ -7,7 +7,7 @@ sidebar_position: 7
 
 # Measure WAN paths
 
-**Investigate → Paths → WAN circuits** puts one row on screen for every interface the platform has evidence is a WAN link, and says what the evidence is. The page heading reads **WAN circuits**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, the interfaces that might be WAN, and the measurement policy.
+**Investigate → Paths → WAN circuits** puts one row on screen for every interface the platform has evidence is a WAN link, and says what the evidence is. The page heading reads **WAN circuits**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, the interfaces that might be WAN, and a link to the measurement policy, which lives under Administration.
 
 An interface counts as WAN only on evidence about that interface: the SD-WAN controller reports it as a transport port, the device lists it as a transport locator, an SD-WAN tunnel runs over its address, an ISP next-hop is declared for it, or an operator marked it. A device's name never makes all of its ports WAN, so a branch router's LAN, loopback and management ports do not appear.
 
@@ -77,14 +77,20 @@ like a WAN router, the port facing a WAN router (usually its LAN side), or the
 ports of a WAN-looking router where nothing is confirmed yet. These are not
 measured.
 
+With `infrastructure:write` each possible interface has **Mark as WAN** and
+**Not WAN**, and each registry row has **Not WAN**. A mark is stored for the
+device's tenant and outranks every other fact: an interface marked WAN is
+measured from the next read, and one marked not WAN disappears from both lists.
+
 Both derived sections are empty until an interface has an address and either a
 neighbour on the wire, a declared ISP next-hop or a reachability anchor. The empty
 state says which of the three is missing.
 
 ### Step 6 - Set the measurement policy
 
-**Measurement policy** is the only stored part of this page. Saving it re-derives
-the endpoint registry and the measured paths above.
+The measurement policy is under **Administration › Discovery › WAN circuits**;
+the **WAN settings** link at the foot of the WAN circuits tab opens it. Saving it
+re-derives the endpoint registry and the measured paths.
 
 1. Set the **WAN device name pattern**. A device whose name matches looks like a
    WAN router, which only decides what is offered as possible; it never makes a

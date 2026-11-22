@@ -987,6 +987,13 @@ class Emit:
     #: rule that declares none, which is the whole table but the two link rules,
     #: so the emitter's post-pass is one truthiness test on a slot.
     omit_empty: tuple[str, ...] = ()
+    #: Tracker 380 — the guard under which this emission is a RECOVERY: the kind
+    #: becomes `<kind>_clear` at info, the convention the controller lanes and the
+    #: SD-WAN/resource trap rows already use. `build_nodes` skips every `*_clear`
+    #: kind, so a recovery closes and never becomes fault evidence. Entity, tokens,
+    #: native_id and attrs (`state` included) are unchanged, so signal_id is stable.
+    #: None (every row that declares none) is byte-identical to before.
+    clear_when: Guard | None = None
 
 
 _SEV_BY_NAME = {s.value: s for s in Severity}
@@ -1083,6 +1090,7 @@ def _compile_emit(spec: Any, fallback_sev: Severity | None) -> Emit:
                  else None), fn)
             for (k, fn), raw in zip(attrs, spec.get("attrs", {}).values())),
         omit_empty=omit_empty,
+        clear_when=compile_guard(spec["clear_when"]) if spec.get("clear_when") else None,
     )
 
 

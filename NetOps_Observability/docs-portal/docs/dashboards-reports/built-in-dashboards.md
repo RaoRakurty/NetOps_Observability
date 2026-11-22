@@ -7,7 +7,7 @@ sidebar_position: 2
 
 # Built-in dashboards
 
-**Analytics → Dashboards → Dashboard List** is the directory of built-in boards, grouped as Network monitoring, Traffic and paths, and Health and operations. Below the directory sits **Your dashboards**, the composer. Boards in the Network monitoring group are driven by the [global time range](/dashboards-reports/overview#the-global-time-range), so set the window before reading the graphs.
+The built-in boards each have their own place in the menu: the metric boards under **Analytics → Metric Dashboards**, and the traffic, path and health boards in their own sections, as named below. Your own dashboards live under **Overview → My dashboards**; see [Build your own dashboards](/dashboards-reports/my-dashboards). The metric boards are driven by the [global time range](/dashboards-reports/overview#the-global-time-range), so set the window before reading the graphs.
 
 ## Network monitoring
 
@@ -45,11 +45,12 @@ The board starts fleet-wide and narrows through the scope bar: choose a device, 
 
 ### BGP Metrics
 
-Answers whether routing is converged and stable. Also at **Analytics → Metric Dashboards → Protocol Monitoring**. It covers three routing planes: BGP session health with peer state, established-state transitions and prefixes received; OSPF neighbor and interface state; and IS-IS adjacency state and adjacency counts per device. A device-context row carries system uptime and interfaces up.
+Answers whether routing is converged and stable, at **Analytics → Metric Dashboards → Protocol Monitoring**. It has three tabs:
 
-The state panels are stepped lines. A flat line at the top value is healthy, and any step down is a session or adjacency event worth correlating against the **Events** tab on **Explore → Logs**.
+- **BGP** — the routing-outage screen: sessions down or flapping, routing status, RPKI, AS paths, churn and ownership. Session trends (peer state, session changes, prefixes received) sit in a closed group at the bottom. See [BGP operations](/bgp/overview).
+- **OSPF** and **IS-IS** — each opens on **Needs attention**: the adjacencies that are down now, went down as their last reported change, or flapped in the window, with the device name, its site and the open problem that names it. Counts, evidence coverage and the full adjacency and per-device tables follow; state trends sit in a closed group.
 
-**Analytics → Metric Dashboards → BGP Operations** is the consolidated routing-outage screen: routing status, RPKI, AS paths, churn and ownership in one place. See [BGP operations](/bgp/overview).
+A count that nothing collects reads "not collected", never 0. **Ask Iris** beside the counts explains where each fact comes from and what each state number means.
 
 ### WAN circuits
 
@@ -72,25 +73,21 @@ Answers whether each WAN circuit is meeting its SLA. The card opens **Investigat
 | Logs & events | **Explore → Logs** | Syslog, SNMP traps, flow records and firewall logs on one timeline, on the default **Events** tab. See [Search logs](/explore/logs). |
 | Threat Detection | **Security → Threat Detection** | Security findings and critical alerts. |
 
-**Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface. See [View the Demo Showcase board](/dashboards-reports/demo-showcase).
+**Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface, for the platform owner only. See [View the Demo Showcase board](/dashboards-reports/demo-showcase).
 
 ## Dashboards you compose yourself
 
-**Your dashboards** sits below the directory. A dashboard is a named, ordered list of panel cells rendered through the same registry the curated boards use, and it is persisted server-side as a saved object of type `dashboard`, scoped to your tenant.
+Your own dashboards live under **Overview → My dashboards**: start from a copy of the default Overview, from Network telemetry, or empty, and each dashboard gets its own address. The steps are in [Build your own dashboards](/dashboards-reports/my-dashboards).
 
-1. Select **+ New dashboard**.
-2. Select **+ Add panel** and pick from the categorised registry. Each entry shows its default width.
-3. Set each panel's width from the span control, reorder with the move controls, and remove with the remove control.
-4. Name the dashboard and select **Save**.
-
-The layout model is a 12-column grid, and a span is the only layout unit. The five valid spans are 3, 4, 6, 8 and 12 columns, and a board holds at most 40 cells. Reordering and resizing cover composition without a drag-layout dependency.
+A dashboard is a named, ordered list of panel cells rendered through the same registry the curated boards use, and it is persisted server-side as a saved object of type `dashboard`, scoped to your tenant. The layout model is a 12-column grid, and a span is the only layout unit. The five valid spans are 3, 4, 6, 8 and 12 columns, and a board holds at most 40 cells.
 
 ### The panel registry
 
-29 panels in nine categories:
+41 panels in ten categories:
 
 | Category | Panels |
 |---|---|
+| Problems and RCA | What needs attention, Overview KPIs, Top active issues, Where the fault is, Impact, RCA coverage, Top health contributors, Telemetry coverage, Health by site, What changed, Capacity outlook, Hot paths |
 | Health and KPIs | KPIs, Site availability, Stack performance |
 | Resources | CPU, Memory, Storage and Bandwidth utilization gauges, plus CPU, memory, storage and temperature saturation trends |
 | Interfaces | Interface utilization, errors and discards, each top-N |

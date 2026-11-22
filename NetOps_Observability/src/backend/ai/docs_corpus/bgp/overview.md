@@ -10,7 +10,7 @@ page_type: index
 
 This section is for the operator who has to answer one question during a routing
 incident: is this prefix still announced the way you expect, and if not, what
-changed. The console page is **Analytics → Metric Dashboards → BGP Operations**.
+changed. The console page is **Analytics → Metric Dashboards → Protocol Monitoring → BGP**.
 Every section of that page renders on load, so the outage call does not start
 with a hunt through tabs.
 

@@ -82,6 +82,7 @@ type eventWire struct {
 	UserRef   string `json:"user_ref,omitempty"`
 
 	App         string `json:"app"`
+	AppSource   string `json:"app_source,omitempty"`
 	Environment string `json:"environment,omitempty"`
 	Release     string `json:"release,omitempty"`
 
@@ -200,7 +201,7 @@ func (a *API) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		e := ExperienceEvent{
 			TenantID: tenant, // from the CREDENTIAL, never the body
 			ID:       in.ID, SessionID: in.SessionID, UserRef: in.UserRef,
-			App: in.App, Environment: in.Environment, Release: in.Release,
+			App: in.App, AppSource: in.AppSource, Environment: in.Environment, Release: in.Release,
 			Type: in.Type, Action: in.Action, Route: in.Route,
 			Success: in.Success, DurationMs: in.DurationMs, Error: in.Error,
 			StatusCode: in.StatusCode, Vitals: in.Vitals,

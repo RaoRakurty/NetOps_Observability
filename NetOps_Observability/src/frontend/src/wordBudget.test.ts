@@ -295,7 +295,8 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
   it.each([
     "components/noc.tsx",
     "pages/CommandCenter.tsx",
-    "pages/Dashboard.tsx",
+    "pages/overview/OverviewPage.tsx",
+    "pages/overview/MyDashboards.tsx",
     "pages/ActionQueue.tsx",
     "pages/Devices.tsx",
     "pages/DigitalExperience.tsx",
@@ -365,7 +366,7 @@ describe("UI word budget — a screen states facts, it does not teach", () => {
     "pages/WirelessRemediation.tsx",
     "pages/DeviceDetailPage.tsx",
     "pages/DeviceNeighbors.tsx",
-    "pages/BgpOspf.tsx",
+    "pages/protocols/ProtocolsPage.tsx",
     "pages/NetworkPath.tsx",
     "pages/NewMonitor.tsx",
     // sweep 5 — everything that was left: the BGP surfaces, the RCA workspace and

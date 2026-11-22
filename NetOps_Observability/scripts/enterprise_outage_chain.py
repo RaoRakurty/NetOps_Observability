@@ -278,19 +278,22 @@ CHAIN_SIGNATURES: tuple[ChainSignature, ...] = (
     _row("link_down", "uplink_down", PROMOTED, "link_state_change",
          "device:interface", "down", link(SAMPLE_IF, "down"),
          "the cause: the core's uplink port"),
-    _row("link_up", "recovery", PROMOTED, "link_state_change",
+    # Tracker 380: a recovery is reported as `<kind>_clear` (same entity, state up);
+    # K1 folds it onto the base kind (RECOVERY_CLEAR_BASE), so it stays the recovery
+    # transition on the same identity.
+    _row("link_up", "recovery", PROMOTED, "link_state_change_clear",
          "device:interface", "up", link(SAMPLE_IF, "up"),
          "the recovery transition on the same identity"),
     _row("lineproto_down", "uplink_down", PROMOTED, "link_state_change",
          "device:interface", "down", lineproto(SAMPLE_IF, "down"),
          "same entity as %LINK — a second, corroborating report of one fault"),
-    _row("lineproto_up", "recovery", PROMOTED, "link_state_change",
+    _row("lineproto_up", "recovery", PROMOTED, "link_state_change_clear",
          "device:interface", "up", lineproto(SAMPLE_IF, "up"), ""),
     _row("ospf_neighbor_down", "ospf_neighbor_down", PROMOTED,
          "ospf_adjacency_change", "device", "down",
          ospf_adj(SAMPLE_PEER, SAMPLE_IF, "down"),
          "peer IP becomes a shared entity_token — the corroboration handle"),
-    _row("ospf_neighbor_up", "recovery", PROMOTED, "ospf_adjacency_change",
+    _row("ospf_neighbor_up", "recovery", PROMOTED, "ospf_adjacency_change_clear",
          "device", "up", ospf_adj(SAMPLE_PEER, SAMPLE_IF, "up"), ""),
     _row("ospf_interface_flap", "ospf_interface_flap", PROMOTED,
          "link_state_change+ospf_adjacency_change", "", "", None,
@@ -304,7 +307,7 @@ CHAIN_SIGNATURES: tuple[ChainSignature, ...] = (
          "bgp_adjacency_change", "device", "down",
          bgp_adj(SAMPLE_PEER, "down"), ""),
     _row("bgp_session_up", "bgp_session_flap", PROMOTED,
-         "bgp_adjacency_change", "device", "up", bgp_adj(SAMPLE_PEER, "up"),
+         "bgp_adjacency_change_clear", "device", "up", bgp_adj(SAMPLE_PEER, "up"),
          ""),
     _row("bgp_route_churn", "route_churn", PROMOTED, "bgp_route_churn",
          "device", "churn", bgp_nbr_reset(SAMPLE_PEER),
@@ -752,6 +755,20 @@ AGG_BUCKET_S_K4 = 300
 RECOVERY_STATES: frozenset = frozenset(
     {"up", "forwarding", "learning", "full"})
 
+# Tracker 380: the device lanes report a link/adjacency recovery as `<kind>_clear`.
+# K1 folds it onto the base kind, so a recovery keeps the identity of the down it
+# recovers from (the identity it always had as `<kind>` with state up). The SAME map
+# as `aggregation.RECOVERY_CLEAR_BASE` — pinned equal by test_recovery_clears_380.py
+# (stdlib only here, so it is a copy, not an import).
+RECOVERY_CLEAR_BASE: dict = {
+    "link_state_change_clear": "link_state_change",
+    "bgp_adjacency_change_clear": "bgp_adjacency_change",
+    "ospf_adjacency_change_clear": "ospf_adjacency_change",
+    "isis_adjacency_change_clear": "isis_adjacency_change",
+    "routing_adjacency_change_clear": "routing_adjacency_change",
+    "vtep_state_change_clear": "vtep_state_change",
+}
+
 
 class Observation(typing.NamedTuple):
     """One planned or observed line, in the terms the CLASSIFIER would give it.
@@ -821,7 +838,7 @@ def measure_stream(observations, window_s: float, raw_events: int = 0,
             unpromoted += 1
             continue
         n_sig += 1
-        a = (tenant, o.entity_id, o.kind)
+        a = (tenant, o.entity_id, RECOVERY_CLEAR_BASE.get(o.kind, o.kind))
         b = a + (o.severity,)
         bucket3 = b + (int(o.t // AGG_BUCKET_S_K3),)
         k1.add(a)

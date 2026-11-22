@@ -211,6 +211,11 @@ type TrapEvent struct {
 	// credential, used only by the receive-time identity checks (M4), so it is
 	// unexported (never serialized) and decodePacket clears it once they ran.
 	community string
+
+	// authDevice is the device whose RECEIVE-ONLY candidate profile verified this
+	// v3 trap's HMAC (tracker 371 R2): a receive-only rung attributes the trap to
+	// that device only, never to another one Authenticated would also satisfy.
+	authDevice string
 }
 
 // vendorFromOID returns the vendor for an enterprise OID via the shared
@@ -970,6 +975,12 @@ func communityMatchesDevice(community string, tg Target) bool {
 		return false
 	}
 	want := tg.creds().Community
+	if tg.ReceiveOnly {
+		// A receive-only identity target proves with ITS OWN profile's community
+		// only: the SNMP_COMMUNITY / "public" default creds() falls back to is
+		// nobody's proof of a controller-only device (tracker 371 R2).
+		want = tg.Community
+	}
 	if want == "" {
 		return false
 	}
@@ -989,6 +1000,11 @@ func trapIdentityTrusted(ev *TrapEvent, t Target) bool {
 	case "v1", "v2c":
 		return communityMatchesDevice(ev.community, t)
 	case "v3":
+		if t.ReceiveOnly {
+			// Only a HMAC verified with THIS device's own candidate profile;
+			// noAuthNoPriv proves nothing about a device nobody polls.
+			return ev.Authenticated && ev.authDevice == t.ID
+		}
 		return ev.Authenticated || (t.SNMPVersion == 3 && t.V3Level == "noAuthNoPriv")
 	default:
 		return false // no wire identity proof at all
@@ -1248,6 +1264,10 @@ type trapReceiver struct {
 	addrs atomic.Pointer[TrapAddressResolver]
 	// ifNames names an ifIndex varbind (tracker 387 PR 13c); nil = numbers only.
 	ifNames atomic.Pointer[IfNameFunc]
+	// recv lists the RECEIVE-ONLY identity targets of controller-only devices
+	// (tracker 371 R2); nil until the api injects it. Kept apart from targets so
+	// no poller ever sees them and every direct rung answers first.
+	recv atomic.Pointer[TargetFunc]
 
 	// transitions groups one BGP transition's reports and remembers each
 	// peer's last state (tracker 387, trap semantics); forward() uses it.
@@ -1355,6 +1375,174 @@ func (r *trapReceiver) ifNameFunc() IfNameFunc {
 	return nil
 }
 
+// SetReceiveOnlyTargets installs the controller-only devices' identity targets
+// (tracker 371 R2). Safe while running.
+func (r *trapReceiver) SetReceiveOnlyTargets(fn TargetFunc) {
+	if fn == nil {
+		r.recv.Store(nil)
+		return
+	}
+	r.recv.Store(&fn)
+}
+
+// receiveOnly returns the installed receive-only targets. Defensive: anything
+// not marked ReceiveOnly is dropped, so a mis-wired list can never be trusted
+// with the default community.
+func (r *trapReceiver) receiveOnly() []Target {
+	p := r.recv.Load()
+	if p == nil {
+		return nil
+	}
+	all := (*p)()
+	out := make([]Target, 0, len(all))
+	for _, t := range all {
+		if t.ReceiveOnly && t.ID != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// hostOf strips a port from a target address.
+func hostOf(addr string) string {
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		return h
+	}
+	return addr
+}
+
+// receiveOnlyCandidates are the receive-only targets of the ONE controller-only
+// device a source address names, and the basis it was named on: its management
+// address (when no other device, direct or receive-only, holds that address)
+// or an interface address the index gives to exactly one device. Each target
+// is one of the owner's profiles; several share the device id.
+func (r *trapReceiver) receiveOnlyCandidates(ip string, recv []Target) ([]Target, string) {
+	if ip == "" || len(recv) == 0 {
+		return nil, ""
+	}
+	if r.targets != nil {
+		for _, t := range r.targets() {
+			if hostOf(t.Address) == ip {
+				// A directly collected device holds the address: the direct
+				// rung answered (or refused it as shared); never ours to give.
+				return nil, ""
+			}
+		}
+	}
+	holders := map[string]bool{}
+	var byMgmt []Target
+	for _, t := range recv {
+		if hostOf(t.Address) == ip {
+			holders[t.ID] = true
+			byMgmt = append(byMgmt, t)
+		}
+	}
+	if len(byMgmt) > 0 && len(holders) == 1 {
+		return byMgmt, AttributionMgmtIP
+	}
+	if len(holders) > 1 {
+		return nil, "" // a shared address names nobody
+	}
+	if p := r.addrs.Load(); p != nil {
+		if id, ok := (*p)(ip); ok && id != "" {
+			var byIf []Target
+			for _, t := range recv {
+				if t.ID == id {
+					byIf = append(byIf, t)
+				}
+			}
+			if len(byIf) > 0 {
+				return byIf, AttributionInterfaceIP
+			}
+		}
+	}
+	return nil, ""
+}
+
+// attributeReceiveOnly is the last rung of attributeDevice: only after every
+// direct rung found nothing, a controller-only device is named when the trap
+// proves one of its owner's profiles. Order: the source address (management,
+// then interface), then the sysName varbind (one device by that name). The
+// tenant is the device's own, never derived from the address.
+func (r *trapReceiver) attributeReceiveOnly(ev *TrapEvent, srcIP string) {
+	recv := r.receiveOnly()
+	if len(recv) == 0 {
+		return
+	}
+	if cands, basis := r.receiveOnlyCandidates(srcIP, recv); basis != "" {
+		for _, t := range cands {
+			if trapIdentityTrusted(ev, t) {
+				ev.Device, ev.AttributionBasis = t.ID, basis
+				return
+			}
+		}
+	}
+	sn := trapSysName(ev)
+	if sn == "" {
+		return
+	}
+	var named []Target
+	ids := map[string]bool{}
+	if r.targets != nil {
+		for _, t := range r.targets() {
+			if strings.EqualFold(t.Name, sn) || strings.EqualFold(t.ID, sn) {
+				ids[t.ID] = true // a direct device by that name: the name is not ours to give
+			}
+		}
+	}
+	for _, t := range recv {
+		if strings.EqualFold(t.Name, sn) || strings.EqualFold(t.ID, sn) {
+			ids[t.ID] = true
+			named = append(named, t)
+		}
+	}
+	if len(ids) != 1 {
+		return
+	}
+	for _, t := range named {
+		if trapIdentityTrusted(ev, t) {
+			ev.Device, ev.AttributionBasis = t.ID, AttributionSysName
+			return
+		}
+	}
+}
+
+// receiveOnlyV3 re-decodes a v3 trap the direct credentials could not verify
+// with each receive-only candidate profile of the device its source names. The
+// first whose HMAC verifies wins, and the event remembers that device
+// (authDevice). When none verifies — or there is no candidate — it reports
+// false and the caller keeps the original outcome: an unknown sender, exactly
+// as before receive-only targets existed. A guessed profile never refuses a
+// trap the receiver would otherwise have kept.
+func (r *trapReceiver) receiveOnlyV3(pkt []byte, srcIP string) (*TrapEvent, bool) {
+	cands, _ := r.receiveOnlyCandidates(srcIP, r.receiveOnly())
+	for _, t := range cands {
+		if t.SNMPVersion != 3 {
+			continue
+		}
+		cand := t
+		ev, err := decodeTrapWith(pkt, srcIP, r.resolve, func(string) (Target, bool) { return cand, true })
+		if err == nil && ev != nil && ev.Authenticated {
+			ev.authDevice = cand.ID
+			return ev, true
+		}
+	}
+	return nil, false
+}
+
+// trapVersion reads a datagram's SNMP version field (0 = v1, 1 = v2c, 3 = v3).
+func trapVersion(pkt []byte) (int64, bool) {
+	outerTag, body, _, err := readTLV(pkt)
+	if err != nil || outerTag != 0x30 {
+		return 0, false
+	}
+	verTag, verRaw, _, err := readTLV(body)
+	if err != nil || verTag != 0x02 {
+		return 0, false
+	}
+	return decodeInt(verRaw), true
+}
+
 // resolveByInterface maps a source IP to the target of the one device holding
 // it as an identifying interface address. The resolver's answer is only a
 // device id; the Target (and so the credential to prove) comes from inventory.
@@ -1460,6 +1648,11 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 			}
 		}
 	}
+	// Tracker 371 R2: a controller-only device, only after every direct rung,
+	// and only on proof of one of its owner's own profiles.
+	if ev.Device == "" {
+		r.attributeReceiveOnly(ev, srcIP)
+	}
 	if ev.Device == "" {
 		ev.AttributionBasis = AttributionNone
 	}
@@ -1474,10 +1667,14 @@ func (r *trapReceiver) attributeDevice(ev *TrapEvent, srcIP string) {
 // deviceName is the inventory's display name for an attributed device id ("" if
 // the inventory names it nothing, or names it only by its id).
 func (r *trapReceiver) deviceName(id string) string {
-	if r.targets == nil || id == "" {
+	if id == "" {
 		return ""
 	}
-	for _, t := range r.targets() {
+	var all []Target
+	if r.targets != nil {
+		all = r.targets()
+	}
+	for _, t := range append(all, r.receiveOnly()...) {
 		if t.ID == id {
 			if n := strings.TrimSpace(t.Name); n != "" && n != id {
 				return clampRunes(n, maxIfNameChars)
@@ -1498,6 +1695,17 @@ func (r *trapReceiver) deviceName(id string) string {
 func (r *trapReceiver) decodePacket(pkt []byte, srcIP string) (ev *TrapEvent, err error) {
 	completed := safego.Run(safego.Stderr, "snmptrap-decode", func() {
 		ev, err = decodeTrapWith(pkt, srcIP, r.resolve, r.resolveForCreds)
+		// Tracker 371 R2: a v3 trap no DIRECT device's keys apply to may still
+		// verify with a controller-only device's own candidate profile. Tried
+		// only when no direct credential exists for the source, and only kept
+		// when its HMAC verifies — otherwise the original outcome stands.
+		if v, ok := trapVersion(pkt); ok && v == 3 && (err != nil || ev == nil || !ev.Authenticated) {
+			if _, direct := r.resolveForCreds(srcIP); !direct {
+				if ev2, verified := r.receiveOnlyV3(pkt, srcIP); verified {
+					ev, err = ev2, nil
+				}
+			}
+		}
 		if err != nil || ev == nil {
 			return
 		}

@@ -374,6 +374,8 @@ def test_every_emitted_kind_is_owned_by_a_rule_or_another_lane(kind):
     emit MUST have a rule (and therefore a rule_id); anything else must be
     explicitly declared as another lane's."""
     owned = {r.kind for r in RULES}
+    # Tracker 380: a rule with emit.clear_when also emits `<kind>_clear`.
+    owned |= {f"{r.kind}_clear" for r in RULES if r.emit is not None and r.emit.clear_when}
     assert kind in owned or kind in OTHER_LANE_KINDS, (
         f"kind {kind!r} belongs to no parser rule and is not declared in "
         "OTHER_LANE_KINDS — give it a Rule (so its signals carry provenance) "
@@ -409,7 +411,11 @@ def test_every_rule_stamps_its_own_provenance(rule_id):
         f"branch stamped {sig.attrs['rule_id']!r} but the fixture targets "
         f"{rule_id!r} — the fixture fires the wrong branch, or the branch reads "
         "the wrong Rule")
-    assert sig.kind == rule.kind, "the table's kind and the branch's kind disagree"
+    if rule.emit is not None and rule.emit.clear_when and sig.kind == f"{rule.kind}_clear":
+        # Tracker 380: the fixture is an up line — a recovery clear, at info.
+        assert sig.attrs.get("state") == "up" and sig.severity.value == "info", sig
+    else:
+        assert sig.kind == rule.kind, "the table's kind and the branch's kind disagree"
     assert sig.attrs["parser_rev"] == P.PARSER_REV
     assert sig.attrs["rules_hash"] == P.RULES_HASH_TAG
     assert sig.attrs["fidelity"] == rule.fidelity
@@ -674,7 +680,16 @@ RULES_HASH_VENDOR_PACKS_WAVE2 = "5061534a0a9c9fbb8804eff7b0d7768321cf1c951ce056b
 #: the three nokia_sros BGP rows, read an IPv6 peer as a second extract alternative after
 #: the IPv4 one. No rule matches a different line; only the peer attribute is added.
 RULES_HASH_BGP_IPV6_PEER = "c908929ca5617b8fdf79fca5224787e5660237bed93aa262940f53c602988e61"
-RULES_HASH_A3 = RULES_HASH_BGP_IPV6_PEER
+#:
+#: Tracker 380 PR 2 (2026-11-22): `up` is a positional claim. The OSPF, routing, link
+#: and VTEP syslog rows read the state a transition goes TO; eight else-up rows match
+#: up explicitly and default to unknown.
+RULES_HASH_POSITIONAL_STATE = "5923e8c68405e06755ce6d6df6b8397198221384f1fb049034d2e47fa4d1dc0c"
+#:
+#: Tracker 380 PR 3 (2026-11-22): 32 device-lane link/adjacency rows gain
+#: `emit.clear_when` — an up is reported as `<kind>_clear` at info.
+RULES_HASH_RECOVERY_CLEARS = "90f3505fe7152e2667b73abebb6f67b4ae596be64ec1b6f31e9bbe1f0be890a4"
+RULES_HASH_A3 = RULES_HASH_RECOVERY_CLEARS
 
 
 def _guard_patterns(node) -> list[str]:

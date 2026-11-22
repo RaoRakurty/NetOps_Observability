@@ -33,6 +33,7 @@ vi.mock("../SubnetDiscovery", () => ({ default: marker("scan") }));
 vi.mock("../../tabs/Collectors", () => ({ default: marker("sensors") }));
 vi.mock("../DataSources", () => ({ default: marker("coverage") }));
 vi.mock("../telemetry/TelemetryCoverage", () => ({ default: marker("telemetry") }));
+vi.mock("../WanSettings", () => ({ default: marker("wan") }));
 vi.mock("../../components/AskIris", () => ({ default: () => null }));
 
 import DiscoveryHub, { sectionFromHash, visibleSections } from "./DiscoveryHub";
@@ -61,6 +62,14 @@ describe("DiscoveryHub", () => {
     expect(screen.getByText("3. Sensors")).toBeTruthy();
     expect(screen.getByText("4. Collection Coverage")).toBeTruthy();
     expect(screen.getByText("5. Telemetry Coverage")).toBeTruthy();
+    expect(screen.getByText("6. WAN circuits")).toBeTruthy();
+  });
+
+  it("opens the WAN settings section from its own address (the Paths page links here)", () => {
+    mockUseAuth.mockReturnValue(TENANT);
+    at("#/admin/discovery/wan");
+    render(<DiscoveryHub />);
+    expect(mounted).toEqual(["wan"]);
   });
 
   it("a bare address opens Network Scan and mounts nothing else", () => {
@@ -148,8 +157,8 @@ describe("DiscoveryHub", () => {
   });
 
   it("section routing helpers", () => {
-    expect(visibleSections(false).map((s) => s.id)).toEqual(["snmp", "scan", "coverage", "telemetry"]);
-    expect(visibleSections(true).map((s) => s.id)).toEqual(["snmp", "scan", "sensors", "coverage", "telemetry"]);
+    expect(visibleSections(false).map((s) => s.id)).toEqual(["snmp", "scan", "coverage", "telemetry", "wan"]);
+    expect(visibleSections(true).map((s) => s.id)).toEqual(["snmp", "scan", "sensors", "coverage", "telemetry", "wan"]);
     expect(sectionFromHash("#/admin/discovery/sensors", true)).toBe("sensors");
     expect(sectionFromHash("#/admin/discovery/sensors", false)).toBe("scan");
     expect(sectionFromHash("#/admin/discovery/nope", true)).toBe("scan");

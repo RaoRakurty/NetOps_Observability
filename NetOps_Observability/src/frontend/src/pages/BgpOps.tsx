@@ -403,7 +403,10 @@ export function pickInitial(
 
 // ── page ─────────────────────────────────────────────────────────────────────
 
-export default function BgpOps() {
+/** embedded: rendered as the BGP tab of Protocol Monitoring (2026-11-22), which
+ *  carries the page title — so the outage view drops its own header and keeps
+ *  only the watch chips. */
+export default function BgpOps({ embedded = false }: { embedded?: boolean } = {}) {
   const [watch, setWatch] = useState<BgpWatchEntry[]>([]);
   const [incidents, setIncidents] = useState<Record<string, BgpIncident>>({});
   const [incidentsNote, setIncidentsNote] = useState<string | undefined>();
@@ -556,14 +559,21 @@ export default function BgpOps() {
 
   return (
     <div className="dm-board cc-board bgp-page">
-      <NocHeader
-        title="BGP Operations"
-        subtitle="One screen for the outage call: is BGP healthy, what changed, what is down, and what to do about it."
-        chips={<>
+      {embedded ? (
+        <div className="bgp-embedded-chips">
           <Chip label={`${watch.length} watched`} />
           {openIncidents > 0 && <Chip label={`${openIncidents} needing attention`} tone="var(--warn)" />}
-        </>}
-      />
+        </div>
+      ) : (
+        <NocHeader
+          title="BGP Operations"
+          subtitle="One screen for the outage call: is BGP healthy, what changed, what is down, and what to do about it."
+          chips={<>
+            <Chip label={`${watch.length} watched`} />
+            {openIncidents > 0 && <Chip label={`${openIncidents} needing attention`} tone="var(--warn)" />}
+          </>}
+        />
+      )}
 
       {/* Selector: the watchlist as chips plus the free-form lookup. Picking a
           chip drives EVERY section below — that is the whole point of the page. */}

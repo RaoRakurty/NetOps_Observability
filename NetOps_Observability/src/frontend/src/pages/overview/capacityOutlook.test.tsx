@@ -9,14 +9,14 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 
 const metricsForecast = vi.fn();
-vi.mock("../services/api", () => ({
+vi.mock("../../services/api", () => ({
   api: { metricsForecast: (...a: unknown[]) => metricsForecast(...a) },
   getActiveScope: () => "",
   sessionTenantKey: () => "",
 }));
-vi.mock("../context/shell", () => ({ useShell: () => ({ navigate: vi.fn() }) }));
+vi.mock("../../context/shell", () => ({ useShell: () => ({ navigate: vi.fn() }) }));
 
-import { CapacityOutlook } from "./FrontPage";
+import { CapacityOutlook } from "./rcaPanels";
 
 const row = (status: string, days = -1) => ({
   device: "edge-1", interface: "Gi0/1", current_util_pct: 61, slope_per_day_pct: 1,

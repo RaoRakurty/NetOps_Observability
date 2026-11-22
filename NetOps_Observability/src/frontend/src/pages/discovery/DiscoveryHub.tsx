@@ -11,6 +11,8 @@
 //   3. Sensors            — which collectors run (platform administrator only)
 //   4. Collection Coverage — what each device is being collected for
 //   5. Telemetry Coverage — what the parsers recognize
+//   6. WAN circuits       — what WAN interfaces measure to (the measurement
+//                           policy; moved off Investigate › Paths 2026-11-22)
 //
 // Each section is the page it replaces, unchanged, mounted only while open.
 // Deep links: #/admin/discovery/<section>; the old leaves' routes are aliases
@@ -33,6 +35,7 @@ import SubnetDiscovery from "../SubnetDiscovery";
 import Collectors from "../../tabs/Collectors";
 import DataSources from "../DataSources";
 import TelemetryCoverage from "../telemetry/TelemetryCoverage";
+import WanSettings from "../WanSettings";
 
 export type DiscoverySection = { id: string; title: string; summary: string; platformOnly?: boolean };
 
@@ -42,6 +45,7 @@ export const DISCOVERY_SECTIONS: DiscoverySection[] = [
   { id: "sensors", title: "Sensors", summary: "Which collectors run", platformOnly: true },
   { id: "coverage", title: "Collection Coverage", summary: "What each device is collected for" },
   { id: "telemetry", title: "Telemetry Coverage", summary: "What the parsers recognize" },
+  { id: "wan", title: "WAN circuits", summary: "What WAN interfaces measure to" },
 ];
 
 /** Sections this viewer may see, in setup order. */
@@ -62,6 +66,7 @@ function render(id: string) {
     case "sensors": return <Collectors />;
     case "coverage": return <DataSources />;
     case "telemetry": return <TelemetryCoverage />;
+    case "wan": return <WanSettings />;
   }
   return null;
 }

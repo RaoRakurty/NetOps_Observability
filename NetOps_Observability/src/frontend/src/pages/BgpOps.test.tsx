@@ -723,9 +723,21 @@ describe("the selector drives every section", () => {
     bgpWatchlist.mockResolvedValue({ watchlist: [watchEntry("AS111")], incidents_note: "requires the relational store" });
     bgpStatus.mockResolvedValue(statusFor("AS111"));
     render(<BgpOps />);
-    await waitFor(() => expect(panelProps.incidents).toBeTruthy());
-    expect((panelProps.incidents.watch as unknown[]).length).toBe(1);
-    expect(panelProps.incidents.incidentsNote).toBe("requires the relational store");
+    // The section gets props on the first render, before the watchlist loads:
+    // wait for the LOADED props, not merely for the section to exist (failed
+    // #345's vitest job under CI load).
+    await waitFor(() => expect((panelProps.incidents?.watch as unknown[] | undefined)?.length).toBe(1));
+    await waitFor(() => expect(panelProps.incidents.incidentsNote).toBe("requires the relational store"));
+  });
+});
+
+describe("embedded as the BGP tab of Protocol Monitoring", () => {
+  it("drops its own page title but keeps the watch chips", async () => {
+    bgpWatchlist.mockResolvedValue({ watchlist: [watchEntry("AS111")] });
+    bgpStatus.mockResolvedValue(statusFor("AS111"));
+    render(<BgpOps embedded />);
+    expect(await screen.findByText("1 watched")).toBeTruthy();
+    expect(screen.queryByText("BGP Operations")).toBeNull();
   });
 });
 

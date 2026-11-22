@@ -55,7 +55,8 @@ IPV6_LINES = [
 def test_ipv6_adjacency_line_carries_its_peer(line, app, raw, canon_peer, state):
     sig = _syslog(line, app)
     assert sig is not None, line
-    assert sig.kind == "bgp_adjacency_change"
+    # Tracker 380: an up line is the recovery clear; the peer it names is the same.
+    assert sig.kind == ("bgp_adjacency_change_clear" if state == "up" else "bgp_adjacency_change")
     assert sig.attrs.get("peer") == raw
     assert sig.attrs.get("state") == state
 

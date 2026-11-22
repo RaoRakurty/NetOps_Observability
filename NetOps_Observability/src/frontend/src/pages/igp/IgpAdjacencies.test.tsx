@@ -225,7 +225,7 @@ describe("ready", () => {
       truncated: true,
     }));
     render(<IgpAdjacencies proto="isis" />);
-    const rollup = await screen.findByLabelText("IS-IS roll-up by device (worst first)");
+    const rollup = await screen.findByLabelText("IS-IS by device");
     await waitFor(() => expect(within(rollup).getByText("leaf2")).toBeTruthy());
     // adjacencies + down + LSDB + SPF runs + areas: every uncollected column on
     // the row says so, and not one of them is a 0.
@@ -235,11 +235,12 @@ describe("ready", () => {
     expect(rollup.textContent).toContain("2000 most recent");
   });
 
-  it("shows the OSPF state legend and no IS-IS Level column", async () => {
+  it("reaches the OSPF state meanings through Iris, not an inline legend, and has no IS-IS Level column", async () => {
     igpAdjacencies.mockResolvedValue(adjBody({ protocol: "ospf", adjacencies: [adjRow({ level: undefined })] }));
     render(<IgpAdjacencies proto="ospf" />);
     await waitFor(() => expect(view().dataset.state).toBe("ready"));
-    expect(document.body.textContent).toContain("8 full");
+    expect(document.body.textContent).not.toContain("8 full");
+    expect(screen.getByRole("button", { name: /OSPF states/ })).toBeTruthy();
     expect(screen.queryByRole("columnheader", { name: "Level" })).toBeNull();
     expect(screen.getByRole("columnheader", { name: /Neighbor \(router/ })).toBeTruthy();
   });

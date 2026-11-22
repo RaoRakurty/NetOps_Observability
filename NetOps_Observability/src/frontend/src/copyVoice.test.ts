@@ -97,9 +97,6 @@ export const RULES: readonly CopyRule[] = [
     id: "coming-soon",
     re: /\bcoming soon\b/i,
     why: 'Say what is true now ("Not collected here", "not open yet"), never a promise.',
-    // Placeholders.tsx keeps the phrase only in its own file comment about the
-    // era when those pages WERE stubs; the scanner strips comments, so this
-    // exemption exists solely as documentation of that history.
     allow: [],
   },
   {

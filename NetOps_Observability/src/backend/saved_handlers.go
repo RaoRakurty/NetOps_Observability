@@ -6,8 +6,10 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"netops/backend/internal/rbac"
 	"netops/backend/internal/saved"
@@ -25,6 +27,39 @@ type savedRequest struct {
 	Name     string          `json:"name"`
 	TenantID string          `json:"tenant_id"`
 	Body     json.RawMessage `json:"body"`
+}
+
+// Server-side bounds on saved objects (the builder's 40-cell cap was client-only,
+// and a body was limited only by the 50 MiB global request cap).
+const (
+	// savedMaxRequestBytes caps a create/update request: a dashboard of 40 cells
+	// is a few KiB, a saved search or report object far less.
+	savedMaxRequestBytes = 64 << 10
+	// savedMaxNameRunes caps a saved object's name.
+	savedMaxNameRunes = 200
+	// savedMaxPerTenantType caps how many objects of one type a tenant keeps.
+	savedMaxPerTenantType = 500
+)
+
+// savedDecode reads a bounded savedRequest. A body over the cap is 413, a name
+// over the cap 400; both say what the limit is.
+func savedDecode(w http.ResponseWriter, r *http.Request) (savedRequest, bool) {
+	var req savedRequest
+	r.Body = http.MaxBytesReader(w, r.Body, savedMaxRequestBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("a saved object is limited to %d KiB", savedMaxRequestBytes>>10))
+			return req, false
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return req, false
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(req.Name)) > savedMaxNameRunes {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("a name is limited to %d characters", savedMaxNameRunes))
+		return req, false
+	}
+	return req, true
 }
 
 // savedModule is the RBAC module a saved object's type belongs to: a saved
@@ -88,9 +123,8 @@ func (s *server) handleSaved(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, kept)
 	case http.MethodPost:
-		var req savedRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		req, ok := savedDecode(w, r)
+		if !ok {
 			return
 		}
 		if !s.savedCanWrite(claims, req.Type) {
@@ -113,6 +147,10 @@ func (s *server) handleSaved(w http.ResponseWriter, r *http.Request) {
 		// refusing plainly discloses nothing it did not already supply.
 		if !v.creatable(objTenant) {
 			writeError(w, http.StatusForbidden, errors.New("tenant not available to this principal"))
+			return
+		}
+		if n := len(s.saved.List(req.Type, objTenant, false)); n >= savedMaxPerTenantType {
+			writeError(w, http.StatusConflict, fmt.Errorf("this tenant already keeps %d saved objects of this kind; delete one first", n))
 			return
 		}
 		obj, err := s.saved.Create(req.Type, strings.TrimSpace(req.Name), claims.Sub, objTenant, req.Body)
@@ -162,9 +200,8 @@ func (s *server) handleSavedByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, errors.New("write permission required to change it"))
 			return
 		}
-		var req savedRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		req, ok := savedDecode(w, r)
+		if !ok {
 			return
 		}
 		obj, err := s.saved.Update(id, strings.TrimSpace(req.Name), req.Body)

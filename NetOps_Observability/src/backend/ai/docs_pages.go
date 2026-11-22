@@ -78,8 +78,8 @@ func wholePage(slug string) pageDoc { return pageDoc{Slug: slug} }
 var navPageDocs = map[string]navPage{
 	// Overview
 	"overview/home":       {Label: "Overview → Home (Command Center)", Docs: []pageDoc{wholePage("dashboards-reports/command-center"), wholePage("noc-guide/where-to-start")}, Explain: "page.command-center"},
-	"overview/operations": {Label: "Overview → Operations Overview", Docs: []pageDoc{wholePage("dashboards-reports/operations-overview")}},
-	"overview/board":      {Label: "Overview → My Dashboard", Docs: []pageDoc{wholePage("dashboards-reports/my-dashboard")}},
+	"overview/operations": {Label: "Overview → Overview", Docs: []pageDoc{wholePage("dashboards-reports/operations-overview")}, Explain: "page.overview"},
+	"overview/dashboards": {Label: "Overview → My dashboards", Docs: []pageDoc{wholePage("dashboards-reports/my-dashboards")}},
 
 	// Operations
 	"operations/incidents":          {Label: "Operations → Incidents", Docs: []pageDoc{wholePage("incidents/working-incidents"), wholePage("incidents/reading-an-incident"), wholePage("incidents/overview")}, Explain: "page.incidents"},
@@ -128,12 +128,10 @@ var navPageDocs = map[string]navPage{
 	"security/views":      {Label: "Security → Configuration → Saved Views", Docs: []pageDoc{wholePage("security/saved-views")}},
 
 	// Analytics
-	"analytics/dashboards":            {Label: "Analytics → Dashboards → Dashboard List", Docs: []pageDoc{wholePage("dashboards-reports/built-in-dashboards")}},
 	"analytics/demo":                  {Label: "Analytics → Dashboards → Demo Showcase", Docs: []pageDoc{wholePage("dashboards-reports/demo-showcase")}, Explain: "demo.showcase"},
 	"analytics/device-monitoring":     {Label: "Analytics → Metric Dashboards → Device Monitoring", Docs: []pageDoc{{Slug: "dashboards-reports/built-in-dashboards", Anchor: "device-metrics"}}},
 	"analytics/interface-performance": {Label: "Analytics → Metric Dashboards → Interface Performance", Docs: []pageDoc{{Slug: "dashboards-reports/built-in-dashboards", Anchor: "interface-metrics"}, wholePage("infrastructure/interfaces-and-optics")}},
-	"analytics/protocols":             {Label: "Analytics → Metric Dashboards → Protocol Monitoring", Docs: []pageDoc{{Slug: "dashboards-reports/built-in-dashboards", Anchor: "bgp-metrics"}, wholePage("investigate/igp-health"), wholePage("investigate/interfaces-by-routing-instance")}},
-	"analytics/bgp-ops":               {Label: "Analytics → Metric Dashboards → BGP Operations", Docs: []pageDoc{wholePage("bgp/overview"), wholePage("bgp/watchlist"), wholePage("bgp/investigate-a-prefix")}},
+	"analytics/protocols":             {Label: "Analytics → Metric Dashboards → Protocol Monitoring", Docs: []pageDoc{wholePage("bgp/overview"), wholePage("investigate/igp-health"), wholePage("bgp/watchlist"), wholePage("bgp/investigate-a-prefix"), {Slug: "dashboards-reports/built-in-dashboards", Anchor: "bgp-metrics"}, wholePage("investigate/interfaces-by-routing-instance")}},
 	"analytics/reports":               {Label: "Analytics → Reports", Docs: []pageDoc{wholePage("dashboards-reports/reports")}},
 	"analytics/rca-reports":           {Label: "Analytics → RCA Reports", Docs: []pageDoc{wholePage("dashboards-reports/rca-reports")}},
 	"analytics/scorecard":             {Label: "Analytics → Recovery Scorecard", Docs: []pageDoc{wholePage("dashboards-reports/recovery-scorecard"), wholePage("incident-response/rca-time-intelligence")}},

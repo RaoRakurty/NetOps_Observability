@@ -412,7 +412,8 @@ LINK_FRAMES = [
     ("protocol line, IOS no hostname", f"<189>25167: Nov  9 09:00:02.123: %LINEPROTO-5-UPDOWN: {PROTO_DOWN}", "warn"),
     ("protocol line, IOS hostname", f"<189>Nov  9 09:00:02 r1 %LINEPROTO-5-UPDOWN: {PROTO_DOWN}", "warn"),
     # Recovery: never opens.
-    ("recovery, IOS no hostname", f"<189>25168: Nov  9 09:00:03.123: %LINK-3-UPDOWN: {LINK_UP}", "warn"),
+    # Tracker 380: a recovery is the clear `link_state_change_clear`, at info.
+    ("recovery, IOS no hostname", f"<189>25168: Nov  9 09:00:03.123: %LINK-3-UPDOWN: {LINK_UP}", "info"),
     # An operator's shutdown: the line that says so must not open. Since tracker 388 it is
     # evidence, below the floor and carrying link_cause=admin (the change half 385 acts on).
     ("admin, IOS no hostname", f"<189>25169: Nov  9 09:00:03.123: %LINK-5-CHANGED: {ADMIN_DOWN}", "warn"),
@@ -429,7 +430,9 @@ def test_a_link_line_opens_exactly_what_it_should(edge: H.Edge, name: str, line:
     got = engine([edge.send(line.encode())])[0]
     assert got["severity"] == severity, f"{name}: {got}"
     if severity is not None:
-        assert got["kind"] == "link_state_change", got
+        # Tracker 380: a recovery is the clear; a fault or a change is the fault kind.
+        want = "link_state_change_clear" if name.startswith("recovery") else "link_state_change"
+        assert got["kind"] == want, got
     # Tracker 388: the cause is stated only by a line that says administratively down.
     assert (got["link_cause"] == "admin") == name.startswith("admin"), got
 
@@ -462,7 +465,8 @@ def test_true_pri_cannot_move_a_typed_link_rows_severity(pri: int) -> None:
         {**base, "message": f"%LINK-3-UPDOWN: {LINK_UP}"},
     ])
     assert (down["kind"], down["severity"]) == ("link_state_change", "high")
-    assert (up["kind"], up["severity"]) == ("link_state_change", "warn")
+    # Tracker 380: the up is the recovery clear at info, whatever the PRI.
+    assert (up["kind"], up["severity"]) == ("link_state_change_clear", "info")
 
 
 # ── time: a zone-less claim cannot prove an instant (log-time standard R2, R4, R5) ──

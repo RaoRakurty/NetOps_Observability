@@ -818,8 +818,9 @@ Runbook: `docs/runbooks/tenant-discovery-scope.md`.
   tenant rule, the write gate, the profile-owner check or `FORCE ROW LEVEL SECURITY` each fails a test.
 
 **BUILT, NOT PROVEN:** nothing has run on the lab. The RETAIL-WALMART cut-over (runbook §2–§6) has not been
-run, and neither the vManage-twin merge by name nor the trap attribution by interface address has been
-observed.
+run, and the vManage-twin merge by name has not been observed. **Trap attribution by interface address
+(13c') IS now observed on the lab** (2026-11-22, the router's `netops_tenant_attribution_events` over
+2026-11-18 → 11-22): 66,365 traps attributed with basis `interface_ip`, 29,271 `mgmt_ip`, 4 `none`.
 
 **NOT COVERED:** the trap receiver has no test yet for a trap sent from the sibling's interface address
 (tracker 396 b). Customers cannot write their own ranges until collector tier C3 (D1).
@@ -1012,4 +1013,49 @@ every other shape is `doc_claimed`.
 - The ratified V1 storm mixes classify byte-identically. BUILD, by digest. **NOT measured at
   scale:** `scripts/scale-miniladder.py` injects to Kafka, so no rig leg has ever exercised
   syslog-ng or the aggregator's syslog lane. An edge parity leg needs a raw-frame injector.
+
+## 33. Device-lane recoveries are clears — BUILT, not proven on the rig (tracker 380, 2026-11-22)
+
+| Claim | Status | Evidence |
+|---|---|---|
+| A link/adjacency `up` from a device lane (syslog, vendor pack, trap) never becomes a node, evidence or a witness | **BUILD** | 32 rows declare `emit.clear_when`; `test_recovery_clears_380.py` (ratchet: every row that can say up declares it; no recorded corpus output is a fault kind with state up) |
+| The clear is the same observation as the up line it replaces | **BUILD** | same entity, tokens, native_id, attrs → same signal_id (`test_the_clear_keeps_the_up_lines_native_id_and_signal_id`); the corpus re-record changed only `kind` and `severity` on 117 outputs |
+| A flap is still read from its downs | **BUILD** | `test_a_flap_is_still_read_from_its_downs`; no template counts transitions |
+| `up` is a positional claim | **BUILD** | `test_positional_state_380.py`: OSPF/routing/link/VTEP read the TO state (`from FULL to EXSTART` = down) |
+| The aggregation plane forwards the same set | **BUILD** | `aggregation.RECOVERY_CLEAR_BASE` folds the six clears onto their base kind for K1 (`p3.k3.v2`), mirrored by `scripts/enterprise_outage_chain.py`; `test_aggregation_p3.py` green |
+| Recovery-only objects stop opening on the rig | **NOT PROVEN** | needs the INVARIANTS §10 gate re-run (`scale-miniladder.py` t-storm-2.5k: its recovery and contradiction lines move node counts; EXPECTATION_REV C-2026-11-22-380, wire digest unchanged) and a lab week showing no object headed by a recovery |
+
+ENGINE_SEMVER unchanged (3.6.0): stage [1] only, no template, gate or constant moved.
+
+## 34. Controller-only devices in the device registry — BUILT, not proven on the rig (tracker 371, 2026-11-22)
+
+A device an integration reports and no collector of ours polls had no `device_tenant.csv` row of any
+kind, so its traps, syslog and flows were registry misses (with sealing on: quarantined, refused by the
+engine). `internal/devidentity` now decides its rows; `telemetry_enrichment.go` writes them.
+
+- Every controller-only device gets its `ctl-<system>-<hash>` id row under its owner; the id hashes the
+  owner, so it never names another tenant's device. BUILD (`TestEveryOwnerGetsItsIDRowOnly`,
+  `TestControllerRowsNeverCrossATenant`).
+- Only a PLATFORM-owned controller device also gets its name, management address and interface addresses.
+  A tenant-owned one gets nothing derived from an address or a name (owner rule 2026-11-01, tenant =
+  channel). BUILD.
+- Additive and tiered: an identity any directly collected device presents (written or ambiguous) is never
+  claimed, and an identity more than one device holds — two controller devices, or another device's
+  interface — names nobody. Every direct row is byte-identical
+  (`TestControllerRowsLeaveEveryDirectRowByteIdentical`). BUILD.
+- The writer holds the previous file until the controller source has answered once, and while platform
+  controller devices exist but the merged interface map is unread; an NMS-only install with SNMP discovery
+  off still writes (`TestNMSOnlyInstallWithSNMPDiscoveryOffWritesTheRegistry`). Counted:
+  `netops_tenant_registry_controller_rows{tier,outcome}`, `netops_tenant_registry_held_total{reason}`. BUILD.
+
+- R2: a trap from a controller-only device is credential-proven by RECEIVE-ONLY identity targets — one per
+  profile its owner may use (`snmpcred.ReceiveOnlyTargets`, owner-strict), consulted only after every direct
+  rung, never polled. Their own community only (never `SNMP_COMMUNITY`/`public`/the env default, never
+  another owner's), v3 only by an HMAC verified with that device's own candidate, an address any other device
+  holds names nobody, and a failed v3 guess keeps the unknown-sender outcome (`collectors/
+  snmptrap_receive_only_test.go`, `internal/snmpcred/receive_only_test.go`). BUILD.
+
+**NOT PROVEN:** the lab cannot show it — its eight edges are tenant-owned SNMP devices since the 396
+cut-over, so none is controller-only. **NOT COVERED:** tenant-owned controller-only syslog and flows stay
+unattributed by design until tracker 372.
 

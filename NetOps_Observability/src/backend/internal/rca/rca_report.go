@@ -1891,7 +1891,7 @@ func BuildReport(in ReportInput) Report {
 	rep.Eligibility = rcaDocEligibility{
 		CausalHeadline:   headline != nil && strings.HasPrefix(topHyp, "sig."),
 		ContextOnly:      len(ctxStories) > 0 && headline == nil,
-		NeverEstablished: rcaNeverEstablishedOnly(anomalous),
+		NeverEstablished: rcaNeverEstablishedOnly(anomalous, clears),
 		ControllerOrHub:  rcaIsControllerOrHub(anomalous),
 		Sites:            len(scope.Sites),
 	}

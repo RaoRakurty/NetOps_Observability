@@ -690,26 +690,37 @@
     {
       "id": "docs-060",
       "category": "docs",
-      "question": "What does the Operations Overview page show?",
+      "question": "What does the Overview page show?",
       "expect": {
         "slugs": [
           "dashboards-reports/operations-overview"
         ]
       },
       "nav": "overview/operations",
-      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Operations Overview"
+      "notes": "nav-leaf coverage (N-G1): Overview \u2192 Overview (Operations Overview and My Dashboard merged, 2026-11-22)"
     },
     {
       "id": "docs-061",
       "category": "docs",
-      "question": "Why does My Dashboard say Disconnected?",
+      "question": "Why does the Overview say Disconnected?",
       "expect": {
         "slugs": [
-          "dashboards-reports/my-dashboard"
+          "dashboards-reports/operations-overview"
         ]
       },
-      "nav": "overview/board",
-      "notes": "nav-leaf coverage (N-G1): Overview \u2192 My Dashboard"
+      "notes": "the liveness header moved from My Dashboard to the merged Overview"
+    },
+    {
+      "id": "docs-061b",
+      "category": "docs",
+      "question": "How do I build my own dashboard from a copy of the Overview?",
+      "expect": {
+        "slugs": [
+          "dashboards-reports/my-dashboards"
+        ]
+      },
+      "nav": "overview/dashboards",
+      "notes": "nav-leaf coverage (N-G1): Overview → My dashboards"
     },
     {
       "id": "docs-062",
@@ -796,6 +807,18 @@
       },
       "nav": "admin/discovery/telemetry",
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 Telemetry Coverage"
+    },
+    {
+      "id": "docs-133",
+      "category": "docs",
+      "question": "Where do I set the ISP next-hops and anchors WAN interfaces measure to?",
+      "expect": {
+        "slugs": [
+          "infrastructure/wan-interface-metrics"
+        ]
+      },
+      "nav": "admin/discovery/wan",
+      "notes": "nav-leaf coverage (N-G1): Administration \u2192 Data sources \u2192 WAN circuits (the measurement policy, moved off Paths 2026-11-22)"
     },
     {
       "id": "docs-069",
@@ -941,8 +964,32 @@
           "bgp/rpki"
         ]
       },
-      "nav": "analytics/bgp-ops",
-      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 BGP Operations"
+      "nav": "analytics/protocols/bgp",
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Protocol Monitoring \u2192 BGP (was BGP Operations)"
+    },
+    {
+      "id": "docs-150",
+      "category": "docs",
+      "question": "Which OSPF adjacencies are down or flapping right now?",
+      "expect": {
+        "slugs": [
+          "investigate/igp-health"
+        ]
+      },
+      "nav": "analytics/protocols/ospf",
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Protocol Monitoring \u2192 OSPF"
+    },
+    {
+      "id": "docs-151",
+      "category": "docs",
+      "question": "Where do I see IS-IS adjacencies that went down or flapped?",
+      "expect": {
+        "slugs": [
+          "investigate/igp-health"
+        ]
+      },
+      "nav": "analytics/protocols/isis",
+      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Metric Dashboards \u2192 Protocol Monitoring \u2192 IS-IS"
     },
     {
       "id": "docs-072",
@@ -1171,8 +1218,7 @@
           "dashboards-reports/built-in-dashboards"
         ]
       },
-      "nav": "analytics/dashboards",
-      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Dashboards \u2192 Dashboard List"
+      "notes": "the Dashboard List leaf was removed (2026-11-22); the built-in boards page still answers this"
     },
     {
       "id": "docs-091",

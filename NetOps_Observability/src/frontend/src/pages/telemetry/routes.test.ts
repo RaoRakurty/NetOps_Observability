@@ -30,7 +30,9 @@ describe("Telemetry coverage nav placement", () => {
     expect(leaf).toBeDefined();
     expect(leaf!.group).toBe("Data sources");
     expect(section?.label).toBe("Telemetry Coverage");
-    expect(leaf!.subItems!.map((x) => x.id).at(-1)).toBe("telemetry");
+    // Telemetry Coverage closes the collection sections; WAN circuits (the
+    // measurement settings, moved off Paths 2026-11-22) follows it.
+    expect(leaf!.subItems!.map((x) => x.id).slice(-2)).toEqual(["telemetry", "wan"]);
   });
 
   it("the shaping pair stays its own group", () => {

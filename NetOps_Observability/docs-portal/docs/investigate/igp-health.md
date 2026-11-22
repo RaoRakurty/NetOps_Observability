@@ -25,16 +25,17 @@ healthy.
 
 ## Steps
 
-1. Go to **Analytics → Protocol Monitoring**.
-2. Scroll to **OSPF — IGP health** or **IS-IS — fabric IGP**. The PromQL tiles
-   at the top of each group are the fleet counters; the block below them is the
-   adjacency view that reads `/api/protocols/{ospf|isis}/*`.
+1. Go to **Analytics → Protocol Monitoring** and open the **OSPF** or **IS-IS**
+   tab.
+2. Read **Needs attention** first: the adjacencies that are down now, went down
+   as their last reported change, or flapped in the window, with the device
+   name, its site and the open problem that names it.
 3. Choose a window: **1h**, **6h**, **24h** or **7d**.
 4. Choose **All devices**, or one device for the per-device roll-up and health.
-5. Read the coverage strip **before** you read any number under it. Each chip is
-   one source: Change events, Live adjacency state, LSDB / LSP count, Areas, SPF
-   runs, Timers. An uncollected chip carries the server's own reason.
-6. Read the adjacency table. The **State** column names where the state came
+5. Read the coverage chips under the counts. Each chip is one source: Change
+   events, Live adjacency state, LSDB / LSP count, Areas, SPF runs, Timers. Hover
+   a chip that says "not collected" for the server's own reason.
+6. Open **All adjacencies** for the full table. The **State** column names where the state came
    from: `live` when a live series backs it, `last reported` when only an event
    does, `not reported` when neither does.
 

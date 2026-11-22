@@ -80,6 +80,8 @@ rules:
       ifname: {re: [[msg, 'Configure ([A-Za-z][\w/.:-]{0,63}) admin status to down', 1, '']]}
       state: {const: down}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -114,8 +116,11 @@ rules:
       state:
         case:
           - {when: {re: [msg, 'operation status DOWN ', '']}, value: down}
-          - {when: {always: true}, value: up}
+          - {when: {re: [msg, 'operation status UP ', '']}, value: up}
+          - {when: {always: true}, value: unknown}
     emit:
+      # Tracker 380: an up is a recovery, reported as `<kind>_clear`.
+      clear_when: {eq: ['$state', 'up']}
       metric: link_state
       modality: control_plane
       entity: {type: interface, id: '{host}:{ifname}'}
@@ -177,7 +182,7 @@ fixtures:
     expect:
       parser_status: parsed
       event_type: host_intf_oper_status_up
-    signal: {rule_id: syslog.sonic.link.state_change, kind: link_state_change, severity: warn, opens_alone: false, state: up, entity: 'ss12.00.lab:Ethernet28'}
+    signal: {rule_id: syslog.sonic.link.state_change, kind: link_state_change_clear, severity: info, opens_alone: false, state: up, entity: 'ss12.00.lab:Ethernet28'}
 
   - name: the same words from another program are not this pack's
     fidelity: doc_claimed

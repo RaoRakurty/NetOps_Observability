@@ -5971,7 +5971,18 @@ export interface VrfInterfacesResponse {
  *  (GET /api/wan/endpoints). `target_kind` is the PROVENANCE of the measurement
  *  target: a directly-connected peer, an operator-declared ISP next-hop, or a
  *  public reachability anchor. */
+/** An operator's mark on one interface (GET/PUT /api/wan/marks). */
+export type WanInterfaceMark = {
+  tenant_id?: string;
+  device_id: string;
+  interface: string;
+  mark: "wan" | "not_wan";
+  updated_by?: string;
+  updated_at?: string;
+};
+
 export type WanEndpoint = WanWhy & {
+  device_id?: string;
   device: string;
   interface: string;
   address: string;
@@ -6990,6 +7001,17 @@ export const api = {
   // × policy); only the policy is persisted, so a PUT here changes what every
   // WAN surface measures next.
   wanEndpoints: () => request<{ endpoints: WanEndpoint[]; candidates?: WanEndpoint[] }>(`/api/wan/endpoints`),
+  // Operator marks: "wan" confirms an interface, "not_wan" hides it. The server
+  // stamps the owner from the device and the author from the token.
+  wanMarks: () => request<{ marks: WanInterfaceMark[] }>(`/api/wan/marks`),
+  setWanMark: (deviceId: string, iface: string, mark: "wan" | "not_wan") =>
+    request<WanInterfaceMark>(`/api/wan/marks`, {
+      method: "PUT", body: JSON.stringify({ device_id: deviceId, interface: iface, mark }),
+    }),
+  clearWanMark: (deviceId: string, iface: string) =>
+    request<{ ok: boolean }>(`/api/wan/marks?device_id=${encodeURIComponent(deviceId)}&interface=${encodeURIComponent(iface)}`, {
+      method: "DELETE",
+    }),
   wanCircuits: () => request<{ circuits: WanCircuit[] }>(`/api/wan/circuits`),
   wanPolicy: () => request<WanMeasurementPolicy>(`/api/wan/policy`),
   setWanPolicy: (policy: WanMeasurementPolicy) =>
@@ -7719,6 +7741,9 @@ export const api = {
       body: JSON.stringify({ type, name, body }),
     }),
   deleteSaved: (id: string) => request<void>(`/api/saved/${id}`, { method: "DELETE" }),
+  // One saved object by id (My dashboards' deep links). Another tenant's id is a
+  // 404 from the server — the same answer as an id that never existed.
+  getSaved: (id: string) => request<SavedObject>(`/api/saved/${encodeURIComponent(id)}`),
 
   // Global omni-search — resolves a free-text query to jump targets
   // (devices, alerts, saved objects) plus a raw log-search handoff.
@@ -7835,6 +7860,20 @@ export const api = {
     if (opts.limit) p.set("limit", String(opts.limit));
     const qs = p.toString();
     return request<Incident[]>(`/api/incidents${qs ? `?${qs}` : ""}`);
+  },
+  // GET /api/incidents?envelope=1 — one page plus the true total (internal/httppage):
+  // the Incidents page says "Showing a–b of N" instead of passing a page off as
+  // the whole set. A bare array (an older server) reads as a complete page.
+  listIncidentsPage: async (opts: { status?: string; severity?: string; limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams({ envelope: "1" });
+    if (opts.status) p.set("status", opts.status);
+    if (opts.severity) p.set("severity", opts.severity);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    if (opts.offset) p.set("offset", String(opts.offset));
+    const r = await request<Incident[] | { incidents?: Incident[]; total?: number; offset?: number; complete?: boolean }>(`/api/incidents?${p}`);
+    if (Array.isArray(r)) return { incidents: r, total: r.length, offset: 0, complete: true };
+    const rows = r?.incidents ?? [];
+    return { incidents: rows, total: r?.total ?? rows.length, offset: r?.offset ?? 0, complete: r?.complete ?? true };
   },
   // POST /api/incidents — an operator describes a problem in their own words and
   // gets an investigation record back. The owning tenant is stamped SERVER-SIDE
@@ -8871,6 +8910,9 @@ export const api = {
    *  source's current state is lowering diagnostic confidence. */
   demDataHealth: (window?: DemWindow) =>
     request<DemDataHealthResponse>(`/api/dem/data-health${demWindowQS(window)}`),
+  /** Real-user setup check: which apps sent real-user events in the last 24 h
+   *  and which went quiet (this tenant only). */
+  demRumSources: () => request<DemRumSourcesResponse>("/api/dem/rum/sources"),
   /** The per-tenant synthetic target catalogue (internal/dem). */
   demTargets: () => request<DemTargetsResponse>("/api/dem/targets"),
   /** Create a catalogue target (the tenant is stamped from the token). */
@@ -9716,6 +9758,31 @@ export interface DemDataHealthResponse {
   enabled: boolean;
   data_health: DemDataHealth;
   policy_version: number;
+}
+
+/** One app's real-user feed (GET /api/dem/rum/sources). */
+export interface DemRumSource {
+  app: string;
+  /** "attribute" = the page set data-app; "hostname" = labelled by its host. */
+  app_source: "attribute" | "hostname" | "";
+  state: "reporting" | "quiet";
+  events_24h: number;
+  page_views_24h: number;
+  errors_24h: number;
+  last_seen: string;
+}
+
+/** GET /api/dem/rum/sources. status "unavailable" means the store could not be
+ *  read — never the same as "nothing installed". */
+export interface DemRumSourcesResponse {
+  status: "ok" | "unavailable";
+  window_s: number;
+  lookback_s: number;
+  reporting: number;
+  quiet: number;
+  sources: DemRumSource[];
+  truncated: boolean;
+  restricted?: boolean;
 }
 
 /** Filters for GET /api/dem/incidents. Every field is optional. */

@@ -1499,7 +1499,7 @@ code, kbd, pre, .mono, td.mono {
 /* "…and N more" under a capped list — a COUNT, not an explanatory note. */
 .list-more { font-size: 12.5px; color: var(--muted); }
 
-/* Protocol state key (BgpOspf) — a STATED FACT beside the panels, not an
+/* Protocol state key (Protocol Monitoring) — a STATED FACT beside the panels, not an
    explanatory note: which state value means healthy. The state-code legends it
    replaced are authored files behind the (i). */
 .proto-key { display: flex; align-items: center; gap: 4px; margin: 0;
@@ -4839,6 +4839,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    16px/600, body 14px, 12.5px only for chips; --font-ui for prose,
    --font-mono for addresses, --font-display for KPI numerals only. */
 .paths-page { font-family: var(--font-ui); font-size: 14px; }
+/* Protocol Monitoring (2026-11-22): its counts and device picker read at body size. */
+.protocols-page .ds-stat-label, .protocols-page select, .protocols-page option { font-size: 14px; }
 .paths-page > h2, .paths-page.card > h2 {
   font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 var(--sp-3);
 }
@@ -4934,6 +4936,41 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .paths-page .tun-state { display: inline-flex; flex-direction: column; gap: 2px; }
 .paths-page .tun-one-end { color: var(--muted); font-size: 14px; white-space: nowrap; }
 .paths-page .tun-filter { font-size: 14px; }
+
+/* Overview (the merged default page, 2026-11-22): group heads 16/600, body 14,
+   12.5 only for chips; the RCA panels keep their .fp-* chrome. */
+.overview-page { display: flex; flex-direction: column; gap: var(--sp-3); }
+.overview-page .dm-group-head { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.overview-page .panel-tools h3 { font-size: 16px; font-weight: 600; }
+.overview-page .fp-panel-t { font-size: 16px; font-weight: 600; }
+.overview-page .fp-empty-t, .overview-page .fp-empty-h, .overview-page .fp-row-t { font-size: 14px; }
+.overview-page .ov-sub { color: var(--muted); font-size: 14px; margin-top: 2px; }
+.overview-page .ov-head-right { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.overview-page .ov-attention { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sp-3); align-items: stretch; }
+.overview-page .ov-attention > * { min-width: 0; }
+.overview-page .ov-quiet .fp-spot-text { font-size: 15px; }
+.overview-page .ov-sites { width: 100%; border-collapse: collapse; font-size: 14px; }
+.overview-page .ov-sites th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.overview-page .ov-sites td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.overview-page .ov-sites .num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) { .overview-page .ov-attention { grid-template-columns: minmax(0, 1fr); } }
+/* My dashboards (the builder under Overview). */
+.overview-page .ov-picker { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: 14px; }
+.overview-page .ov-picker-l { color: var(--muted); }
+.overview-page .ov-picker select { font-size: 14px; max-width: 260px; }
+.overview-page .ov-err { color: var(--bad); font-size: 14px; }
+.overview-page .ov-note { font-size: 14px; }
+.overview-page .ov-empty-h { font-size: 18px; font-weight: 600; text-transform: none; color: var(--fg); margin: 0 0 6px; }
+.overview-page .ov-empty-p { color: var(--muted); font-size: 14px; }
+.overview-page .ov-starts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-3); }
+.overview-page .ov-start { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--fg); cursor: pointer; font-size: 14px; }
+.overview-page .ov-start:hover, .overview-page .ov-start:focus-visible { border-color: var(--accent); }
+.overview-page .ov-start strong { font-size: 16px; font-weight: 600; }
+.overview-page .ov-start span { color: var(--muted); }
+.overview-page .dashb-self { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.overview-page .dashb-self-tools { display: flex; align-items: center; gap: 8px; }
+.overview-page .dashb-self-tools h3 { font-size: 14px; margin: 0; }
+.btn-danger { color: var(--bad); border-color: var(--bad); }
 
 /* Path behaviour cards (PathHealthList) — classes + tokens, no inline hex.
    --ph is the state hue; Unknown is grey, never green ("we could not ask"
@@ -6660,7 +6697,7 @@ button.cc-kpi-btn.on::after { content: "Filtered"; display: block; margin-top: 5
   .tg-tenant { flex-wrap: wrap; }
 }
 
-/* ── Saved-dashboard builder (SavedDashboards.tsx) ─────────────────────────── */
+/* ── Saved-dashboard builder (pages/overview/MyDashboards.tsx) ─────────────────────────── */
 .dashb-list { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
 .dashb-row { display: flex; align-items: center; gap: 8px; }
 .dashb-open {

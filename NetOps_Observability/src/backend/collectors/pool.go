@@ -131,6 +131,17 @@ func (p *Pool) SetTrapIfNameResolver(fn IfNameFunc) {
 	}
 }
 
+// SetTrapReceiveOnlyTargets installs the controller-only devices' RECEIVE-ONLY
+// identity targets (tracker 371 R2). They reach the trap receiver only — never
+// the pool's TargetFunc — so no poller ever polls them. Safe at any time.
+func (p *Pool) SetTrapReceiveOnlyTargets(fn TargetFunc) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if r, ok := p.collectors["snmptrap"].(*trapReceiver); ok {
+		r.SetReceiveOnlyTargets(fn)
+	}
+}
+
 // Status returns a snapshot of all registered collectors.
 func (p *Pool) Status() []Status {
 	p.mu.RLock()
