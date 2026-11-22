@@ -9,67 +9,43 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"netops/backend/models"
 	"netops/backend/safehttp"
 )
 
-// Teams posts to a Microsoft Teams Incoming Webhook using the MessageCard
-// (Office 365 connector) format, which Teams renders with a colored title bar.
+// Teams is the PLATFORM-GLOBAL Microsoft Teams channel: the operator's own,
+// configured under Settings -> Notification channels, not a tenant's. It posts
+// the same Adaptive Card message the tenant Teams destinations send
+// (teams_card.go: TeamsAlertMessage + PostTeamsMessage), so it renders on both
+// kinds of Teams webhook an operator can paste: a Workflows ("When a Teams
+// webhook request is received") URL and a classic Incoming Webhook. The legacy
+// MessageCard it used to post rendered only on the classic kind (tracker 455).
+//
+// Egress is the SSRF-hardened safehttp client; the severity floor is the
+// SeverityGate that BuildTeamsChannel wraps around it. The webhook URL is a
+// bearer credential, and no error returned from here ever carries it.
 type Teams struct {
 	webhookURL string
 	client     *http.Client
 }
 
+// NewTeams builds the channel over the SSRF-hardened egress client.
 func NewTeams(webhookURL string) *Teams {
 	return &Teams{webhookURL: webhookURL, client: safehttp.Client(10 * time.Second)}
 }
 
 func (t *Teams) Name() string { return "teams" }
 
-// teamsThemeColor maps severity to a hex bar color.
-func teamsThemeColor(sev string) string {
-	switch sev {
-	case "critical":
-		return "E11D48"
-	case "error":
-		return "EA580C"
-	case "warning":
-		return "D97706"
-	case "ok", "info":
-		return "2563EB"
-	default:
-		return "5B5BD6"
-	}
-}
-
+// Send posts one alert as an Adaptive Card. Any non-2xx is an error so the
+// delivery layer retries and counts it; the error carries the status only.
 func (t *Teams) Send(a models.Alert) error {
-	if t.webhookURL == "" {
+	if strings.TrimSpace(t.webhookURL) == "" {
 		return errors.New("teams webhook url not configured")
 	}
-	text := a.Summary
-	if a.Description != "" {
-		text = a.Summary + "\n\n" + a.Description
-	}
-	card := map[string]any{
-		"@type":      "MessageCard",
-		"@context":   "http://schema.org/extensions",
-		"summary":    a.Rule,
-		"themeColor": teamsThemeColor(a.Severity),
-		"title":      fmt.Sprintf("[%s] %s", a.Severity, a.Rule),
-		"text":       text,
-	}
-	buf, _ := json.Marshal(card) // discard: marshalling an in-memory value cannot fail
-	resp, err := t.client.Post(t.webhookURL, "application/json", bytes.NewReader(buf))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("teams webhook returned %d", resp.StatusCode)
-	}
-	return nil
+	return sendTeamsAlert(t.client, t.webhookURL, a)
 }
 
 // PostWebhook sends a simple text payload to an arbitrary incoming webhook
