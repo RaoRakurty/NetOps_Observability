@@ -32,7 +32,7 @@ section: [Iris](/iris-ai/overview).
 
 The console groups them under **Investigate**: **RCA**, **Troubleshooting**
 (the case workbench, beside RCA), **Findings**, **Topology** and a **Paths**
-group (**Measured paths**, **Tunnels**, **WAN circuits**). IGP adjacency health sits with the routing boards under
+page (**Tunnels** and **WAN circuits** tabs, each row with its measured path). IGP adjacency health sits with the routing boards under
 **Analytics → Protocol Monitoring**, and interfaces by routing instance is a tab
 on the device page under **Infrastructure → Devices**.
 

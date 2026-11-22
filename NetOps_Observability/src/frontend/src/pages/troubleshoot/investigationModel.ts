@@ -79,10 +79,10 @@ export const LANE_SOURCE: Record<LaneId, string> = {
  * redesign P1, 2026-11-20).
  */
 export const LANE_OPEN: Record<LaneId, { label: string; href: string }> = {
-  dem: { label: "Measured paths", href: "#/investigate/paths/measured" },
+  dem: { label: "WAN circuits", href: "#/investigate/paths/wan-circuits" },
   changed: { label: "Logs", href: "#/explore/logs" },
   health: { label: "Device Monitoring", href: "#/analytics/device-monitoring" },
-  path: { label: "Measured paths", href: "#/investigate/paths/measured" },
+  path: { label: "WAN circuits", href: "#/investigate/paths/wan-circuits" },
   routing: { label: "Protocol Monitoring", href: "#/analytics/protocols" },
   flows: { label: "Flows", href: "#/explore/flows" },
   events: { label: "Logs", href: "#/explore/logs" },

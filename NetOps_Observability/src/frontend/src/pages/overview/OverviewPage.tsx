@@ -82,7 +82,7 @@ export default function OverviewPage() {
           <div className="col-6"><Safe><TopHealthContributors health={d.health} err={d.healthErr} /></Safe></div>
           <RegistryCell type="bgp-peers" span={6} />
           <RegistryCell type="ospf-nbrs" span={6} />
-          <div className="col-12"><Safe><RcaPanel title="Hot paths" to="investigate/paths/measured"><PathHealthList limit={5} /></RcaPanel></Safe></div>
+          <div className="col-12"><Safe><RcaPanel title="Hot paths" to="investigate/paths/wan-circuits"><PathHealthList limit={5} /></RcaPanel></Safe></div>
         </div>
       </LazyGroup>
 

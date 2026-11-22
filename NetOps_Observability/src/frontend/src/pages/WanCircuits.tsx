@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, WanCircuit, WanEndpoint, WanInterfaceRow } from "../services/api";
+import { api, WanEndpoint, WanInterfaceRow } from "../services/api";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { latSev, lossSev } from "../tabs/Tunnels";
 import { Section, useCap, ShowAll } from "./bgp/Section";
@@ -10,14 +10,15 @@ import { operatorError } from "../lib/errors";
 import AskIris from "../components/AskIris";
 import { matchesSite } from "./paths/pathsModel";
 import { PanelState, usePanel, type Panel } from "./wanPanel";
+import { OtherPaths, PathCell, PathPanel, PathsReadNote } from "./paths/MeasuredPaths";
+import { destText, wanRowPaths, unclaimedPaths, type AttachedPath } from "./paths/measuredFold";
+import type { MeasuredState } from "./paths/useMeasuredPaths";
 import {
   endpointKind,
-  matchesCircuit,
   matchesEndpoint,
   noTargetCount,
   provenanceCounts,
   sortCandidates,
-  sortCircuits,
   sortEndpoints,
   targetKindChip,
   targetKindLabel,
@@ -39,9 +40,17 @@ import {
 // BELOW THE METRICS TABLE the page now shows the rest of the same projection,
 // which had no surface at all before:
 //
-//   * PATHS      (GET /api/wan/circuits)  — the 1:1 interface→target links.
 //   * ENDPOINTS  (GET /api/wan/endpoints) — the derived registry each link is
 //                                           assembled from.
+//
+// IN THE ROWS (2026-11-22). The "Measured paths" section (GET /api/wan/circuits,
+// one row per interface→target link) only said whether a link was measured, and
+// the Measured paths tab showed the prober's traces apart from the circuit they
+// measured. Both are folded into the rows: a link the registry holds unmeasured
+// reads "held" in its Measured-to cell, and the prober's path to the row's target
+// or router is its Path column, opened hop by hop from the row
+// (paths/measuredFold.ts, paths/MeasuredPaths.tsx). Paths no row claims are
+// listed apart, collapsed.
 //   * POLICY     (GET/PUT /api/wan/policy) — the ONLY persisted thing here. The
 //     projection above is derived on read, so saving the policy changes what the
 //     other two sections return on their next read — which is exactly what the
@@ -102,71 +111,6 @@ function KindChip({ kind }: { kind: string | undefined }) {
 }
 
 const mono = { fontFamily: "var(--font-mono, monospace)" } as const;
-
-// ── 2 · derived WAN paths (GET /api/wan/circuits) ───────────────────────────
-
-const PATH_CAP = 25;
-
-function PathsSection({ panel, onRetry, q, site = "" }: {
-  panel: Panel<{ circuits: WanCircuit[] }>; onRetry: () => void; q: string; site?: string;
-}) {
-  const rows = useMemo(() => {
-    const all = sortCircuits(panel.data?.circuits ?? []).filter((c) => matchesSite(site, c.local.site, c.remote.site));
-    return q.trim() ? all.filter((c) => matchesCircuit(c, q)) : all;
-  }, [panel.data, q, site]);
-  const cap = useCap(rows, PATH_CAP);
-
-  return (
-    <Section
-      id="wan-measured-paths" title="Measured paths" updatedAt={panel.at || null}
-      note={<>one interface, one derived target<AskIris topic="wan.derived-target" label="Derived target" /></>}
-      actions={<span className="wan-count">{rows.length} path{rows.length === 1 ? "" : "s"}</span>}
-    >
-      <PanelState panel={panel} what="the measured paths" onRetry={onRetry}>
-        {rows.length === 0 ? (
-          <div className="empty">
-            {q.trim()
-              ? "No measured path matches this filter."
-              : "Nothing has been derived yet."}
-            {!q.trim() && <AskIris topic="wan.nothing-derived" label="Nothing derived yet" />}
-          </div>
-        ) : (
-          <>
-            <table className="dp-tbl">
-              <thead>
-                <tr>
-                  <th>Local device</th><th>Local interface</th><th>Local address</th>
-                  <th>Far end</th><th>Far interface</th><th>Measured to</th>
-                  <th>Derived from</th>
-                  <th>Measuring<AskIris topic="wan.held" label="Measuring" /></th>
-                </tr>
-              </thead>
-              <tbody>
-                {cap.rows.map((c) => (
-                  <tr key={c.id}>
-                    <th scope="row">{c.local.device}</th>
-                    <td style={mono}>{c.local.interface}</td>
-                    <td style={mono}>{c.local.address || dash}</td>
-                    <td>{c.remote.device || dash}</td>
-                    <td style={mono}>{c.remote.interface || dash}</td>
-                    <td style={mono}>{c.remote.measurable_addr || c.remote.address || c.local.target || dash}</td>
-                    <td><KindChip kind={c.kind} /></td>
-                    <td>
-                      {c.enabled
-                        ? <span className="badge good">on</span>
-                        : <span className="badge" title="In the registry, not being measured">held</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <ShowAll cap={cap} noun="paths" />
-          </>
-        )}
-      </PanelState>
-    </Section>
-  );
-}
 
 // ── 3 · derived endpoint registry (GET /api/wan/endpoints) ──────────────────
 
@@ -332,11 +276,13 @@ function PossibleSection({ panel, site = "", canEdit, onMarked }: {
 
 // ── the page ────────────────────────────────────────────────────────────────
 
-export default function WanCircuits({ site = "", onSites }: {
+export default function WanCircuits({ site = "", onSites, measured: probe }: {
   /** The Paths page's site filter (a siteKey): an interface on a router there. "" is All sites. */
   site?: string;
   /** Reports the sites these interfaces name, for the Paths page's site list. */
   onSites?: (labels: string[]) => void;
+  /** The prober's measured paths (read once by the Paths page); absent → no Path column. */
+  measured?: MeasuredState;
 } = {}) {
   const [rows, setRows] = useState<WanInterfaceRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -367,7 +313,15 @@ export default function WanCircuits({ site = "", onSites }: {
   const [endpoints, reloadEndpoints] = usePanel(
     () => api.wanEndpoints(), "The endpoint registry could not be read.");
   const [circuits, reloadCircuits] = usePanel(
-    () => api.wanCircuits(), "The measured paths could not be read.");
+    () => api.wanCircuits(), "Which links are held could not be read.");
+  // A link the registry holds but does not measure: "held" in its row.
+  const held = useMemo(() => {
+    const out = new Set<string>();
+    for (const c of circuits.data?.circuits ?? []) {
+      if (!c.enabled) out.add(`${c.local.device}#${c.local.interface}`);
+    }
+    return out;
+  }, [circuits.data]);
 
   // Write access to infrastructure is what the PUT needs. Without it the editor
   // explains itself rather than offering a button that 403s.
@@ -399,6 +353,25 @@ export default function WanCircuits({ site = "", onSites }: {
   }, [scoped, q]);
 
   const rowKey = (r: WanInterfaceRow) => `${r.device}#${r.interface}`;
+
+  // The prober's paths on each row, and the ones no row claims.
+  const index = probe?.index ?? null;
+  const pathsOf = useMemo(() => {
+    const m = new Map<string, AttachedPath[]>();
+    for (const r of rows) m.set(rowKey(r), wanRowPaths(index, r));
+    return m;
+  }, [rows, index]);
+  const others = useMemo(() => {
+    const claimed = new Set<string>();
+    for (const list of pathsOf.values()) for (const a of list) claimed.add(a.m.key);
+    return unclaimedPaths(index, claimed);
+  }, [pathsOf, index]);
+  const [panel, setPanel] = useState<{ title: string; paths: AttachedPath[] } | null>(null);
+  const openRow = useCallback((r: WanInterfaceRow) => {
+    const list = pathsOf.get(rowKey(r)) ?? [];
+    if (list.length) setPanel({ title: `${r.device} ${r.interface}`, paths: list });
+  }, [pathsOf]);
+  const closePanel = useCallback(() => setPanel(null), []);
 
   // How the measurement target was derived (provenance chip).
   const targetKindLabelShort: Record<string, string> = {
@@ -452,8 +425,16 @@ export default function WanCircuits({ site = "", onSites }: {
             <span>{r.remote_device || "—"}</span>
             {r.remote_if ? <span className="wan-mono">{r.remote_if}</span> : null}
             <span className="wan-mono">{r.target}</span>
+            {held.has(rowKey(r)) && <span className="badge" data-testid="wan-held" title="In the registry, not being measured">held</span>}
           </span>
         : dash },
+    ...(probe ? [{ key: "path", header: "Path", width: 176, sortable: true,
+      text: (r: WanInterfaceRow) => (pathsOf.get(rowKey(r)) ?? []).map((a) => destText(a.m)).join(" "),
+      sortValue: (r: WanInterfaceRow) => {
+        const top = (pathsOf.get(rowKey(r)) ?? [])[0];
+        return top ? ["unreached", "loss", "changed", "degraded", "ok"].indexOf(top.m.verdict) : 9;
+      },
+      render: (r: WanInterfaceRow) => <PathCell paths={pathsOf.get(rowKey(r)) ?? []} /> } as Column<WanInterfaceRow>] : []),
     { key: "latency", header: "Latency", width: 90, align: "right", sortable: true,
       ...sla((r) => r.has_latency, (r) => r.latency_ms, (n) => `${n.toFixed(1)} ms`, latSev) },
     { key: "jitter", header: "Jitter", width: 84, align: "right", sortable: true,
@@ -476,7 +457,7 @@ export default function WanCircuits({ site = "", onSites }: {
     { key: "status", header: "Status", width: 80, sortable: true,
       text: (r) => (r.has_oper ? (r.oper_up ? "up" : "down") : ""), sortValue: (r) => (r.has_oper ? (r.oper_up ? 1 : 0) : -1),
       render: (r) => (r.has_oper ? <span className={`badge ${r.oper_up ? "good" : "bad"}`}>{r.oper_up ? "up" : "down"}</span> : dash) },
-  ], []);
+  ], [held, probe, pathsOf]);
 
   const down = scoped.filter((r) => r.has_oper && !r.oper_up).length;
   const totIn = scoped.reduce((a, r) => a + (r.has_util ? r.in_bps : 0), 0);
@@ -492,7 +473,10 @@ export default function WanCircuits({ site = "", onSites }: {
         <AskIris topic="wan.basis" label="Why WAN" />
         Each row names the tier that measured it.
         <AskIris topic="wan.tiers" label="Measured by" />
+        {probe && <>Open a row to see its path hop by hop.</>}
       </p>
+      {probe && <PathsReadNote error={probe.error} />}
+      {circuits.error && <p className="proto-key" role="alert" data-testid="wan-held-error">{circuits.error}</p>}
       {err && <p style={{ color: "var(--bad)" }}>{err}</p>}
       {degraded.map((note) => (
         <p key={note} role="alert" data-testid="wan-degraded" style={{ color: "var(--bad)" }}>{note}</p>
@@ -543,10 +527,14 @@ export default function WanCircuits({ site = "", onSites }: {
           ariaLabel="WAN circuits"
           initialSort={{ key: "util", dir: "desc" }}
           empty="No WAN interfaces match this filter."
+          onRowClick={probe ? openRow : undefined}
         />
       )}
 
-      <PathsSection panel={circuits} onRetry={reloadCircuits} q={q} site={site} />
+      {probe && (
+        <OtherPaths paths={others} site={site}
+          onOpen={(m) => setPanel({ title: destText(m), paths: [{ m, role: "other" }] })} />
+      )}
       <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} canEdit={canEdit} onMarked={afterMark} />
       <PossibleSection panel={endpoints} site={site} canEdit={canEdit} onMarked={afterMark} />
       <p className="wan-line" data-testid="wan-settings-link" style={{ marginTop: 18 }}>
@@ -554,6 +542,7 @@ export default function WanCircuits({ site = "", onSites }: {
         <a href="#/admin/discovery/wan">WAN settings</a>.
         <AskIris topic="wan.policy" label="WAN settings" />
       </p>
+      {probe && <PathPanel title={panel?.title ?? ""} paths={panel?.paths ?? null} onClose={closePanel} />}
     </div>
   );
 }
