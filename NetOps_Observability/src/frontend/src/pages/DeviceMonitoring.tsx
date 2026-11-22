@@ -279,7 +279,7 @@ function TunnelOverlay() {
       </StatStrip>
       <Panel
         title="Tunnels — current state"
-        action={<a href="#/investigate/tunnels" style={{ color: "var(--accent)", fontWeight: 500, fontSize: 12.5 }}>Full tunnels view →</a>}
+        action={<a href="#/investigate/paths/tunnels" style={{ color: "var(--accent)", fontWeight: 500, fontSize: 12.5 }}>Full tunnels view →</a>}
       >
         <DataTable<Tunnel>
           rows={rows}
@@ -385,7 +385,7 @@ export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?:
         <p className="mini-meta" style={{ margin: 0 }}>
           Checks and path SLA come from the probe runners.
           <AskIris topic="monitoring.probe-sources" label="Network Path &amp; synthetics" />
-          {" "}Hop-by-hop paths: <a href="#/investigate/flowtrace" style={{ color: "var(--accent)", fontWeight: 500 }}>Measured paths</a>.
+          {" "}Hop-by-hop paths: <a href="#/investigate/paths/measured" style={{ color: "var(--accent)", fontWeight: 500 }}>Measured paths</a>.
         </p>
       </Group>
 

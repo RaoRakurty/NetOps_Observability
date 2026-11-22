@@ -751,6 +751,9 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   own id, so a tunnel incident grounds to its edge devices AUTHORITATIVELY instead of
   through a rank-7 token (no "no authoritative edge" cap). Device↔device overlay rows are
   deliberately not exported: on a full mesh they would weld the fabric (#99 class).
+  The rows are exported for sessions seen in the last 24 h (`ctloverlay.LinkWindow`,
+  tracker 430), not the drawing's 30-minute `Window`, so a tunnel keeps its rank-3 rows
+  through the outage it is evidence of; a stale row grounds only a node that names it.
   ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since the
   controller fan-in, 3.5.0 since owner D1–D3, 3.6.0 since the tracker-397 control-session
   rung); byte-identical when no tunnel rows exist. The verdict tier still

@@ -121,7 +121,9 @@ describe("routes", () => {
     render(<WanCircuits />);
     await waitFor(() => expect(mockApi.wanCircuits).toHaveBeenCalled());
     expect(screen.getByRole("heading", { name: "WAN circuits" })).toBeTruthy();
-    expect(screen.getByText(/No WAN interfaces yet\./)).toBeTruthy();
+    // The call is made before its result renders: await the text, not the call
+    // (failed #323's vitest job under CI load, 2026-11-22).
+    expect(await screen.findByText(/No WAN interfaces yet\./)).toBeTruthy();
   });
 });
 
@@ -318,7 +320,7 @@ describe("measurement policy", () => {
     await waitFor(() => expect(mockApi.wanEndpoints).toHaveBeenCalledTimes(2));
     expect(mockApi.wanCircuits).toHaveBeenCalledTimes(2);
     expect(mockApi.wanPolicy).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/Measurement policy saved\./)).toBeTruthy();
+    expect(await screen.findByText(/Measurement policy saved\./)).toBeTruthy();
   });
 
   it("catches an unreadable pattern before it is ever sent", async () => {

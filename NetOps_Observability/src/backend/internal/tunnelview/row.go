@@ -78,6 +78,20 @@ func RowOf(t Tunnel, nameOf NameOf, siteOf SiteOf, q *Quality, c *Case, stateAt 
 	return r
 }
 
+// AttachSiteRefs stamps each placed end's site with the matrix's opaque key,
+// so a matrix cell filters rows exactly. t is the tunnel the row was rendered
+// from (its tenant scopes the key). A nil matrix leaves the row unchanged.
+func (r *Row) AttachSiteRefs(t Tunnel, m *Matrix) {
+	if m == nil {
+		return
+	}
+	for _, v := range []*EndView{&r.A, &r.B} {
+		if v.Site != nil {
+			v.Site.Ref = m.SiteRef(t.Tenant, *v.Site)
+		}
+	}
+}
+
 func endView(e End, nameOf NameOf, siteOf SiteOf) EndView {
 	v := EndView{SystemIP: e.SystemIP, Color: e.Color, State: e.State(), Sessions: e.Sessions, Up: e.Up,
 		Device: e.SystemIP}

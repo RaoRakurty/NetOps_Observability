@@ -146,6 +146,41 @@ def test_writable_data_and_key_material_mounts_are_ignored(tmp_path, rel):
     assert mc.fingerprints(_config(tmp_path), tmp_path) == before
 
 
+def test_test_fixtures_beside_the_config_are_not_config(tmp_path):
+    """2026-11-21: a parser change regenerated deployment/docker/vector/tests/*.yaml
+    (fixtures for `vector test`) and every deploy warned that vector-aggregator was
+    STILL RUNNING THE OLD CONFIG. No service reads tests/; a real config change in
+    the same mount still marks the service."""
+    _tree(tmp_path)
+    fixtures = tmp_path / "deployment/docker/vector/tests"
+    fixtures.mkdir()
+    (fixtures / "syslog-packs.yaml").write_text("tests: []\n")
+    before = mc.fingerprints(_config(tmp_path), tmp_path)
+    (fixtures / "syslog-packs.yaml").write_text("tests: [changed]\n")
+    (fixtures / "new-fixture.yaml").write_text("tests: []\n")
+    (fixtures / "nested").mkdir()
+    (fixtures / "nested" / "deep.yaml").write_text("x\n")
+    assert mc.fingerprints(_config(tmp_path), tmp_path) == before
+    (tmp_path / "deployment/docker/vector/vector.yaml").write_text("sources: {changed: {}}\n")
+    after = mc.fingerprints(_config(tmp_path), tmp_path)
+    assert {s for s in before if before[s] != after[s]} == {"vector-aggregator"}
+
+
+def test_a_mount_that_is_a_tests_directory_is_still_hashed(tmp_path):
+    """Only a tests/ SUBdirectory is skipped: a service that mounts a tests
+    directory itself was given it on purpose."""
+    _tree(tmp_path)
+    src = tmp_path / "deployment/docker/vector/tests"
+    src.mkdir()
+    (src / "a.yaml").write_text("a\n")
+    cfg = _config(tmp_path)
+    cfg["services"]["fixture-reader"] = {"image": "x", "volumes": [
+        _bind(tmp_path, "deployment/docker/vector/tests", "/fixtures")]}
+    before = mc.fingerprints(cfg, tmp_path)["fixture-reader"]
+    (src / "a.yaml").write_text("b\n")
+    assert mc.fingerprints(cfg, tmp_path)["fixture-reader"] != before
+
+
 def test_new_removed_and_renamed_files_count(tmp_path):
     _tree(tmp_path)
     fp = lambda: mc.fingerprints(_config(tmp_path), tmp_path)["syslog-ng"]

@@ -37,7 +37,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   ApplicationsObservability: () => import("./pages/ApplicationsObservability"),
   ReliabilityScorecard: () => import("./pages/ReliabilityScorecard"),
   Quality: () => import("./pages/Quality"),
-  NetworkPath: () => import("./pages/NetworkPath"),
+  PathsPage: () => import("./pages/paths/PathsPage"),
   Reports: () => import("./pages/Reports"),
   TopologyCanvas: () => import("./features/topology/renderers/react-flow/TopologyCanvas"),
   Alerts: () => import("./tabs/Alerts"),
@@ -49,8 +49,6 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Incidents: () => import("./tabs/Incidents"),
   SavedSearches: () => import("./tabs/SavedSearches"),
   Flows: () => import("./tabs/Flows"),
-  Tunnels: () => import("./tabs/Tunnels"),
-  WanCircuits: () => import("./pages/WanCircuits"),
   MetricsExplorer: () => import("./tabs/MetricsExplorer"),
   GrafanaTab: () => import("./tabs/Grafana"),
   SearchDashboardsTab: () => import("./tabs/SearchDashboards"),
@@ -120,7 +118,7 @@ const CloudObservability = lazy(ROUTE_CHUNKS["CloudObservability"] as () => Prom
 const ApplicationsObservability = lazy(ROUTE_CHUNKS["ApplicationsObservability"] as () => Promise<{ default: React.ComponentType<any> }>);
 const ReliabilityScorecard = lazy(ROUTE_CHUNKS["ReliabilityScorecard"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Quality = lazy(ROUTE_CHUNKS["Quality"] as () => Promise<{ default: React.ComponentType<any> }>);
-const NetworkPath = lazy(ROUTE_CHUNKS["NetworkPath"] as () => Promise<{ default: React.ComponentType<any> }>);
+const PathsPage = lazy(ROUTE_CHUNKS["PathsPage"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Reports = lazy(ROUTE_CHUNKS["Reports"] as () => Promise<{ default: React.ComponentType<any> }>);
 const TopologyCanvas = lazy(ROUTE_CHUNKS["TopologyCanvas"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Alerts = lazy(ROUTE_CHUNKS["Alerts"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -132,8 +130,6 @@ const Findings = lazy(ROUTE_CHUNKS["Findings"] as () => Promise<{ default: React
 const Incidents = lazy(ROUTE_CHUNKS["Incidents"] as () => Promise<{ default: React.ComponentType<any> }>);
 const SavedSearches = lazy(ROUTE_CHUNKS["SavedSearches"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Flows = lazy(ROUTE_CHUNKS["Flows"] as () => Promise<{ default: React.ComponentType<any> }>);
-const Tunnels = lazy(ROUTE_CHUNKS["Tunnels"] as () => Promise<{ default: React.ComponentType<any> }>);
-const WanCircuits = lazy(ROUTE_CHUNKS["WanCircuits"] as () => Promise<{ default: React.ComponentType<any> }>);
 const MetricsExplorer = lazy(ROUTE_CHUNKS["MetricsExplorer"] as () => Promise<{ default: React.ComponentType<any> }>);
 const GrafanaTab = lazy(ROUTE_CHUNKS["GrafanaTab"] as () => Promise<{ default: React.ComponentType<any> }>);
 const SearchDashboardsTab = lazy(ROUTE_CHUNKS["SearchDashboardsTab"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -309,12 +305,15 @@ export const NAV: NavSection[] = [
       // topology view; Capacity/Change-Review/Executive stay in-canvas modes.
       { id: "topology", label: "Topology", render: () => <TopologyCanvas /> },
       // Paths — how traffic actually traverses the network (the measurement
-      // plane). Labels renamed 2026-11-20 (Paths redesign P0): nothing on the
-      // first page is a flow, and the third page is circuits, not paths. The
-      // route ids — and so every bookmark and page-docs row — are unchanged.
-      { id: "flowtrace", label: "Measured paths", group: "Paths", render: (c) => <NetworkPath rangeMinutes={c.rangeMinutes} /> },
-      { id: "tunnels", label: "Tunnels", group: "Paths", render: () => <Tunnels /> },
-      { id: "wan-paths", label: "WAN circuits", group: "Paths", render: () => <WanCircuits /> },
+      // plane). ONE leaf with three tabs since Paths redesign P5 (2026-11-21):
+      // Measured paths, Tunnels and WAN circuits share one header (site filter,
+      // the "Path data" drawer). The three old leaves (flowtrace, tunnels,
+      // wan-paths) are aliases below, so every bookmark lands on its tab.
+      { id: "paths", label: "Paths", render: (c) => <PathsPage rangeMinutes={c.rangeMinutes} />, subItems: [
+        { id: "measured", label: "Measured paths" },
+        { id: "tunnels", label: "Tunnels" },
+        { id: "wan-circuits", label: "WAN circuits" },
+      ] },
     ],
   },
   // ── Infrastructure — what do I own / what is observed ───────────────────────
@@ -425,7 +424,7 @@ export const NAV: NavSection[] = [
           { id: "interface-metric", label: "Interface Metrics", route: "analytics/interface-performance" },
           { id: "bgp-metric", label: "BGP Metrics", route: "analytics/protocols" },
           { id: "bandwidth", label: "Bandwidth Utilization", route: "analytics/device-monitoring" },
-          { id: "wan-circuit", label: "WAN circuits", route: "investigate/wan-paths" },
+          { id: "wan-circuit", label: "WAN circuits", route: "investigate/paths/wan-circuits" },
         ],
       },
       // Marketing demo board: same live panel registry, flashier chrome. Style
@@ -781,9 +780,15 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   // alias it silently resolved to Infrastructure's first leaf — Devices.
   "infrastructure/topology": "investigate/topology",
   "infrastructure/geomap": "infrastructure/sites/map",
-  "infrastructure/flowtrace": "investigate/flowtrace",
-  "infrastructure/wan-circuits": "investigate/wan-paths",
-  "infrastructure/tunnels": "investigate/tunnels",
+  "infrastructure/flowtrace": "investigate/paths/measured",
+  "infrastructure/wan-circuits": "investigate/paths/wan-circuits",
+  "infrastructure/tunnels": "investigate/paths/tunnels",
+  // Paths redesign P5 (2026-11-21): the three Paths leaves became the tabs of
+  // one "paths" leaf. Each old leaf lands on its own tab; a deeper suffix or a
+  // ?query is kept (aliasSegs).
+  "investigate/flowtrace": "investigate/paths/measured",
+  "investigate/tunnels": "investigate/paths/tunnels",
+  "investigate/wan-paths": "investigate/paths/wan-circuits",
   // The old top-level data-plane sections → Explore
   "metrics": "explore/metrics",
   "flows": "explore/flows",
@@ -842,7 +847,7 @@ const LEGACY_ROUTE_ALIAS: Record<string, string> = {
   "alerts/active": "operations/alerts",
   "alerts/incidents": "operations/incidents",
   "topology/map": "infrastructure/sites/map",
-  "topology/tunnels": "investigate/tunnels",
+  "topology/tunnels": "investigate/paths/tunnels",
   "topology-canvas": "investigate/topology",
 };
 // Leaf-preserving section renames (leaf ids kept in the move). Applied only

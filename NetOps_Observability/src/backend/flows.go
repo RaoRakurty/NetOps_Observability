@@ -1198,7 +1198,9 @@ SELECT id, type, local_device, local_addr, remote_device, remote_addr,
 		if len(out) >= limit {
 			continue
 		}
-		out = append(out, tunnelview.RowOf(t, nameOf, siteOf, quality.For(t), cases.For(t), stateAt))
+		row := tunnelview.RowOf(t, nameOf, siteOf, quality.For(t), cases.For(t), stateAt)
+		row.AttachSiteRefs(t, matrix)
+		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, tunnelEnvelope(out, total, qStatus, cStatus, matrix))
 }

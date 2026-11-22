@@ -93,12 +93,12 @@ var navPageDocs = map[string]navPage{
 	"operations/maintenance":        {Label: "Operations → Monitors → Maintenance Windows", Docs: []pageDoc{wholePage("monitoring/maintenance-windows")}},
 
 	// Investigate
-	"investigate/rca":             {Label: "Investigate → RCA", Docs: []pageDoc{wholePage("investigate/read-an-rca-case"), wholePage("investigate/rca-explained")}},
-	"investigate/findings":        {Label: "Investigate → Findings", Docs: []pageDoc{wholePage("investigate/detected-findings")}},
-	"investigate/topology":        {Label: "Investigate → Topology", Docs: []pageDoc{wholePage("infrastructure/topology-canvas")}},
-	"investigate/flowtrace":       {Label: "Investigate → Paths → Measured paths", Docs: []pageDoc{wholePage("infrastructure/paths-and-tunnels")}},
-	"investigate/tunnels":         {Label: "Investigate → Paths → Tunnels", Docs: []pageDoc{{Slug: "infrastructure/paths-and-tunnels", Anchor: "tunnels"}, wholePage("infrastructure/paths-and-tunnels")}},
-	"investigate/wan-paths":       {Label: "Investigate → Paths → WAN circuits", Docs: []pageDoc{wholePage("infrastructure/wan-interface-metrics")}},
+	"investigate/rca":      {Label: "Investigate → RCA", Docs: []pageDoc{wholePage("investigate/read-an-rca-case"), wholePage("investigate/rca-explained")}},
+	"investigate/findings": {Label: "Investigate → Findings", Docs: []pageDoc{wholePage("investigate/detected-findings")}},
+	"investigate/topology": {Label: "Investigate → Topology", Docs: []pageDoc{wholePage("infrastructure/topology-canvas")}},
+	// One leaf with three tabs since Paths redesign P5 (2026-11-21); a tab is
+	// the third route segment, which pageRouteKey drops.
+	"investigate/paths":           {Label: "Investigate → Paths", Docs: []pageDoc{wholePage("infrastructure/paths-and-tunnels"), wholePage("infrastructure/wan-interface-metrics")}},
 	"investigate/troubleshooting": {Label: "Investigate → Troubleshooting", Docs: []pageDoc{wholePage("investigate/investigate-a-symptom"), wholePage("investigate/collect-from-a-device"), wholePage("investigate/protocol-diagnostics"), wholePage("investigate/send-to-tac")}},
 
 	// Infrastructure

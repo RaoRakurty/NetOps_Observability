@@ -2,6 +2,7 @@
 // Copyright 2026 Correlix
 
 import { useEffect, useMemo, useState } from "react";
+import { matchesSite } from "../pages/paths/pathsModel";
 import { api, Tunnel, TunnelEnd, TunnelsResponse } from "../services/api";
 import DataTable, { Column, Sev } from "../components/DataTable";
 import { Group } from "../components/board/panels";
@@ -159,7 +160,12 @@ function SiteMatrix({ res, selected, onSelect }: {
   );
 }
 
-export default function Tunnels() {
+export default function Tunnels({ site = "", onSites }: {
+  /** The Paths page's site filter (a siteKey): a tunnel with EITHER end there. "" is All sites. */
+  site?: string;
+  /** Reports the sites the tunnel ends name, for the Paths page's site list. */
+  onSites?: (labels: string[]) => void;
+} = {}) {
   const [res, setRes] = useState<TunnelsResponse | null>(null);
   const [rows, setRows] = useState<Tunnel[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -190,10 +196,19 @@ export default function Tunnels() {
     };
   }, []);
 
+  useEffect(() => {
+    onSites?.(rows.flatMap((t) => [t.a?.site?.label ?? "", t.b?.site?.label ?? ""]));
+  }, [rows, onSites]);
+  // The page's site filter scopes the tiles AND the table; the matrix keeps the
+  // whole picture so a site's neighbours stay visible.
+  const scoped = useMemo(
+    () => rows.filter((t) => matchesSite(site, t.a?.site?.label, t.b?.site?.label)),
+    [rows, site],
+  );
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return rows.filter((t) => (!cell || rowInCell(t, cell)) && (!needle || searchText(t).includes(needle)));
-  }, [rows, q, cell]);
+    return scoped.filter((t) => (!cell || rowInCell(t, cell)) && (!needle || searchText(t).includes(needle)));
+  }, [scoped, q, cell]);
 
   const columns = useMemo<Column<Tunnel>[]>(() => [
     { key: "type", header: "Type", width: 84, text: (t) => t.type ?? "",
@@ -236,10 +251,10 @@ export default function Tunnels() {
       ) : "—") },
   ], [now]);
 
-  const { up, down, disagree, measured, avgLatency: avgLat, avgLoss } = tunnelKpis(rows);
-  const asOf = asOfText(oldestQualityAsOf(rows.filter((t) => t.measured !== false)), now);
+  const { up, down, disagree, measured, avgLatency: avgLat, avgLoss } = tunnelKpis(scoped);
+  const asOf = asOfText(oldestQualityAsOf(scoped.filter((t) => t.measured !== false)), now);
   const measuredFoot = measured ? `across ${plural(measured, "measured tunnel")}` : "quality not measured";
-  const total = res?.total ?? rows.length;
+  const total = site ? scoped.length : res?.total ?? rows.length;
   const notes: string[] = [];
   if (res?.quality?.status === "unavailable") notes.push("Path quality could not be read, so quality shows a dash.");
   if (res?.cases?.status === "unavailable") notes.push("Open cases could not be read.");
@@ -303,7 +318,7 @@ export default function Tunnels() {
             </button>
           )}
           <span className="dt-count">
-            {filtered.length} of {rows.length} tunnels
+            {filtered.length} of {scoped.length} tunnels
           </span>
         </div>
 

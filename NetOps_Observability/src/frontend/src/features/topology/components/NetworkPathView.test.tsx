@@ -173,4 +173,14 @@ describe("NetworkPathView — ribbon", () => {
     const { container } = render(<NetworkPathView view={{ ...v, path: ["a"] }} />);
     expect(container.querySelector(".netpath")).toBeNull();
   });
+
+  it("draws the per-hop rail by default and omits it with rail={false} (Paths P5)", () => {
+    const v = viewWith({ path_source: "measured" });
+    const { container, unmount } = render(<NetworkPathView view={v} />);
+    expect(container.querySelector(".netpath-rail")).not.toBeNull();
+    unmount();
+    const { container: bare } = render(<NetworkPathView view={v} rail={false} />);
+    expect(bare.querySelector(".netpath-rail")).toBeNull();
+    expect(bare.querySelector(".netpath-ribbon")).not.toBeNull();
+  });
 });

@@ -91,8 +91,35 @@ describe("cell filter", () => {
   const atSites = (a: string | null, b: string | null) =>
     row({ a: end({ site: a ? { label: a, source: "manual" } : null }), b: end({ site: b ? { label: b, source: "manual" } : null }) });
 
-  it("turns a cell into its two site labels", () => {
-    expect(cellFilter(MATRIX, MATRIX.cells[1])).toEqual({ a: "DC East", b: "Branch 50" });
+  it("turns a cell into its two site labels and keys", () => {
+    const c = MATRIX.cells[1];
+    expect(cellFilter(MATRIX, c)).toEqual({ a: "DC East", b: "Branch 50", ra: c.a, rb: c.b });
+  });
+
+  const atRefs = (a: [string, string] | null, b: [string, string] | null) =>
+    row({
+      a: end({ site: a ? { label: a[0], source: "manual", ref: a[1] } : null }),
+      b: end({ site: b ? { label: b[0], source: "manual", ref: b[1] } : null }),
+    });
+
+  it("matches on the matrix site keys when rows carry them, not on labels", () => {
+    // Two tenants' sites are both labelled "HQ" (s1 and s2): a label match would mix them.
+    const f = { a: "HQ", b: "HQ", ra: "s1", rb: "s1" };
+    expect(rowInCell(atRefs(["HQ", "s1"], ["HQ", "s1"]), f)).toBe(true);
+    expect(rowInCell(atRefs(["HQ", "s2"], ["HQ", "s2"]), f)).toBe(false);
+    expect(rowInCell(atRefs(["HQ", "s1"], ["HQ", "s2"]), f)).toBe(false);
+  });
+
+  it("matches the key pair in either direction", () => {
+    const f = { a: "DC East", b: "Branch 50", ra: "s1", rb: "s3" };
+    expect(rowInCell(atRefs(["Branch 50", "s3"], ["DC East", "s1"]), f)).toBe(true);
+    expect(rowInCell(atRefs(["DC East", "s1"], ["Branch 50", "s3"]), f)).toBe(true);
+    expect(rowInCell(atRefs(["DC East", "s1"], ["Branch 50", "s4"]), f)).toBe(false);
+  });
+
+  it("falls back to labels only for a row without keys", () => {
+    const f = { a: "DC East", b: "Branch 50", ra: "s1", rb: "s3" };
+    expect(rowInCell(atSites("DC East", "Branch 50"), f)).toBe(true);
   });
 
   it("matches the label pair in either direction", () => {
