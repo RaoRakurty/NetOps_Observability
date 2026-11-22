@@ -77,7 +77,12 @@ export function BogonsPanel() {
     let alive = true;
     setBusy(true); setErr("");
     api.bgpBogons()
-      .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
+      .then((d) => {
+        if (!alive) return;
+        // A reply missing its sightings, set or feed block is unreadable, never "clean".
+        if (!Array.isArray(d?.sightings) || !d.set || !d.feed) { setErr("The bogon listing could not be read."); return; }
+        setData(d); setAt(Date.now());
+      })
       .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The bogon listing could not be read.")); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };

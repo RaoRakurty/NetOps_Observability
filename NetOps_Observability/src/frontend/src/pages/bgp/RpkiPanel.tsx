@@ -38,7 +38,12 @@ export function RpkiPanel({ resource }: { resource?: string }) {
     let alive = true;
     setBusy(true); setErr(""); setData(null);
     api.bgpRpki(resource)
-      .then((d) => { if (alive) { setData(d); setAt(Date.now()); } })
+      .then((d) => {
+        if (!alive) return;
+        // A reply without its results list is unreadable, never "nothing to check".
+        if (!Array.isArray(d?.results)) { setErr("The RPKI validity of these prefixes could not be read."); return; }
+        setData(d); setAt(Date.now());
+      })
       .catch((e: unknown) => { if (alive) setErr(operatorError(e, "The RPKI validity of these prefixes could not be read.")); })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
