@@ -1,14 +1,14 @@
 ---
-title: Work the Action Queue
-sidebar_label: Action Queue
+title: Work the Problems list
+sidebar_label: Problems
 description: Work through the open correlated incidents that need action, most severe and oldest first, and open the RCA case, the topology or the owner assignment from one row.
 page_type: task
 sidebar_position: 4
 ---
 
-# Work the Action Queue
+# Work the Problems list
 
-**Operations → Action Queue** is the triage queue of open correlated incidents
+**Operations → Problems** is the triage queue of open correlated incidents
 that need action, as a page of its own. It is the same queue the Command Center
 carries under its KPI tiles, with the same rules for what needs action, so the
 two never disagree. Use this page when you want the queue alone at full height,
@@ -21,7 +21,7 @@ or a link to it you can bookmark or put in a ticket.
 
 ## Steps
 
-1. Go to **Operations → Action Queue**. The queue is sorted by severity, then by
+1. Go to **Operations → Problems**. The queue is sorted by severity, then by
    age, and refreshes every 30 seconds.
 2. Narrow it with the filters: **RCA**, **Severity**, **Fault domain**,
    **Evidence** and **Owner**. The bar shows how many rows match out of the

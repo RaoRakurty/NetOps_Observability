@@ -14,10 +14,10 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 // The Action Queue renders through the shared DataTable primitive (ae0668a):
-// data rows are div[role=row].dtv-row inside the grid labelled "Action Queue —
-// correlated incidents" — not the old hand-rolled <tr.cc-row> table.
+// data rows are div[role=row].dtv-row inside the grid labelled "Problems —
+// correlated cases that need action" — not the old hand-rolled <tr.cc-row> table.
 const queueRows = (page: Page) =>
-  page.getByRole("grid", { name: "Action Queue — correlated incidents" }).locator(".dtv-row");
+  page.getByRole("grid", { name: "Problems — correlated cases that need action" }).locator(".dtv-row");
 
 // Two tenants, each with one confirmed incident touching a tenant-unique device.
 const DB: Record<string, { device: string; corrId: string; objects: unknown[] }> = {
