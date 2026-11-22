@@ -7,7 +7,7 @@ sidebar_position: 2
 
 # Built-in dashboards
 
-**Analytics → Dashboards → Dashboard List** is the directory of built-in boards, grouped as Network monitoring, Traffic and paths, and Health and operations. Your own dashboards live under **Overview → My dashboards**; see [Build your own dashboards](/dashboards-reports/my-dashboards). Boards in the Network monitoring group are driven by the [global time range](/dashboards-reports/overview#the-global-time-range), so set the window before reading the graphs.
+The built-in boards each have their own place in the menu: the metric boards under **Analytics → Metric Dashboards**, and the traffic, path and health boards in their own sections, as named below. Your own dashboards live under **Overview → My dashboards**; see [Build your own dashboards](/dashboards-reports/my-dashboards). The metric boards are driven by the [global time range](/dashboards-reports/overview#the-global-time-range), so set the window before reading the graphs.
 
 ## Network monitoring
 
@@ -72,7 +72,7 @@ Answers whether each WAN circuit is meeting its SLA. The card opens **Investigat
 | Logs & events | **Explore → Logs** | Syslog, SNMP traps, flow records and firewall logs on one timeline, on the default **Events** tab. See [Search logs](/explore/logs). |
 | Threat Detection | **Security → Threat Detection** | Security findings and critical alerts. |
 
-**Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface. See [View the Demo Showcase board](/dashboards-reports/demo-showcase).
+**Analytics → Dashboards → Demo Showcase** renders the same live panel registry with different chrome, as a sales surface, for the platform owner only. See [View the Demo Showcase board](/dashboards-reports/demo-showcase).
 
 ## Dashboards you compose yourself
 

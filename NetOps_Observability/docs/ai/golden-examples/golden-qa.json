@@ -1182,8 +1182,7 @@
           "dashboards-reports/built-in-dashboards"
         ]
       },
-      "nav": "analytics/dashboards",
-      "notes": "nav-leaf coverage (N-G1): Analytics \u2192 Dashboards \u2192 Dashboard List"
+      "notes": "the Dashboard List leaf was removed (2026-11-22); the built-in boards page still answers this"
     },
     {
       "id": "docs-091",

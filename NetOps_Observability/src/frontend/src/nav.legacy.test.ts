@@ -32,7 +32,14 @@ const LEGACY: [string, string, string][] = [
   ["#/dashboards/board", "overview", "operations"],
   ["#/overview/board", "overview", "operations"],
   ["#/dashboards/demo", "analytics", "demo"],
-  ["#/dashboards/list", "analytics", "dashboards"],
+  // Analytics → Dashboard List removed (2026-11-22): straight to its content.
+  ["#/dashboards/list", "overview", "dashboards"],
+  ["#/analytics/dashboards", "overview", "dashboards"],
+  ["#/analytics/dashboards/device-metric", "analytics", "device-monitoring"],
+  ["#/analytics/dashboards/bandwidth", "analytics", "device-monitoring"],
+  ["#/analytics/dashboards/interface-metric", "analytics", "interface-performance"],
+  ["#/analytics/dashboards/bgp-metric", "analytics", "protocols"],
+  ["#/analytics/dashboards/wan-circuit", "investigate", "paths"],
   ["#/dashboards/reports", "analytics", "reports"],
   // Monitoring (old section)
   ["#/monitoring/monitors", "operations", "rules"],

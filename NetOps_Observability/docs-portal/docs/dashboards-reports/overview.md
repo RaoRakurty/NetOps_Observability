@@ -14,7 +14,7 @@ Boards and reports live under **Analytics**, alongside the operational landing v
 | [Home, the Command Center](/dashboards-reports/command-center) | **Overview → Home** | The triage queue: correlated incidents with RCA state, owner, ticket state and a recommended next action. |
 | [Overview](/dashboards-reports/operations-overview) | **Overview → Overview** | The one default screen: what needs attention, open problems, what is broken now, health by site, what changed and whether data is arriving. |
 | [My dashboards](/dashboards-reports/my-dashboards) | **Overview → My dashboards** | Your tenant's own views, from a copy of the default, a template, or empty. |
-| [Built-in dashboards](/dashboards-reports/built-in-dashboards) | **Analytics → Dashboards → Dashboard List** | The directory of built-in boards, plus the dashboards you compose yourself. |
+| [Built-in dashboards](/dashboards-reports/built-in-dashboards) | **Analytics → Metric Dashboards** | The built-in boards, what each answers, and the panels you can place on your own dashboards. |
 | [Schedule a report](/dashboards-reports/reports) | **Analytics → Reports** | Build, schedule, preview and deliver a report. |
 
 **Analytics → RCA Reports** holds promoted real outages, and **Analytics → Recovery Scorecard** holds the reliability trend. See [Review the RCA Reports library](/dashboards-reports/rca-reports) and [Review the Recovery Scorecard](/dashboards-reports/recovery-scorecard).

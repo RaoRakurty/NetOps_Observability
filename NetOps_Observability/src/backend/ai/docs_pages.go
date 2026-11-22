@@ -128,7 +128,6 @@ var navPageDocs = map[string]navPage{
 	"security/views":      {Label: "Security → Configuration → Saved Views", Docs: []pageDoc{wholePage("security/saved-views")}},
 
 	// Analytics
-	"analytics/dashboards":            {Label: "Analytics → Dashboards → Dashboard List", Docs: []pageDoc{wholePage("dashboards-reports/built-in-dashboards")}},
 	"analytics/demo":                  {Label: "Analytics → Dashboards → Demo Showcase", Docs: []pageDoc{wholePage("dashboards-reports/demo-showcase")}, Explain: "demo.showcase"},
 	"analytics/device-monitoring":     {Label: "Analytics → Metric Dashboards → Device Monitoring", Docs: []pageDoc{{Slug: "dashboards-reports/built-in-dashboards", Anchor: "device-metrics"}}},
 	"analytics/interface-performance": {Label: "Analytics → Metric Dashboards → Interface Performance", Docs: []pageDoc{{Slug: "dashboards-reports/built-in-dashboards", Anchor: "interface-metrics"}, wholePage("infrastructure/interfaces-and-optics")}},
