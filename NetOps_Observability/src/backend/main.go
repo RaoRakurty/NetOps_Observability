@@ -78,6 +78,7 @@ import (
 	"netops/backend/internal/dem/experience"
 	// DATA-PROTECTION-END
 	"netops/backend/internal/devbaseline"
+	"netops/backend/internal/devidentity"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/discovery"
 	"netops/backend/internal/discoveryscope"
@@ -674,27 +675,33 @@ type server struct {
 	ifBridge        *ifbridge.Store                      // tracker 387 PR 13a: the interface bridge's NMS rows (if_bridge.go)
 	ifBridgeMetrics *ifbridge.Metrics                    // tracker 387 PR 13a: netops_nms_iface_bridge_*
 	invFacts        *invfacts.Store                      // tracker 387 PR 13a: NMS model/site/role votes for the registry
-	nmsResolver     *nms.InventoryResolver               // controller device key → inventory id (nil when NMS is off)
-	routineCtl      *logroutine.ControllerAddrs          // Logs: the caller's SD-WAN controller node addresses (nil when NMS is off)
-	secMetrics      *secobs.Metrics                      // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
-	transportInv    *secobs.Inventory                    // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
-	exportPolicy    *exportPolicyStore                   // runtime-tunable log-export limits
-	exportLimiter   *ratelimit.Limiter                   // per-tenant export rate limit
-	copilotLimiter  *ratelimit.Limiter                   // per-principal copilot rate limit (SR-021)
-	aiToolBudget    *ai.DailyBudget                      // per-tenant daily token budget for the agent loop (P2, LLM04)
-	aiBreaker       *aiprovider.Breaker                  // per-(tenant, provider) model circuit breaker (Iris latency 2026-11-10)
-	aiProvCalls     *aiprovider.Metrics                  // netops_ai_provider_call_seconds + breaker gauges
-	copilotCfg      *copilotConfigStore
-	aiTenantCfg     *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
-	displayPrefs    *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
-	verifyCfg       *verifyConfigStore     // spec #8: per-tenant active-verification opt-in + SSH credential
-	verifyRuns      *verifyRunStore        // spec #8: latest verification run per case (bounded)
-	verifyLimiter   *ratelimit.Limiter     // spec #8: manual-verify per-tenant rate limit
-	governance      *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
-	cloudSLOs       *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
-	cloudMonitors   *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
-	rcaPromotions   *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
-	rcaActionItems  *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
+	// devIdentityMetrics: netops_tenant_registry_* — the controller-derived
+	// registry rows of tracker 371 and the export ticks held back.
+	devIdentityMetrics *devidentity.Metrics
+	// enrichIfAddr is the registry export's read of the merged interface map
+	// (device → address → ifName); nil = fetchIfAddrMap. A seam for tests.
+	enrichIfAddr   func(ctx context.Context) (map[string]map[string]string, error)
+	nmsResolver    *nms.InventoryResolver      // controller device key → inventory id (nil when NMS is off)
+	routineCtl     *logroutine.ControllerAddrs // Logs: the caller's SD-WAN controller node addresses (nil when NMS is off)
+	secMetrics     *secobs.Metrics             // SEC-020.1 security-observability families (nil only if the profile itself was invalid, which aborts boot)
+	transportInv   *secobs.Inventory           // SEC-001 declared-transport ledger (nil = inventory failed to load; logged at boot)
+	exportPolicy   *exportPolicyStore          // runtime-tunable log-export limits
+	exportLimiter  *ratelimit.Limiter          // per-tenant export rate limit
+	copilotLimiter *ratelimit.Limiter          // per-principal copilot rate limit (SR-021)
+	aiToolBudget   *ai.DailyBudget             // per-tenant daily token budget for the agent loop (P2, LLM04)
+	aiBreaker      *aiprovider.Breaker         // per-(tenant, provider) model circuit breaker (Iris latency 2026-11-10)
+	aiProvCalls    *aiprovider.Metrics         // netops_ai_provider_call_seconds + breaker gauges
+	copilotCfg     *copilotConfigStore
+	aiTenantCfg    *aiTenantConfigStore   // per-tenant AI entitlement + BYO provider key (P4a)
+	displayPrefs   *tenantDisplayStore    // per-tenant display prefs (Wave 4 #11: time display)
+	verifyCfg      *verifyConfigStore     // spec #8: per-tenant active-verification opt-in + SSH credential
+	verifyRuns     *verifyRunStore        // spec #8: latest verification run per case (bounded)
+	verifyLimiter  *ratelimit.Limiter     // spec #8: manual-verify per-tenant rate limit
+	governance     *tenantGovernanceStore // per-tenant governance settings (Wave 4 #11: required tags, RCA window, precedence)
+	cloudSLOs      *cloudSLOStore         // per-tenant SLO definitions (Wave 5 #14 slice 2)
+	cloudMonitors  *cloudMonitorStore     // per-tenant cloud monitors (Wave 5 #14 slice 3)
+	rcaPromotions  *rcaPromotionStore     // manual RCA-document promotions, tenant-keyed (#113 point 3)
+	rcaActionItems *rcaActionItemStore    // postmortem action-item register, tenant-keyed (postmortem Phase 1 §3/§7)
 	// Operator verdict feedback on RCA cases (Project 2 P7) — the
 	// false-positive-rate instrument. PG (migration 0036, tenant_iso FORCE-RLS)
 	// under the Postgres backend, tenant-keyed file store otherwise.
@@ -1054,6 +1061,15 @@ func newServer() *server {
 	// ENABLE_SNMP_COLLECTION drives both SNMP version collectors; the v2c/v3
 	// split is by per-device credential profile, not a separate toggle.
 	snmpOn := os.Getenv("ENABLE_SNMP_COLLECTION") == "true"
+	// Tracker 371 R2: the trap receiver's RECEIVE-ONLY identity targets for
+	// controller-only devices — one per profile the device's owner may use
+	// (owner-strict). Installed on the receiver only, never on the pool's
+	// TargetFunc, so nothing polls them.
+	pool.SetTrapReceiveOnlyTargets(func() []collectors.Target {
+		return snmpcred.ReceiveOnlyTargets(d.Devices(), snmpCredsRef, func(dev models.Device) bool {
+			return dev.Source == devmon.SourceController
+		})
+	})
 	pool.Enable("snmpv2c", snmpOn)
 	pool.Enable("snmpv3", snmpOn)
 	pool.Enable("gnmi", os.Getenv("ENABLE_GNMI_COLLECTION") == "true")
@@ -1389,37 +1405,38 @@ func newServer() *server {
 	}
 
 	srv := &server{
-		features:         features,
-		restart:          featureflags.NewRestartGate(5 * time.Minute),
-		startedAt:        time.Now().UTC(),
-		workers:          &workerGroup{},
-		ifaceNames:       flownames.NewExporter(),
-		ifBridge:         ifbridge.NewStore(),
-		ifBridgeMetrics:  ifbridge.NewMetrics(),
-		invFacts:         invfacts.NewStore(),
-		flowDatasets:     flownames.NewDatasetWatch(),
-		discovery:        d,
-		devStore:         devStore,
-		snmpScan:         snmpScan,
-		collectors:       pool,
-		alerts:           engine,
-		userRules:        userRules,
-		notifier:         notifier,
-		selfHeal:         newSelfHealer(notifier),
-		users:            users,
-		roles:            roles,
-		tenants:          tenants,
-		orgs:             orgs,
-		bindings:         bindings,
-		securitySettings: securitySettings,
-		loginThrottle:    loginguard.NewThrottle(func(msg string, fields map[string]any) { logWarn("auth", msg, fields) }),
-		sessions:         sessions,
-		apiKeys:          apiKeys,
-		refresh:          refresh,
-		snmpCreds:        snmpCreds,
-		credScrub:        credScrub,
-		credFP:           credFP,
-		credOverrides:    credOverrides,
+		features:           features,
+		restart:            featureflags.NewRestartGate(5 * time.Minute),
+		startedAt:          time.Now().UTC(),
+		workers:            &workerGroup{},
+		ifaceNames:         flownames.NewExporter(),
+		ifBridge:           ifbridge.NewStore(),
+		ifBridgeMetrics:    ifbridge.NewMetrics(),
+		invFacts:           invfacts.NewStore(),
+		devIdentityMetrics: devidentity.NewMetrics(),
+		flowDatasets:       flownames.NewDatasetWatch(),
+		discovery:          d,
+		devStore:           devStore,
+		snmpScan:           snmpScan,
+		collectors:         pool,
+		alerts:             engine,
+		userRules:          userRules,
+		notifier:           notifier,
+		selfHeal:           newSelfHealer(notifier),
+		users:              users,
+		roles:              roles,
+		tenants:            tenants,
+		orgs:               orgs,
+		bindings:           bindings,
+		securitySettings:   securitySettings,
+		loginThrottle:      loginguard.NewThrottle(func(msg string, fields map[string]any) { logWarn("auth", msg, fields) }),
+		sessions:           sessions,
+		apiKeys:            apiKeys,
+		refresh:            refresh,
+		snmpCreds:          snmpCreds,
+		credScrub:          credScrub,
+		credFP:             credFP,
+		credOverrides:      credOverrides,
 		// MONITORING-BEGIN — the credential sentinel probes devices over SNMP to
 		// learn which profile answers, so it must see only MONITORED devices:
 		// probing one past the licence limit is collection the licence does
@@ -5192,6 +5209,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.ifaceNames.WriteMetrics(w)
 	s.ifBridgeMetrics.WriteMetrics(w)
 	s.invFacts.WriteMetrics(w)
+	s.devIdentityMetrics.WriteMetrics(w)
 	s.flowDatasets.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)

@@ -142,6 +142,17 @@ event states nothing. EOS and SR OS syslog and the Viptela interface trap carry 
   2026-10-25 the id row was missing and those traps were quarantined. An identity
   claimed by two tenants is left out by the writer and dropped by the reader
   (`_tenant_registry`).
+  **Controller-only devices (tracker 371).** A device an integration reports and no
+  collector of ours polls used to get no row at all. Now (`internal/devidentity`) every
+  such device gets its `ctl-<system>-<hash>` id row under its owner (the id hashes the
+  owner); a PLATFORM-owned one also gets its name, management address and interface
+  addresses (the shared listener is the platform's channel). A tenant-owned one gets
+  nothing derived from an address or a name (owner rule 2026-11-01, tenant = channel;
+  tracker 372 carries that stream half). Tiered and additive: an identity any directly
+  collected device presents is never claimed, and one more than one device holds names
+  nobody, so every direct row is byte-identical. The writer holds the previous file until
+  the controller source has answered once, and while platform controller devices exist
+  but the interface map is unread. Stage [1] admission inputs only: no engine change.
   The controller lane calls `verified_tenant` too (since 2026-10-24, unanchored: a
   claim the registry contradicts is quarantined; `handle_controller_event`).
 
@@ -227,6 +238,13 @@ agent_addr|none`). Stage [1]: `handle_snmptrap`'s `device_for_ip(host)` recovery
 ONLY for a record without that field (an older receiver); a stamped `none` is a refusal
 and stays unattributed (`ingest.traps_recanon_declined`). The receiver also stamps
 `interface`/`ifindex`/`interface_basis`; `_trap_interface` still reads the varbinds.
+**Controller-only devices (tracker 371 R2).** After every direct rung, the receiver
+consults RECEIVE-ONLY identity targets: one per profile a controller-only device's OWNER
+may use (`snmpcred.ReceiveOnlyTargets`, owner-strict), never polled. They prove strictly —
+their own community only (never `SNMP_COMMUNITY`/`public`), v3 only by an HMAC verified
+with that device's own candidate (a failed guess keeps the unknown-sender outcome, never
+refuses the trap) — and an address any other device holds names nobody. The trap then
+carries the `ctl-*` id, whose registry row (R1) gives the owner's tenant.
 
 **Raw evidence is durable.** `corr_signals` is written BEFORE the aggregation plane and
 the window filters (e.g. M:8157-8161).

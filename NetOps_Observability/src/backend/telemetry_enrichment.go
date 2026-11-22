@@ -16,8 +16,10 @@ import (
 	"netops/backend/internal/credfile"
 	"netops/backend/internal/credfp"
 	"netops/backend/internal/credscrub"
+	"netops/backend/internal/devidentity"
 	"netops/backend/internal/devmon"
 	"netops/backend/internal/invfacts"
+	"netops/backend/internal/owner"
 	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 	"netops/backend/nms"
@@ -157,6 +159,19 @@ func buildEnrichmentRowsWith(devices []models.Device, siteBindings func(tenant s
 // also returns how each fact of each exported device was settled. nmsFacts nil
 // is "no NMS facts": the rows are exactly what they were before PR 13a.
 func buildEnrichmentRowsFacts(devices []models.Device, siteBindings func(tenant string) map[string]string, nmsFacts map[invfacts.Key]*invfacts.Votes) ([]enrichmentRow, map[invfacts.StatKey]int) {
+	rows, stats, _ := buildEnrichmentRowsIdentity(devices, siteBindings, nmsFacts, nil)
+	return rows, stats
+}
+
+// buildEnrichmentRowsIdentity is buildEnrichmentRowsFacts plus the
+// controller-derived rows of tracker 371 (internal/devidentity): every
+// controller-only device's id row, and a PLATFORM-owned controller device's
+// name, management address and interface addresses (ifAddr, the merged
+// device → address → interface map; nil = none read). Those rows are additive
+// and tiered: an identity any directly collected device presents is never
+// claimed, and an identity more than one device holds names nobody, so every
+// row a direct device writes is exactly what it was before.
+func buildEnrichmentRowsIdentity(devices []models.Device, siteBindings func(tenant string) map[string]string, nmsFacts map[invfacts.Key]*invfacts.Votes, ifAddr map[string]map[string]string) ([]enrichmentRow, map[invfacts.StatKey]int, map[devidentity.StatKey]int) {
 	stats := map[invfacts.StatKey]int{}
 	// identity -> set of distinct tenants seen for it.
 	seen := map[string]map[string]bool{}
@@ -195,13 +210,16 @@ func buildEnrichmentRowsFacts(devices []models.Device, siteBindings func(tenant 
 		}
 	}
 	reg := vendorprofile.Default()
+	var controllerOnly []models.Device
 	for _, d := range devices {
-		// A controller-ONLY device is left out: its events already carry the
-		// integration's tenant, and its name/address (a vManage edge reported
-		// to RETAIL and also found by the platform's SNMP scan) would make the
-		// other owner's identity ambiguous here — and an ambiguous identity is
-		// dropped, which would cost that owner its attribution.
+		// A controller-ONLY device never joins the DIRECT identities: its
+		// name/address (a vManage edge reported to RETAIL and also found by
+		// the platform's SNMP scan) would make the other owner's identity
+		// ambiguous here — and an ambiguous identity is dropped, which would
+		// cost that owner its attribution. Its own rows are decided after every
+		// direct identity is known (controllerRegistryRows, tracker 371).
 		if d.Source == devmon.SourceController {
+			controllerOnly = append(controllerOnly, d)
 			continue
 		}
 		t := deviceTenant(d)
@@ -230,7 +248,49 @@ func buildEnrichmentRowsFacts(devices []models.Device, siteBindings func(tenant 
 			})
 		}
 	}
+	ctlRows, ctlStats := controllerRegistryRows(controllerOnly, seen, ifAddr, reg, bindingsFor, nmsFacts)
+	rows = append(rows, ctlRows...)
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Identity < rows[j].Identity })
+	return rows, stats, ctlStats
+}
+
+// controllerRegistryRows turns devidentity's claims into registry rows, with the
+// same facts columns a direct device writes (vendor from the inventory, model /
+// site / role settled by invfacts), each read for the device's OWN owner. A
+// platform-owned device is written under "" exactly like a direct platform
+// device. The NMS-fact stats are not counted here: they describe the direct
+// rows only, as they always have.
+func controllerRegistryRows(devs []models.Device, directHeld map[string]map[string]bool, ifAddr map[string]map[string]string,
+	reg *vendorprofile.Registry, bindingsFor func(string) map[string]string, nmsFacts map[invfacts.Key]*invfacts.Votes) ([]enrichmentRow, map[devidentity.StatKey]int) {
+	if len(devs) == 0 {
+		return nil, map[devidentity.StatKey]int{}
+	}
+	held := make(map[string]bool, len(directHeld))
+	for identity := range directHeld {
+		held[identity] = true
+	}
+	byID := make(map[string]models.Device, len(devs))
+	in := make([]devidentity.Device, 0, len(devs))
+	for _, d := range devs {
+		byID[d.ID] = d
+		in = append(in, devidentity.Device{ID: d.ID, Name: d.Name, Address: d.Address, Owner: deviceTenant(d)})
+	}
+	claims, stats := devidentity.Claims(held, in, ifAddr)
+	rows := make([]enrichmentRow, 0, len(claims))
+	for _, c := range claims {
+		d := byID[c.DeviceID]
+		t := deviceTenant(d)
+		if owner.IsPlatform(t) {
+			t = ""
+		}
+		vendor, _ := reg.InventoryVendorID(d.Vendor)
+		f := invfacts.Resolve(d, enrichmentSite(d, bindingsFor(t)), nmsFacts[invfacts.KeyFor(t, d.ID)])
+		rows = append(rows, enrichmentRow{
+			Identity: c.Identity, Tenant: t, DeviceID: cleanEnrichmentCell(d.ID),
+			Vendor: cleanEnrichmentCell(vendor), Model: cleanEnrichmentCell(f.Model.Value),
+			Site: cleanEnrichmentCell(f.Site.Value), Role: cleanEnrichmentCell(f.Role.Value),
+		})
+	}
 	return rows, stats
 }
 
@@ -307,12 +367,44 @@ func writeEnrichmentCSV(dir string, rows []enrichmentRow) (bool, error) {
 // with an unreadable store and a down network, the hours) until it answered.
 // A stale map is right about everything it lists; a premature one is wrong
 // about exactly the devices an outage is about.
+//
+// The same hold covers the CONTROLLER inventory (tracker 371): until the
+// controller device source has answered once, its devices' rows would be
+// published as absent. And when platform-owned controller devices exist but the
+// merged interface map cannot be read, their interface rows would vanish for a
+// tick and come back — a registry flap and a Vector reload each way — so that
+// tick also keeps the file. A source that is not registered (no NMS module) has
+// nothing to wait for. An NMS-only install with SNMP discovery switched off is
+// not held: a disabled scanner's poll answers "nothing to scan" and is ready.
 func (s *server) writeTenantEnrichmentOnce(dir string) bool {
 	if !s.discovery.Ready("snmp") {
+		s.devIdentityMetrics.Held(devidentity.HoldSNMPNotReady)
 		log.Printf("tenant-enrichment: SNMP inventory not complete yet (scan memory unread and no sweep finished) — %s/%s left as it stands", dir, enrichmentFileName)
 		return false
 	}
-	rows := s.enrichmentRowsFor(s.discovery.Devices())
+	if !s.discovery.Ready(nms.ControllerSourceName) {
+		s.devIdentityMetrics.Held(devidentity.HoldControllerNotReady)
+		log.Printf("tenant-enrichment: controller inventory not read yet — %s/%s left as it stands", dir, enrichmentFileName)
+		return false
+	}
+	devices := s.discovery.Devices()
+	var ifAddr map[string]map[string]string
+	if hasPlatformControllerDevice(devices) {
+		fetch := s.enrichIfAddr
+		if fetch == nil {
+			fetch = fetchIfAddrMap
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		m, err := fetch(ctx)
+		cancel()
+		if err != nil && errShareChannelUnread(err) {
+			s.devIdentityMetrics.Held(devidentity.HoldInterfacesUnread)
+			log.Printf("tenant-enrichment: interface map unread (%v) while platform controller devices exist — %s/%s left as it stands", err, dir, enrichmentFileName)
+			return false
+		}
+		ifAddr = m // no sharing channel configured: no interface rows, truthfully
+	}
+	rows := s.enrichmentRowsForIdentity(devices, ifAddr)
 	changed, err := writeEnrichmentCSV(dir, rows)
 	if err != nil {
 		log.Printf("tenant-enrichment: write %s: %v", dir, err)
@@ -330,12 +422,31 @@ func (s *server) writeTenantEnrichmentOnce(dir string) bool {
 // bindings are read for its own tenant, non-cross, so another tenant's are
 // unreachable however the identity tokens collide.
 func (s *server) enrichmentRowsFor(devices []models.Device) []enrichmentRow {
+	return s.enrichmentRowsForIdentity(devices, nil)
+}
+
+// enrichmentRowsForIdentity is enrichmentRowsFor with the merged interface map
+// the controller-derived rows read (tracker 371; nil = none read).
+func (s *server) enrichmentRowsForIdentity(devices []models.Device, ifAddr map[string]map[string]string) []enrichmentRow {
 	s.refreshInventoryFacts()
-	rows, stats := buildEnrichmentRowsFacts(devices, func(tenant string) map[string]string {
+	rows, stats, ctlStats := buildEnrichmentRowsIdentity(devices, func(tenant string) map[string]string {
 		return s.deviceSites.Assignments(tenant, false)
-	}, s.invFacts.Current())
+	}, s.invFacts.Current(), ifAddr)
 	s.invFacts.SetStats(stats)
+	s.devIdentityMetrics.Set(ctlStats)
 	return rows
+}
+
+// hasPlatformControllerDevice: does any controller-only device belong to the
+// platform? Only those take interface-address rows (internal/devidentity), so
+// only then is the interface map worth a read.
+func hasPlatformControllerDevice(devices []models.Device) bool {
+	for _, d := range devices {
+		if d.Source == devmon.SourceController && owner.IsPlatform(deviceTenant(d)) {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshInventoryFacts is the registry export's facts step (internal/invfacts):

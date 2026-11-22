@@ -70,6 +70,14 @@ type Target struct {
 	// the universal floor for devices WITHOUT gNMI). Set from the device label
 	// `gnmi: "true"`.
 	GNMICapable bool
+
+	// ReceiveOnly marks an IDENTITY target for a controller-only device (tracker
+	// 371 R2): one of its owner's own SNMP profiles, so the trap receiver can
+	// prove a trap from a device no collector of ours polls. It is never polled —
+	// it reaches only the trap receiver (Pool.SetTrapReceiveOnlyTargets), never
+	// a TargetFunc — and it proves strictly: its own community only (no
+	// SNMP_COMMUNITY / "public" default), and for v3 only a verified HMAC.
+	ReceiveOnly bool
 }
 
 // hasTransport reports whether the device has the named non-SNMP transport, so the

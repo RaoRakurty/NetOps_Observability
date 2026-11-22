@@ -191,10 +191,15 @@ func (s *server) runNMSDeviceResolver(ctx context.Context) {
 // one device holds (internal VPN loopbacks and shared addresses name nobody).
 // The receiver still proves that device's credential before using the answer.
 //
-// Interface addresses are deliberately NOT exported as registry identities
-// (device_tenant.csv): the registry is the tenant channel, and an address in it
-// would make tenant derivation address-based for every lane that reads it
-// (owner rule 2026-11-01: tenant = channel, never address).
+// A TENANT's interface addresses are deliberately NOT exported as registry
+// identities (device_tenant.csv): the registry is the tenant channel, and such an
+// address would make tenant derivation address-based for every lane that reads it
+// (owner rule 2026-11-01: tenant = channel, never address). The one exception is
+// the PLATFORM's own controller-only devices (tracker 371, internal/devidentity):
+// the shared listener is the platform's channel, so their name, management
+// address and interface addresses — only those exactly one device holds, and
+// never one a directly collected device presents — are written under the
+// platform. A tenant-owned controller device gets its `ctl-*` id row only.
 
 // trapAddrIndexRefresh is how often the index is rebuilt.
 const trapAddrIndexRefresh = time.Minute
