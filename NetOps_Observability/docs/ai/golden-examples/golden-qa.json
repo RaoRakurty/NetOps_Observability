@@ -196,7 +196,7 @@
           "infrastructure/wan-interface-metrics"
         ]
       },
-      "nav": "investigate/wan-paths"
+      "nav": "investigate/paths/wan-circuits"
     },
     {
       "id": "docs-019",
@@ -895,6 +895,18 @@
       "notes": "nav-leaf coverage (N-G1): Administration \u2192 Iris \u2192 Learning & review, what Iris could not answer (2026-11-19)"
     },
     {
+      "id": "docs-132",
+      "category": "docs",
+      "question": "How do I narrow the Paths page to one site?",
+      "expect": {
+        "slugs": [
+          "infrastructure/paths-and-tunnels"
+        ]
+      },
+      "nav": "investigate/paths",
+      "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths (one leaf with three tabs since Paths P5)"
+    },
+    {
       "id": "docs-127",
       "category": "docs",
       "question": "How do I connect an outside AI assistant to Correlix Iris over MCP?",
@@ -989,7 +1001,7 @@
           "infrastructure/paths-and-tunnels"
         ]
       },
-      "nav": "investigate/flowtrace",
+      "nav": "investigate/paths/measured",
       "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths \u2192 Measured paths"
     },
     {
@@ -1001,7 +1013,7 @@
           "infrastructure/paths-and-tunnels"
         ]
       },
-      "nav": "investigate/tunnels",
+      "nav": "investigate/paths/tunnels",
       "notes": "nav-leaf coverage (N-G1): Investigate \u2192 Paths \u2192 Tunnels"
     },
     {

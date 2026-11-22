@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
-// Paths section smoke (Paths redesign P0, 2026-11-20). Drives the REAL SPA with
-// the backend mocked at the network boundary and checks the section's shape:
-// the three measurement pages under the PATHS header with their new names,
-// Troubleshooting beside RCA (not under PATHS), every old address still opening
-// its page, and the Measured paths empty state saying what is true.
+// Paths section smoke (Paths redesign P0, 2026-11-20; one page with three tabs
+// since P5, 2026-11-21). Drives the REAL SPA with the backend mocked at the
+// network boundary and checks the section's shape: one Paths leaf whose tabs are
+// Measured paths, Tunnels and WAN circuits, Troubleshooting beside RCA, every
+// old address opening its tab, the shared site filter and "Path data" drawer,
+// the measured ribbon, and the Measured paths empty state saying what is true.
 
 import { test, expect, type Page, type Route } from "@playwright/test";
 
@@ -54,7 +55,19 @@ const TUNNELS = {
   },
 };
 
-async function mockApi(page: Page, created: unknown[] = []) {
+// A measured path whose loss starts at hop 2 and lasts to the target (P5 ribbon).
+const PROBE_PATH = {
+  dst: "10.9.9.9", method: "icmp", vantage_id: "v1", site: "Branch 50", reached: true, changed: false,
+  ts: new Date().toISOString(),
+  hops: [
+    { ttl: 1, ip: "10.0.0.1", rtt_ms: 1.2, loss_pct: 0 },
+    { ttl: 2, ip: "10.0.0.2", rtt_ms: 9.8, loss_pct: 20 },
+    { ttl: 3, ip: "", rtt_ms: undefined, loss_pct: undefined },
+    { ttl: 4, ip: "10.9.9.9", rtt_ms: 12.4, loss_pct: 25 },
+  ],
+};
+
+async function mockApi(page: Page, created: unknown[] = [], paths: unknown[] = []) {
   await page.addInitScript(() => localStorage.setItem("netops_token", "e2e-fake-token"));
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route: Route) => {
     const url = new URL(route.request().url());
@@ -62,7 +75,7 @@ async function mockApi(page: Page, created: unknown[] = []) {
     const p = url.pathname;
     if (p.includes("/api/auth/me")) return json(ME);
     if (p.includes("/api/scopes")) return json({ scopes: [{ tenant_id: "t_acme", tenant_name: "Acme", org_id: "o", org_name: "Acme", region: "us" }], all_tenants: false });
-    if (p.endsWith("/api/probe/paths")) return json([]);
+    if (p.endsWith("/api/probe/paths")) return json(paths);
     if (p.endsWith("/api/probe/targets/suggested")) return json(SUGGESTED);
     if (p.endsWith("/api/dem/targets") && route.request().method() === "POST") {
       created.push(route.request().postDataJSON());
@@ -77,7 +90,7 @@ async function mockApi(page: Page, created: unknown[] = []) {
 
 test("Tunnels draws one row per tunnel and a site matrix that filters the table", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/tunnels");
+  await page.goto("/#/investigate/paths/tunnels");
   const matrix = page.getByTestId("tunnels-matrix");
   await expect(matrix).toBeVisible();
   // Two site pairs, each drawn on both sides of the diagonal.
@@ -96,54 +109,127 @@ test("Tunnels draws one row per tunnel and a site matrix that filters the table"
 
 test("a Tunnels case chip opens the case in RCA", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/tunnels");
+  await page.goto("/#/investigate/paths/tunnels");
   const chip = page.getByTestId("tunnel-case");
   await expect(chip).toHaveAttribute("href", "#/investigate/rca?id=case-uuid-1");
   await chip.click();
   await expect(page).toHaveURL(/#\/investigate\/rca\?id=case-uuid-1$/);
 });
 
-test("Paths groups the three measurement pages; Troubleshooting sits beside RCA", async ({ page }) => {
+test("Paths is one leaf after Topology; Troubleshooting sits beside RCA", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/flowtrace");
+  await page.goto("/#/investigate/paths/measured");
   const nav = page.getByRole("navigation", { name: "Investigate views" });
   await expect(nav).toBeVisible();
   const labels = (await nav.locator(".subnav-cell").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
   const rca = labels.findIndex((t) => t === "RCA");
   expect(labels[rca + 1]).toBe("Troubleshooting");
-  // The group header is CSS-uppercased in some themes; compare case-blind.
-  const pathsAt = labels.findIndex((t) => /^paths\b/i.test(t));
-  expect(pathsAt).toBeGreaterThan(rca + 1);
-  expect(labels.slice(pathsAt).map((t) => t.replace(/^paths\s*/i, ""))).toEqual(["Measured paths", "Tunnels", "WAN circuits"]);
-  // Exactly one header in the section, and it is the Paths one.
-  await expect(nav.locator(".subnav-group")).toHaveCount(1);
+  expect(labels).toContain("Paths");
+  for (const old of ["Measured paths", "Tunnels", "WAN circuits"]) expect(labels).not.toContain(old);
+  // No group header any more: the three pages are tabs of one leaf.
+  await expect(nav.locator(".subnav-group")).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveText(["Measured paths", "Tunnels", "WAN circuits"]);
 });
 
 test("Measured paths shows numbered setup steps — the real switch, no env names, no phantom setting", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/investigate/flowtrace");
-  await expect(page.getByRole("link", { name: "Platform › Configuration › Features" })).toHaveAttribute("href", "#/platform/features");
+  await page.goto("/#/investigate/paths/measured");
+  await expect(page.getByRole("link", { name: "Platform › Configuration › Features" }).first()).toHaveAttribute("href", "#/platform/features");
   await expect(page.getByText(/API settings/)).toHaveCount(0);
   await expect(page.locator("code", { hasText: /FEATURE_|_TARGETS/ })).toHaveCount(0);
   await expect(page.getByTestId("paths-synthetics-link").getByRole("link")).toHaveAttribute("href", "#/operations/digital-experience/synthetics");
 });
 
-for (const [hash, check] of [
-  ["#/investigate/tunnels", "Tunnels"],
-  ["#/investigate/wan-paths", "WAN circuits"],
-  ["#/infrastructure/wan-circuits", "WAN circuits"],
+// Every address a bookmark can hold opens Paths on the right tab, and the URL
+// is rewritten to the canonical tab address.
+for (const [hash, tab, label] of [
+  ["#/investigate/paths/measured", "measured", "Measured paths"],
+  ["#/investigate/paths/tunnels", "tunnels", "Tunnels"],
+  ["#/investigate/paths/wan-circuits", "wan-circuits", "WAN circuits"],
+  ["#/investigate/paths", "measured", "Measured paths"],
+  ["#/investigate/flowtrace", "measured", "Measured paths"],
+  ["#/investigate/tunnels", "tunnels", "Tunnels"],
+  ["#/investigate/wan-paths", "wan-circuits", "WAN circuits"],
+  ["#/infrastructure/flowtrace", "measured", "Measured paths"],
+  ["#/infrastructure/tunnels", "tunnels", "Tunnels"],
+  ["#/infrastructure/wan-circuits", "wan-circuits", "WAN circuits"],
+  ["#/topology/tunnels", "tunnels", "Tunnels"],
 ] as const) {
-  test(`${hash} opens ${check}`, async ({ page }) => {
+  test(`${hash} opens the ${label} tab`, async ({ page }) => {
     await mockApi(page);
     await page.goto(`/${hash}`);
-    await expect(page.getByRole("heading", { name: check, exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true");
+    if (hash !== "#/investigate/paths") await expect(page).toHaveURL(new RegExp(`#/investigate/paths/${tab}$`));
   });
 }
 
-test("the old Flow Trace address still opens Measured paths", async ({ page }) => {
+test("the tabs switch in place and are linkable", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/#/infrastructure/flowtrace");
-  await expect(page.getByText("No active path measurements.")).toBeVisible();
+  await page.goto("/#/investigate/paths/measured");
+  await page.getByRole("tab", { name: "Tunnels" }).click();
+  await expect(page).toHaveURL(/#\/investigate\/paths\/tunnels$/);
+  await expect(page.getByTestId("tunnels-matrix")).toBeVisible();
+  await page.getByRole("tab", { name: "WAN circuits" }).click();
+  await expect(page).toHaveURL(/#\/investigate\/paths\/wan-circuits$/);
+  await expect(page.getByRole("heading", { name: "WAN circuits", exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("tab", { name: "Tunnels" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("the site filter narrows the open tab and is remembered across tabs and reloads", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/investigate/paths/tunnels");
+  const site = page.getByTestId("paths-site");
+  await expect(site.locator("option")).toHaveText(["All sites", "Branch 40", "Branch 50", "DC East"]);
+  await expect(page.getByText("2 of 2 tunnels")).toBeVisible();
+  await site.selectOption({ label: "Branch 50" });
+  await expect(page.getByText("1 of 1 tunnels")).toBeVisible();
+  // A site the next tab has no rows for stays chosen and says so.
+  await page.getByRole("tab", { name: "WAN circuits" }).click();
+  await expect(site).toHaveValue("branch-50");
+  await expect(site.locator("option:checked")).toHaveText("branch-50 (no rows here)");
+  await page.reload();
+  await expect(page.getByTestId("paths-site")).toHaveValue("branch-50");
+  await page.getByRole("tab", { name: "Tunnels" }).click();
+  await expect(page.getByText("1 of 1 tunnels")).toBeVisible();
+  await page.getByTestId("paths-site").selectOption({ label: "All sites" });
+  await expect(page.getByText("2 of 2 tunnels")).toBeVisible();
+});
+
+test("Path data says what is on and where to turn the rest on", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/investigate/paths/measured");
+  await page.getByTestId("paths-data-open").click();
+  const drawer = page.getByTestId("paths-data");
+  await expect(drawer).toBeVisible();
+  await expect(page.getByTestId("paths-data-discovery")).toHaveAttribute("data-state", "off");
+  await expect(page.getByTestId("paths-data-tunnels")).toHaveAttribute("data-state", "on");
+  await expect(page.getByTestId("paths-data-tunnels")).toContainText("2 tunnels");
+  await expect(page.getByTestId("paths-data-discovery").getByRole("link")).toHaveAttribute("href", "#/platform/features");
+  await expect(drawer.locator("code", { hasText: /FEATURE_|\/api\// })).toHaveCount(0);
+  await expect(drawer).not.toContainText("/api/");
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+});
+
+test("Hop by hop draws each measured path as a ribbon above its hop table", async ({ page }) => {
+  await mockApi(page, [], [PROBE_PATH]);
+  await page.goto("/#/investigate/paths/measured");
+  const ribbon = page.getByTestId("paths-ribbon");
+  await expect(ribbon).toBeVisible();
+  await expect(ribbon.locator(".netpath-prov")).toHaveText("Measured");
+  // The prober plus four hops, the silent one drawn as "No reply". (The list
+  // also holds a "Link to …" item per connector; only hop nodes are counted.)
+  const hops = ribbon.locator('[role="listitem"][aria-label^="Hop "]');
+  await expect(hops).toHaveCount(5);
+  await expect(hops.nth(3)).toHaveAttribute("aria-label", /No reply/);
+  await expect(page.getByLabel("Path hops")).toBeVisible();
+  // The ribbon keeps the Paths type floor.
+  const small = await textBelowFloor(page, ".paths-ribbon");
+  expect(small, `text below the floor:\n${small.join("\n")}`).toEqual([]);
+  // The site filter applies to measured paths by their target's site.
+  await page.getByTestId("paths-site").selectOption({ label: "Branch 50" });
+  await expect(ribbon).toBeVisible();
 });
 
 test("Troubleshooting opens its case picker", async ({ page }) => {
@@ -231,9 +317,9 @@ for (const theme of ["light", "indigo"] as const) {
 // Checked on the COMPUTED style in the light and the dark theme, so a theme
 // rule cannot quietly shrink copy.
 const PAGES = [
-  ["#/investigate/flowtrace", ".paths-page"],
-  ["#/investigate/tunnels", ".paths-page"],
-  ["#/investigate/wan-paths", ".paths-page"],
+  ["#/investigate/paths/measured", ".paths-shell"],
+  ["#/investigate/paths/tunnels", ".paths-shell"],
+  ["#/investigate/paths/wan-circuits", ".paths-shell"],
   ["#/investigate/troubleshooting", ".ts-inv"],
 ] as const;
 
@@ -256,7 +342,7 @@ for (const theme of ["light", "indigo"] as const) {
 test("Measured paths setup adds the ticked branch edges as traced targets", async ({ page }) => {
   const created: Record<string, unknown>[] = [];
   await mockApi(page, created);
-  await page.goto("/#/investigate/flowtrace");
+  await page.goto("/#/investigate/paths/measured");
   const list = page.getByTestId("paths-suggestions");
   await expect(list.locator("input[type=checkbox]")).toHaveCount(2);
   await list.locator("input[type=checkbox]").nth(1).uncheck();
@@ -264,3 +350,15 @@ test("Measured paths setup adds the ticked branch edges as traced targets", asyn
   await expect(page.getByTestId("paths-added")).toContainText("1 added");
   expect(created).toEqual([{ name: "Path to cedge-40", kind: "icmp", host: "192.168.222.105", site: "Branch 40", interval_sec: 60, trace_path: true }]);
 });
+
+for (const theme of ["light", "indigo"] as const) {
+  test(`Path data meets the type floor in the ${theme === "light" ? "light" : "dark"} theme`, async ({ page }) => {
+    await page.addInitScript((t) => localStorage.setItem("netops.theme", t), theme);
+    await mockApi(page);
+    await page.goto("/#/investigate/paths/measured");
+    await page.getByTestId("paths-data-open").click();
+    await expect(page.getByTestId("paths-data-discovery")).toBeVisible();
+    const small = await textBelowFloor(page, ".paths-data-body");
+    expect(small, `text below the floor:\n${small.join("\n")}`).toEqual([]);
+  });
+}
