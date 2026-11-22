@@ -44,6 +44,15 @@ import (
 // than this, the controller has stopped reporting it and it is not drawn.
 const Window = 30 * time.Minute
 
+// LinkWindow is how far back a stored session still EXPORTS as a tunnel↔endpoint
+// row for the engine (Links). Wider than Window on purpose, as ControlWindow is:
+// the rows must survive the outage they describe. With the 30-minute Window,
+// half an hour into a controller outage the trap lane's tunnel lost the row its
+// identity is scoped from (tracker 430) and the tunnel node lost its rank-3 edge
+// to its endpoints. A stale row costs nothing: it grounds only a tunnel node that
+// names it. The read stays newest-first under RowCap.
+const LinkWindow = 24 * time.Hour
+
 // RowCap bounds one tenant's read (≈ 10k edges × 2 ends).
 const RowCap = 20000
 
@@ -254,6 +263,10 @@ type SpecFor func(vendor string) (nms.ConnectorSpec, bool)
 // TENANT: a row carries its integration's owner, never "" — the engine merges
 // ""-tenant rows into EVERY tenant's adjacency. An end that does not resolve
 // within the integration's own tenant gets no row.
+//
+// The read reaches back LinkWindow, not Window: the drawing shows what the
+// controller reports now, but the engine needs the row through the outage the
+// tunnel's evidence describes.
 func Links(ctx context.Context, st SessionStore, spec SpecFor, res KeyResolver, now time.Time) ([]Link, LinkStats, error) {
 	var stats LinkStats
 	ints, err := st.ListEnabled(ctx)
@@ -275,7 +288,7 @@ func Links(ctx context.Context, st SessionStore, spec SpecFor, res KeyResolver, 
 	seen := map[string]bool{}
 	var out []Link
 	for _, tenant := range order {
-		recs, truncated, err := st.OverlaySessions(ctx, tenant, now.Add(-Window), RowCap)
+		recs, truncated, err := st.OverlaySessions(ctx, tenant, now.Add(-LinkWindow), RowCap)
 		if err != nil {
 			return nil, stats, err
 		}

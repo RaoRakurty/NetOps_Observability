@@ -320,14 +320,11 @@ func TestBreakerTripClassesFromStreams(t *testing.T) {
 	if r, trip := classifyPollError(&HTTPStatusError{Op: "poll a", Code: 503}); r != ResultError || !trip {
 		t.Fatalf("503: %q trip=%v", r, trip)
 	}
-	// Unreachable: a closed port.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dead := "http://" + ln.Addr().String()
-	_ = ln.Close() // the port is now closed: connections are refused
-	ic.BaseURL = dead
+	// Unreachable: a port nothing listens on. Binding :0 and closing it raced a
+	// parallel test's server for the freed ephemeral port (CI on #327 got a 404
+	// from someone else's server). Port 1 is privileged and never handed out by
+	// an ephemeral bind, so the connection is refused deterministically.
+	ic.BaseURL = "http://127.0.0.1:1"
 	for i := 0; i < breakerTripAfter; i++ {
 		rec := rt.pollClaimed(context.Background(), ic, false)
 		if rec.Streams[0].Status != ResultUnreachable {

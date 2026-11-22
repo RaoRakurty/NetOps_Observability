@@ -14,10 +14,10 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 // The Action Queue renders through the shared DataTable primitive (ae0668a):
-// data rows are div[role=row].dtv-row inside the grid labelled "Action Queue —
-// correlated incidents" — not the old hand-rolled <tr.cc-row> table.
+// data rows are div[role=row].dtv-row inside the grid labelled "Problems —
+// correlated cases that need action" — not the old hand-rolled <tr.cc-row> table.
 const queueRows = (page: Page) =>
-  page.getByRole("grid", { name: "Action Queue — correlated incidents" }).locator(".dtv-row");
+  page.getByRole("grid", { name: "Problems — correlated cases that need action" }).locator(".dtv-row");
 
 // Two tenants, each with one confirmed incident touching a tenant-unique device.
 const DB: Record<string, { device: string; corrId: string; objects: unknown[] }> = {
@@ -91,7 +91,8 @@ test("tenant A sees ONLY tenant A's incident — never tenant B's", async ({ pag
   await queueRows(page).first().click(); // expand → blast radius + evidence
 
   // A's own device is shown in the expanded blast radius…
-  await expect(page.getByText("acme-edge-1")).toBeVisible();
+  // Scoped to the expanded blast radius: the row's Impact cell names it too.
+  await expect(page.locator(".cc-expand").getByText("acme-edge-1")).toBeVisible();
   // …and NOTHING belonging to tenant B is anywhere on the page.
   const body = await page.locator("body").innerText();
   expect(body).not.toContain("globex-core-7");
@@ -104,7 +105,8 @@ test("tenant B sees ONLY tenant B's incident — symmetric isolation", async ({ 
   await expect(queueRows(page)).toHaveCount(1);
   await queueRows(page).first().click();
 
-  await expect(page.getByText("globex-core-7")).toBeVisible();
+  // Scoped to the expanded blast radius: the row's Impact cell names it too.
+  await expect(page.locator(".cc-expand").getByText("globex-core-7")).toBeVisible();
   const body = await page.locator("body").innerText();
   expect(body).not.toContain("acme-edge-1");
   expect(body).not.toContain("corr-acme-1");
