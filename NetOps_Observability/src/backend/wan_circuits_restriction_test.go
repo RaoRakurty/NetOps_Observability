@@ -230,7 +230,9 @@ type wanEndpointsResp struct {
 	Candidates []wanEndpointRow `json:"candidates"`
 }
 
-func (e wanEndpointsResp) all() []wanEndpointRow { return append(append([]wanEndpointRow{}, e.Endpoints...), e.Candidates...) }
+func (e wanEndpointsResp) all() []wanEndpointRow {
+	return append(append([]wanEndpointRow{}, e.Endpoints...), e.Candidates...)
+}
 
 // keys renders the endpoint set (confirmed and possible) as "device/interface" —
 // an assertion names the leaked interface rather than reporting a count that moved.
