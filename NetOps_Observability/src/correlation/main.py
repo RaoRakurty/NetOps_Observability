@@ -98,9 +98,11 @@ from canon import (
     REWRITTEN as CANON_REWRITTEN,
 )
 from canon import (
+    TunnelScope,
     canonicalize_detailed,
     canonicalize_series,
     tenant_key,
+    tunnel_scope,
 )
 from catalog import builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
@@ -1700,6 +1702,44 @@ def cached_identity_resolver_for(tenant: str) -> EntityResolver:
     return r
 
 
+_tunnel_scope_cache: dict[str, TunnelScope] = {}
+_tunnel_scope_cache_mtime: float = -1.0
+_tunnel_scope_stat_at: float = -1.0
+
+
+def cached_tunnel_scope_for(tenant: str) -> TunnelScope:
+    """The tenant's SD-WAN TunnelScope for the stage [1] tunnel axis (tracker 430):
+    `canon.tunnel_scope` over the tenant's OWN topology_links.json bucket — never
+    tenant ∪ global; the platform-global principal ("" / "global") reads only the
+    global buckets. Memoized per (tenant, file mtime): the whole cache is dropped
+    when the file changes.
+
+    Called once per trap signal, so the file is restatted at most every
+    TENANT_STAT_EVERY_S once a scope exists (tracker 156's rule). Bounded by the
+    file's tenant count: only a tenant that owns rows in the file (or the global
+    principal) is cached; any other tenant gets a fresh, empty, still
+    tenant-scoped scope (every tunnel abstains) that is never stored."""
+    global _tunnel_scope_cache, _tunnel_scope_cache_mtime, _tunnel_scope_stat_at
+    nowm = time.monotonic()
+    if _tunnel_scope_stat_at < 0 or nowm - _tunnel_scope_stat_at >= TENANT_STAT_EVERY_S:
+        _tunnel_scope_stat_at = nowm
+        by_tenant = topology_links_by_tenant()
+        if _adj_mtime != _tunnel_scope_cache_mtime:
+            _tunnel_scope_cache = {}
+            _tunnel_scope_cache_mtime = _adj_mtime
+    else:
+        by_tenant = _adj_cache
+    key = tenant_key(tenant)
+    scope = _tunnel_scope_cache.get(key)
+    if scope is None:
+        rows = ([*by_tenant.get("", ()), *by_tenant.get("global", ())] if key == ""
+                else list(by_tenant.get(key, ())))
+        scope = tunnel_scope(key, rows)
+        if key == "" or key in by_tenant:
+            _tunnel_scope_cache[key] = scope
+    return scope
+
+
 _probe_paths: list[dict] = []
 _probe_paths_mtime: float = -1.0
 
@@ -2092,7 +2132,7 @@ def _stamp_origin_device(sig: Signal) -> Signal:
 # {lane,axis,outcome}. Every label comes from a CLOSED set: the lanes below, the
 # axes canon.AXES plus "signal" (the overall outcome of one call — the sum over
 # it is the number of canonicalisation calls), and canon.OUTCOMES. So the series
-# count is bounded (5 × 8 × 6) whatever the wire carries.
+# count is bounded (5 × 9 × 6) whatever the wire carries.
 CANON_LANES: tuple[str, ...] = ("syslog", "trap", "controller", "proactive", "metric")
 _CANON_AXIS_LABELS: frozenset[str] = frozenset((*CANON_AXES, "signal"))
 _CANON_OUTCOME_LABELS: frozenset[str] = frozenset(CANON_OUTCOMES)
@@ -2131,7 +2171,10 @@ def _canonicalize_event(sig: Signal) -> Signal:
     the identity corr_signals was written under. Counted per lane and axis."""
     lane = (CANON_LANES[3] if sig.observer.collection_path == _PROACTIVE_COLLECTION_PATH
             else sig.source.value)
-    res = canonicalize_detailed(sig, cached_identity_resolver_for(sig.tenant_id))
+    # Tracker 430: a trap's tunnel axis reads the tenant's own T4c rows. Only the
+    # trap lane binds a bare TLOC pair, so no other lane builds a scope.
+    tunnels = cached_tunnel_scope_for(sig.tenant_id) if sig.source == Source.TRAP else None
+    res = canonicalize_detailed(sig, cached_identity_resolver_for(sig.tenant_id), tunnels)
     _count_canon(lane, res.outcome, res.axes)
     return res.signal
 
