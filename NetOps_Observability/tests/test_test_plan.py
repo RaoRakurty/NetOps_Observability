@@ -212,6 +212,11 @@ ALL = set(tp.CI_GROUPS)
     ([P + "scripts/install-correlix.sh"], {"install-boot"}),
     # frontend / correlation / catalogue
     ([P + "src/frontend/src/iris/Panel.tsx"], {"frontend"}),
+    # frontend files that backend tests read run both groups
+    ([P + "src/frontend/src/nav.tsx"], {"frontend", "backend"}),
+    ([P + "src/frontend/src/components/rca/labels.ts"], {"frontend", "backend"}),
+    ([P + "src/frontend/src/iris/presentation.ts"], {"frontend", "backend"}),
+    ([P + "src/frontend/src/pages/bgp/prefix.test.ts"], {"frontend", "backend"}),
     ([P + "src/correlation/engine.py"], {"correlation"}),
     ([P + "telemetry-catalog/events.yaml"], {"correlation"}),
     # engine-input producers also run the correlation suite
