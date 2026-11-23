@@ -13,8 +13,12 @@
 //
 // So the page is now:
 //
-//   1. What's wrong?   — ONE list. The open cases as plain rows, and one box to
-//                        describe a problem that is not listed. Describing it
+//   1. Start troubleshooting — ONE block, two cards: the open cases as plain
+//                        rows, and one box to describe a problem that is not
+//                        listed (owner, 2026-11-23: the old heading "What's
+//                        wrong?" was renamed, the type lightened to the
+//                        theme's 500 weight, and each block and action given an
+//                        icon from components/Icon.tsx). Describing it
 //                        CREATES a record (POST /api/incidents, source `manual`,
 //                        the same seam an alert-born incident uses), so from
 //                        that moment it is a case like any other. There is no
@@ -49,6 +53,7 @@ import {
 } from "../../services/api";
 import { ShellContext } from "../../context/shell";
 import AskIris from "../../components/AskIris";
+import Icon from "../../components/Icon";
 import RcaCaseHeader from "../../components/rca/RcaCaseHeader";
 import RcaPathCausality from "../../components/rca/RcaPathCausality";
 import { readTopologyContext, type TopologyContext } from "../../components/rca/topologyContext";
@@ -93,6 +98,20 @@ export function caseDevice(obj: CorrObject | null): string {
   const list = Array.isArray(aff.devices) ? aff.devices : [];
   const first = list.find((d) => typeof d === "string" && d.trim() !== "");
   return typeof first === "string" ? first : "";
+}
+
+/**
+ * The block's icon badge — decorative only (the heading beside it is the
+ * accessible name). Deliberately NOT numbered: the owner retired the numbered
+ * step badges on 2026-09-06 ("so many details … make it intuitive"), and the
+ * icon carries the block's meaning without bringing them back.
+ */
+function BlockMark({ icon }: { icon: string }) {
+  return (
+    <span className="ts-mark" aria-hidden="true">
+      <Icon name={icon} size={18} />
+    </span>
+  );
 }
 
 /** What the operator picked. `kind` decides which reads the answer card can make. */
@@ -281,42 +300,63 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
   return (
     <div className="ts-inv">
-      {/* ── 1 · What's wrong? ──────────────────────────────────────────────── */}
+      {/* ── 1 · Start troubleshooting ─────────────────────────────────────── */}
       <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--mod-network)" } as React.CSSProperties} aria-labelledby="ts-what-h" data-testid="ts-pick">
-        <h2 id="ts-what-h" className="ts-block-h ts-group-head">
-          What&apos;s wrong?
-          <AskIris topic="investigate.how" label="What's wrong?" />
-        </h2>
+        <div className="ts-group-head">
+          <BlockMark icon="tool" />
+          <h2 id="ts-what-h" className="ts-block-h">
+            Start troubleshooting
+            <AskIris topic="investigate.how" label="Start troubleshooting" />
+          </h2>
+        </div>
+        <p className="ts-lede">Pick an open case, or describe a problem that is not listed.</p>
 
-        {casesErr ? (
-          <p className="ts-bad" role="alert">{casesErr}</p>
-        ) : rows.length === 0 ? (
-          <p className="empty" role="status">No open case right now.</p>
-        ) : (
-          <ul className="ts-cases" aria-label="Open cases">
-            {rows.slice(0, 12).map((r) => (
-              <li key={`${r.kind}-${r.id}`}>
-                <button
-                  type="button"
-                  className={`ts-case${picked?.id === r.id ? " on" : ""}`}
-                  aria-pressed={picked?.id === r.id}
-                  data-kind={r.kind}
-                  onClick={() => setPicked({ kind: r.kind, id: r.id })}
-                >
-                  <span className="ts-case-l">{r.title}</span>
-                  <span className="ts-case-f fact-line">
-                    {r.affects}{r.since ? ` · ${fmtDateTime(r.since)}` : ""}
-                  </span>
-                  <span className="ts-case-chip badge">{r.chip}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="ts-start">
+          <div className="ts-card" data-testid="ts-open-cases">
+            <h3 className="ts-card-h">
+              <Icon name="alert-triangle" size={18} className="ts-card-ic" />
+              Open cases
+              {rows.length > 0 && <span className="ts-count badge">{rows.length}</span>}
+            </h3>
+            {casesErr ? (
+              <p className="ts-bad" role="alert">{casesErr}</p>
+            ) : rows.length === 0 ? (
+              <p className="empty ts-empty" role="status">
+                <Icon name="check" size={18} className="ts-empty-ic" />
+                No open case right now.
+              </p>
+            ) : (
+              <ul className="ts-cases" aria-label="Open cases">
+                {rows.slice(0, 12).map((r) => (
+                  <li key={`${r.kind}-${r.id}`}>
+                    <button
+                      type="button"
+                      className={`ts-case${picked?.id === r.id ? " on" : ""}`}
+                      aria-pressed={picked?.id === r.id}
+                      data-kind={r.kind}
+                      onClick={() => setPicked({ kind: r.kind, id: r.id })}
+                    >
+                      <span className="ts-case-ic" aria-hidden="true">
+                        <Icon name={r.kind === "investigation" ? "edit" : "activity"} size={16} />
+                      </span>
+                      <span className="ts-case-l">{r.title}</span>
+                      <span className="ts-case-f fact-line">
+                        {r.affects}{r.since ? ` · ${fmtDateTime(r.since)}` : ""}
+                      </span>
+                      <span className="ts-case-chip badge">{r.chip}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
-        <div className="ts-describe">
-          <label className="ts-describe-l" htmlFor="ts-describe-in">Not listed? Describe it</label>
-          <div className="ts-describe-row">
+          <div className="ts-card ts-describe" data-testid="ts-describe">
+            <h3 className="ts-card-h">
+              <Icon name="edit" size={18} className="ts-card-ic" />
+              Describe a new problem
+            </h3>
+            <label className="ts-describe-l" htmlFor="ts-describe-in">What are users or devices experiencing?</label>
             <input
               id="ts-describe-in"
               type="text"
@@ -327,22 +367,26 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void start(); } }}
             />
             <button
-              type="button" className="btn-accent"
+              type="button" className="btn-accent ts-start-btn"
               disabled={describedTitle(symptomText) === "" || starting}
               aria-busy={starting}
               onClick={() => { void start(); }}
             >
+              <Icon name="search" size={16} />
               {starting ? "Opening…" : "Start investigation"}
             </button>
+            {startErr && <p className="ts-bad" role="alert">{startErr}</p>}
           </div>
-          {startErr && <p className="ts-bad" role="alert">{startErr}</p>}
         </div>
       </section>
 
       {/* ── 2 · The answer ─────────────────────────────────────────────────── */}
       {picked && (
         <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--accent)" } as React.CSSProperties} aria-label="The answer" data-testid="ts-answer-block">
-          <h2 className="ts-block-h ts-group-head">The answer</h2>
+          <div className="ts-group-head">
+            <BlockMark icon="target" />
+            <h2 className="ts-block-h">The answer</h2>
+          </div>
           {caseErr ? (
             <p className="ts-bad" role="alert" data-testid="ts-case-error">{caseErr}</p>
           ) : corrId && !rcaCase ? (
@@ -374,16 +418,19 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
                 type="button" className="btn-accent"
                 aria-expanded={irisOpen} onClick={() => setIrisOpen((o) => !o)}
               >
+                <Icon name="copilot" size={16} />
                 {irisOpen ? "Close Iris" : "Ask Iris"}
               </button>
             )}
             <button type="button" className="chip-btn" onClick={createTicket} disabled={!corrId}>
+              <Icon name="ticket" size={16} />
               {ticket?.ticket_number ? `Ticket ${ticket.ticket_number}` : "Open ticket"}
             </button>
             <button
               type="button" className="chip-btn"
               aria-expanded={escalateOpen} onClick={() => setEscalateOpen((o) => !o)}
             >
+              <Icon name="support" size={16} />
               {escalateOpen ? "Close TAC escalation" : "Escalate to TAC"}
             </button>
           </div>
@@ -434,12 +481,16 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
       {/* ── 3 · The evidence ───────────────────────────────────────────────── */}
       {picked && (
         <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--mod-logs)" } as React.CSSProperties} aria-labelledby="ts-ev-h" data-testid="ts-evidence">
-          <h2 id="ts-ev-h" className="ts-block-h ts-group-head">The evidence</h2>
+          <div className="ts-group-head">
+            <BlockMark icon="layers" />
+            <h2 id="ts-ev-h" className="ts-block-h">The evidence</h2>
+          </div>
           <button
             type="button" className="ts-ev-toggle tsl-disclose"
             aria-expanded={evidenceOpen} aria-controls="ts-ev-body"
             onClick={() => setEvidenceOpen((o) => !o)}
           >
+            <Icon name={evidenceOpen ? "chevron-down" : "chevron-right"} size={16} />
             {evidenceOpen ? "Hide the evidence" : "Show the evidence"}
           </button>
 

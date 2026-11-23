@@ -128,7 +128,7 @@ describe("sectionFromHash", () => {
 describe("the page has one face", () => {
   it("renders the investigation, with no section switch", async () => {
     await show("#/investigate/troubleshooting");
-    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Start troubleshooting/, level: 2 })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Troubleshooting section" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Collection pipeline" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Investigation" })).toBeNull();
@@ -148,7 +148,7 @@ describe("the page has one face", () => {
 
   it("mounts the REAL investigation surface, not a stub", async () => {
     await show("#/investigate/troubleshooting");
-    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Start troubleshooting/, level: 2 })).toBeInTheDocument();
     await waitFor(() => expect(mocks.correlations).toHaveBeenCalled());
   });
 });
@@ -162,7 +162,7 @@ describe("retired deep links", () => {
     "#/investigate/troubleshooting?section=nonsense",
   ] as const)("%p lands on the investigation", async (hash) => {
     await show(hash);
-    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Start troubleshooting/, level: 2 })).toBeInTheDocument();
   });
 
   // THE OWNER'S BUG. Landing on the investigation is not enough while the
@@ -187,7 +187,7 @@ describe("retired deep links", () => {
   // is a real record now, so an old symptom link simply opens the picker.
   it("lands a retired symptom link on the picker, not on a blank", async () => {
     await show("#/investigate/troubleshooting?symptom=bgp_upstream");
-    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Start troubleshooting/, level: 2 })).toBeInTheDocument();
     expect(screen.queryByTestId("ts-answer-block")).toBeNull();
   });
 

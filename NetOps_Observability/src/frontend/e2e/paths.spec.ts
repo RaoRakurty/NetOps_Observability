@@ -328,7 +328,7 @@ for (const theme of ["light", "indigo"] as const) {
     await mockCase(page);
     await page.goto("/#/investigate/troubleshooting?case=corr-1");
     await expect(page.getByTestId("ts-facts")).toBeVisible();
-    await expect(page.locator(".ts-group-head")).toHaveText(["What's wrong?", "The answer", "The evidence"]);
+    await expect(page.locator(".ts-group-head")).toHaveText(["Start troubleshooting", "The answer", "The evidence"]);
     await page.getByRole("button", { name: "Show the evidence" }).click();
     await expect(page.getByTestId("lane-open-events")).toHaveAttribute("href", "#/explore/logs");
     const dd = await page.locator(".ts-fact dd").first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
