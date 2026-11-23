@@ -932,3 +932,89 @@ def test_q11_reads_lanes_where_data_enters_not_where_it_is_replayed() -> None:
     assert 'component_id=\\"trap_in\\"' in block
     assert 'topic="netops.flows.raw"' in block
     assert "collector_targets_reachable" in block
+
+
+# --- vm_body: a transport blip is retried before it becomes a SKIP ----------
+# 2026-11-23: one 8 s wget timeout on a loaded host turned Q2c (required) into
+# SKIPPED and the run INCOMPLETE while every engine was consuming.
+
+def _vm_body_fn() -> str:
+    s = _script()
+    return s[s.index('VM_QUERY_ATTEMPTS="'):s.index("# On success: the first sample")]
+
+
+_VM_BODY_HARNESS = r'''
+set -euo pipefail
+VICTORIA_CID=vm; C_SKIP=''; C_OFF=''
+urlencode() { printf '%s' "$1"; }
+oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-"${2:-220}"; }
+remaining() { printf '%s' "${LEFT:-600}"; }
+notice() { printf 'NOTICE %s\n' "$*" >&3; }
+sleep() { echo "slept $1" >> "$LOG"; }
+# Fake docker: fails the first $FAILS calls with $FAIL_MSG, then succeeds.
+dkr() {
+  local n; n=$(( $(cat "$CNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CNT"
+  if [ "$n" -le "${FAILS:-0}" ]; then printf '%s\n' "$FAIL_MSG" >&2; return 1; fi
+  printf '{"status":"success","data":{"result":[{"metric":{},"value":[1,"42"]}]}}'
+}
+'''
+
+
+def _run_vm_body(tmp_path, tail: str, **env):
+    import subprocess
+    return subprocess.run(
+        ["bash", "-c", _VM_BODY_HARNESS + _vm_body_fn() + "\n" + tail],
+        capture_output=True, text=True, timeout=30, check=False,
+        env={"PATH": "/usr/bin:/bin", "CNT": str(tmp_path / "n"),
+             "LOG": str(tmp_path / "log"),
+             "FAIL_MSG": "wget: download timed out", **env})
+
+
+def _calls(tmp_path) -> int:
+    return int((tmp_path / "n").read_text())
+
+
+def test_vm_body_retries_a_timeout_and_returns_the_body(tmp_path) -> None:
+    res = _run_vm_body(tmp_path, 'exec 3>&2\nvm_body q\n', FAILS="2")
+    assert res.returncode == 0, res
+    assert res.stdout.startswith('{"status":"success"'), res.stdout
+    assert _calls(tmp_path) == 3
+    assert res.stderr.count("NOTICE") == 2 and "download timed out" in res.stderr
+    slept = (tmp_path / "log").read_text().split()
+    first, second = float(slept[1]), float(slept[3])
+    assert 1.0 <= first < 2.0 and 2.0 <= second < 3.0, slept  # backoff + jitter
+
+
+def test_a_recovered_retry_does_not_corrupt_a_captured_value(tmp_path) -> None:
+    # vm_scalar callers capture `2>&1`; the retry notice must not land in it.
+    tail = ('exec 3>"$LOG.fd3"\n'
+            'v="$(vm_body q 2>&1)"\nprintf "%s" "$v"\n')
+    res = _run_vm_body(tmp_path, tail, FAILS="1")
+    assert res.returncode == 0, res
+    assert "NOTICE" not in res.stdout and res.stdout.startswith('{"status"'), res.stdout
+    assert "NOTICE" in (tmp_path / "log.fd3").read_text()
+
+
+def test_vm_body_gives_up_after_the_attempt_cap_and_says_so(tmp_path) -> None:
+    res = _run_vm_body(tmp_path, 'exec 3>&2\nvm_body q\n', FAILS="99")
+    assert res.returncode != 0
+    assert "download timed out" in res.stdout and "after 3 attempt(s)" in res.stdout
+    assert _calls(tmp_path) == 3
+
+
+def test_vm_body_does_not_retry_a_client_error(tmp_path) -> None:
+    res = _run_vm_body(tmp_path, 'exec 3>&2\nvm_body q\n', FAILS="99",
+                       FAIL_MSG="wget: server returned error: HTTP/1.1 400 Bad Request")
+    assert res.returncode != 0 and "400" in res.stdout
+    assert _calls(tmp_path) == 1
+
+
+def test_vm_body_never_retries_past_the_global_budget(tmp_path) -> None:
+    res = _run_vm_body(tmp_path, 'exec 3>&2\nvm_body q\n', FAILS="99", LEFT="10")
+    assert res.returncode != 0 and "no budget left to retry" in res.stdout
+    assert _calls(tmp_path) == 1
+
+
+def test_fd3_is_opened_before_any_helper_can_use_it() -> None:
+    s = _script()
+    assert s.index("exec 3>&2") < s.index("vm_body() {")

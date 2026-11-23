@@ -85,6 +85,11 @@ fi
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s! %s%s\n' "$C_SKIP" "$*" "$C_OFF" >&2; }
+# fd 3 = the operator's stderr, opened once here. A helper that runs inside a
+# caller's `$(... 2>&1)` (vm_body under vm_scalar) reports on fd 3 so its notice
+# reaches the terminal instead of being merged into the value being captured.
+exec 3>&2
+notice() { printf '%s! %s%s\n' "$C_SKIP" "$*" "$C_OFF" >&3; }
 
 # ---------------------------------------------------------------------------
 # Result ledger. Every check lands here exactly once with a verdict; the final
@@ -229,6 +234,9 @@ CONFIG (all optional; a bare checkout works with the defaults)
                            on; it waits for them              (default 60)
     DQ_BOOTSTRAP_TIMEOUT   per-bootstrap wall-clock bound     (default 600)
     DQ_DOCKER_TIMEOUT      bound on ordinary docker calls     (default 30)
+    DQ_VM_QUERY_ATTEMPTS   tries per VictoriaMetrics query before a transport
+                           failure becomes a SKIP; backoff + jitter, inside
+                           the global deadline                (default 3)
     DQ_AGG_INSTANCE        Vector aggregator scrape instance  (vector-aggregator:9598)
     DQ_ROUTER_INSTANCE     Vector router scrape instance      (vector-router:9598)
     DQ_HEARTBEAT_MAX_AGE   Q8 freshness bound, seconds        (default 900)
@@ -1023,9 +1031,32 @@ urlencode() {  # RFC3986-unreserved passthrough; everything else percent-encoded
   printf '%s' "$out"
 }
 
-vm_body() {  # $1 = PromQL -> raw JSON on stdout
-  dkr exec "$VICTORIA_CID" wget -qO- --timeout=8 \
-    "http://127.0.0.1:8428/api/v1/query?query=$(urlencode "$1")" 2>&1
+# A transport failure is retried (§9: backoff + jitter) before it becomes the
+# caller's SKIP. One 8 s wget timeout on a loaded host used to turn a healthy
+# required check into SKIPPED and the whole run INCOMPLETE (2026-11-23: Q2c,
+# "wget: download timed out"). A 4xx is the query's fault and is not retried.
+# Every retry fits inside the global budget, or it is not attempted.
+VM_QUERY_ATTEMPTS="${DQ_VM_QUERY_ATTEMPTS:-3}"
+VM_QUERY_TIMEOUT=8
+vm_body() {  # $1 = PromQL -> raw JSON on stdout; last failure on stdout + rc
+  local url out rc=0 attempt=1 delay_ms
+  url="http://127.0.0.1:8428/api/v1/query?query=$(urlencode "$1")"
+  while :; do
+    out="$(dkr exec "$VICTORIA_CID" wget -qO- --timeout="$VM_QUERY_TIMEOUT" "$url" 2>&1)" && {
+      printf '%s' "$out"; return 0; }
+    rc=$?
+    case "$out" in *'HTTP/1.1 4'*|*'HTTP/1.0 4'*) printf '%s' "$out"; return "$rc" ;; esac
+    if [ "$attempt" -ge "$VM_QUERY_ATTEMPTS" ]; then
+      printf '%s (after %d attempt(s))' "$out" "$attempt"; return "$rc"
+    fi
+    delay_ms=$(( attempt * 1000 + RANDOM % 1000 ))   # 1-2 s, then 2-3 s
+    if [ "$(remaining)" -le $(( delay_ms / 1000 + 1 + VM_QUERY_TIMEOUT + 5 )) ]; then
+      printf '%s (after %d attempt(s); no budget left to retry)' "$out" "$attempt"; return "$rc"
+    fi
+    notice "VictoriaMetrics query attempt $attempt/$VM_QUERY_ATTEMPTS failed ($(oneline "$out" 100)) — retrying"
+    sleep "$(( delay_ms / 1000 )).$(printf '%03d' $(( delay_ms % 1000 )))"
+    attempt=$(( attempt + 1 ))
+  done
 }
 
 # On success: the first sample value on stdout, nothing on stderr.
