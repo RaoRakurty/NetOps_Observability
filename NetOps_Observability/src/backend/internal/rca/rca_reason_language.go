@@ -87,6 +87,7 @@ var (
 	reNoIndepPair     = regexp.MustCompile(`(?i)no independent cross-modality pair(?: \(fate-shared: ([^)]+)\))?`)
 	reLowAuthority    = regexp.MustCompile(`(?i)required modality (\w+) present but only low-authority`)
 	reModalityMissing = regexp.MustCompile(`(?i)required modality missing[^:]*:\s*(\w+)`)
+	reSupportPlane    = regexp.MustCompile(`(?i)support plane \(([^)]+)\) supports but never anchors.*?\(have (\d+): ([^)]*)\)`)
 	reGteNotation     = regexp.MustCompile(`≥\s*(\d+)`)
 	reSoloObserver    = regexp.MustCompile(`(?i)^single observer \(([^)]+)\)`)
 )
@@ -112,8 +113,39 @@ func friendlyReason(r string) string {
 	if m := reLowAuthority.FindStringSubmatch(r); m != nil {
 		return fmt.Sprintf("Only low-trust %s saw this — not enough on their own to confirm.", tok(m[1]))
 	}
+	// A support plane (the controller's statement, a security rule) agreed with
+	// one measurement: it backs the case up but is never the second witness
+	// (ticket P-5B357F printed this engine sentence verbatim).
+	if m := reSupportPlane.FindStringSubmatch(r); m != nil {
+		planes := make([]string, 0, 2)
+		for _, t := range strings.Split(m[1], ",") {
+			planes = append(planes, tok(strings.TrimSpace(t)))
+		}
+		have := make([]string, 0, 2)
+		for _, t := range strings.Split(m[3], ",") {
+			if t = strings.TrimSpace(t); t != "" && t != "none" {
+				have = append(have, tok(t))
+			}
+		}
+		count := "there are none yet"
+		switch {
+		case len(have) == 1:
+			count = fmt.Sprintf("there is one (%s)", have[0])
+		case len(have) > 1:
+			count = fmt.Sprintf("there are %d (%s)", len(have), strings.Join(have, ", "))
+		}
+		verb := "backs"
+		if len(planes) > 1 {
+			verb = "back"
+		}
+		return fmt.Sprintf("%s %s this up but cannot confirm it. Confirming needs two independent measurements; %s.",
+			rcaCapitalize(strings.Join(planes, " and ")), verb, count)
+	}
 	if m := reModalityMissing.FindStringSubmatch(r); m != nil {
-		return fmt.Sprintf("No trusted %s evidence in this window.", tok(m[1]))
+		if m[1] == "control_plane" {
+			return "No router reported the routing/link change itself in this window."
+		}
+		return fmt.Sprintf("No %s from a trusted source in this window.", tok(m[1]))
 	}
 	if strings.Contains(strings.ToLower(r), "cannot confirm without an independent trusted modality") {
 		return "A second independent source is needed to confirm."

@@ -609,3 +609,25 @@ func TestNeverEstablishedOnlyReadsABGPClearAsEstablished(t *testing.T) {
 		t.Fatal("a non-BGP clear is not a session-up")
 	}
 }
+
+// Ticket P-5B357F: the support-plane rule and the missing routing witness read
+// as plain sentences, never as engine text.
+func TestFriendlyReasonsSupportPlaneAndMissingRouting(t *testing.T) {
+	got := FriendlyReasons([]string{
+		"support plane (management_plane) supports but never anchors — confirmation needs two independent measurement-plane witnesses (have 1: device_telemetry)",
+		"support plane (management_plane, security) supports but never anchors — confirmation needs two independent measurement-plane witnesses (have 0: none)",
+		"required modality missing (no trusted witness): control_plane",
+		"required modality missing (no trusted witness): passive_flow",
+	})
+	want := []string{
+		"The controller's own statement backs this up but cannot confirm it. Confirming needs two independent measurements; there is one (device telemetry).",
+		"The controller's own statement and a security rule back this up but cannot confirm it. Confirming needs two independent measurements; there are none yet.",
+		"No router reported the routing/link change itself in this window.",
+		"No traffic flow from a trusted source in this window.",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("reason %d:\n got  %q\n want %q", i, got[i], want[i])
+		}
+	}
+}
