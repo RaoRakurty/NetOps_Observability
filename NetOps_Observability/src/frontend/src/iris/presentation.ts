@@ -568,12 +568,16 @@ export const UNITLESS_FIELDS = new Set(["count", "z"]);
 /** Text annotations of a row — never part of its entity name (N-H6 `baseline`). */
 export const NOTE_FIELDS = new Set(["baseline"]);
 
-/** The entity dimensions of a metric row (everything that is not a measure or a note). */
-export function entityLabel(e: Record<string, unknown>): string {
+/** The entity dimensions of a metric row (everything that is not a measure or a
+ *  note). `nameOf` (iris/deviceNamesContext `named` over the caller's
+ *  inventory) turns a device id into its hostname and an interface `<id>:<if>`
+ *  into `<name>:<if>`; the id stays in the row for links and drill-downs
+ *  (owner, 2026-11-23). Without it the values read as they are. */
+export function entityLabel(e: Record<string, unknown>, nameOf?: (v: string) => string): string {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(e)) {
     if (MEASURE_FIELDS.has(k) || NOTE_FIELDS.has(k)) continue;
-    if (typeof v === "string" && v !== "") parts.push(v);
+    if (typeof v === "string" && v !== "") parts.push(nameOf ? nameOf(v) : v);
   }
   return parts.length > 0 ? parts.join(" · ") : "All";
 }

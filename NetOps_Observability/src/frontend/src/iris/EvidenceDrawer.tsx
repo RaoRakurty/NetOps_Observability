@@ -17,6 +17,7 @@ import { Modal } from "../components/ui";
 import { fmtDateTime } from "../lib/time";
 import { cellText, humanize, rowId, sourceLabels, type ResultSet, type Row } from "./presentation";
 import { SafeLink } from "./links";
+import { named, useIrisDeviceNames } from "./deviceNamesContext";
 
 function windowText(from: string, to: string): string {
   if (!from && !to) return "Not stated";
@@ -24,6 +25,7 @@ function windowText(from: string, to: string): string {
 }
 
 export function EvidenceDetails({ result, row }: { result: ResultSet; row?: Row }) {
+  const names = useIrisDeviceNames();
   const p = result.provenance;
   const sources = sourceLabels(p.source);
   const rowRef = row ? rowId(row, 0) : "";
@@ -52,7 +54,7 @@ export function EvidenceDetails({ result, row }: { result: ResultSet; row?: Row 
               <li key={`${e.type}-${e.id}-${i}`}>
                 {humanize(e.type)}:{" "}
                 <SafeLink kind={e.type} id={e.id}>
-                  {e.id}
+                  {named(e.id, names)}
                 </SafeLink>
               </li>
             ))}
@@ -63,7 +65,7 @@ export function EvidenceDetails({ result, row }: { result: ResultSet; row?: Row 
       {row && !rowRef.startsWith("row-") && (
         <>
           <dt>This row</dt>
-          <dd className="mono">{rowRef}</dd>
+          <dd className="mono">{named(rowRef, names)}</dd>
         </>
       )}
 

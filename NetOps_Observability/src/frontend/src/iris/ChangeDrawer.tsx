@@ -17,6 +17,7 @@ import { SafeLink } from "./links";
 import JsonDiff from "./JsonDiff";
 import ChangeDiff from "../pages/experience/ChangeDiff";
 import { EvidenceDetails } from "./EvidenceDrawer";
+import { named, useIrisDeviceNames } from "./deviceNamesContext";
 
 function Field({ label, value }: { label: string; value: string | null }) {
   return (
@@ -36,6 +37,7 @@ export default function ChangeDrawer({
   result?: ResultSet;
   onClose: () => void;
 }) {
+  const names = useIrisDeviceNames();
   const changeId = str(row, "change_id");
   const incidentId = str(row, "incident_id");
   const time = str(row, "time");
@@ -46,13 +48,13 @@ export default function ChangeDrawer({
   // change ledger (the caller's own — another workspace's id answers 404).
   const fetchId = diffableChangeId(row);
   return (
-    <Modal title={changeTitle(row)} subtitle={time ? fmtDateTime(time) : "Time not recorded"} onClose={onClose}>
+    <Modal title={named(changeTitle(row), names)} subtitle={time ? fmtDateTime(time) : "Time not recorded"} onClose={onClose}>
       <div className="iris-drawer">
-        {cellText(row.summary) && <p className="iris-text">{cellText(row.summary)}</p>}
+        {cellText(row.summary) && <p className="iris-text">{named(cellText(row.summary), names)}</p>}
         <dl className="iris-kv">
           <Field label="Who" value={cellText(row.actor)} />
           <Field label="Change type" value={changeTypeText(row) || null} />
-          <Field label="Object" value={cellText(row.object)} />
+          <Field label="Object" value={named(cellText(row.object), names)} />
           <Field label="Object kind" value={cellText(row.object_kind)} />
           <dt>Site</dt>
           <dd>
