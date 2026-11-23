@@ -1,6 +1,6 @@
 ---
 title: Investigate a symptom
-description: Start from one of nine canonical workflows or an open case, read seven evidence lanes in parallel, and hand the fault to the seam that owns it.
+description: Start from an open case or describe a new one, read seven evidence lanes in parallel, and hand the fault to the seam that owns it.
 page_type: task
 sidebar_position: 5
 ---
@@ -45,23 +45,18 @@ collector counts, per-collector rows and flow sources moved to
 Under **Start troubleshooting**, pick a case under **Open cases**, or describe
 the problem under **Describe a problem** and press **Start investigation**.
 The card for a case carries an icon for its kind: a pulse for a case Correlix
-correlated, a pen for one you described. The nine canonical
-workflows and the lanes each one opens:
+correlated, a pen for one you described.
 
-| Symptom | Lanes it opens |
-|---|---|
-| An app is slow or unreachable | Digital experience and probes, Path, What changed, Flows, Device and protocol health, Correlated events |
-| A site or device is down | Device and protocol health, Path, What changed, Correlated events, Routing and BGP |
-| A link or interface is erroring | Device and protocol health, Flows, What changed, Correlated events |
-| A routing adjacency dropped (OSPF / IS-IS) | Routing and BGP, Device and protocol health, What changed, Correlated events |
-| BGP or an upstream is unstable | Routing and BGP, Path, What changed, Correlated events, Digital experience and probes |
-| DNS, DHCP or authentication is failing | Digital experience and probes, What changed, Correlated events, Flows |
-| Wireless clients are struggling | Digital experience and probes, Device and protocol health, Correlated events, What changed |
-| A cloud or SaaS service is degraded | Digital experience and probes, What changed, Path, Correlated events, Flows |
-| Something looks exposed or compromised | Correlated events, What changed, Flows, Device and protocol health |
+- **Open cases** holds both kinds in one list: Correlix's cases first, then
+  the ones operators described, each newest first, up to twelve. Each row says
+  who the case affects and since when.
+- **Describe a problem** opens an investigation with your words as its title
+  (up to 200 characters). It joins **Open cases** and is selected, so the next
+  step acts on it.
 
-Selecting an open case opens **every** lane, because the engine did not
-pre-narrow the evidence for you.
+Whichever you pick, the workspace opens **every** evidence lane: no lane is
+pre-narrowed for you. (The nine-symptom picker, with its own lanes per
+symptom, was retired on 2026-09-06.)
 
 ### Step 3 - Read the verdict header
 
