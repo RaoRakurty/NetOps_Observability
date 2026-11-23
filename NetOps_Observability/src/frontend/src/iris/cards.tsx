@@ -20,6 +20,7 @@ import { fmtDateTime } from "../lib/time";
 import { cellText, clip, humanize, type Row } from "./presentation";
 import { changeSourceText, changeTitle, relationText, automationText, str } from "./changes";
 import { SafeLink } from "./links";
+import { named, useIrisDeviceNames } from "./deviceNamesContext";
 
 // ── tolerant readers over unknown JSON ───────────────────────────────────────
 
@@ -57,6 +58,8 @@ function pNum(o: unknown, key: string): number | null {
 // ── IncidentCard ──────────────────────────────────────────────────────────────
 
 export function IncidentCard({ row, detail }: { row?: Row; detail?: unknown }) {
+  // Device ids in the incident's words read as hostnames (owner, 2026-11-23).
+  const names = useIrisDeviceNames();
   const id = (row && str(row, "incident_id")) || pStr(detail, "IncidentID", 128);
   const displayId = (row && str(row, "display_id")) || pStr(detail, "DisplayID", 64);
   const title = (row && str(row, "title")) || pStr(detail, "Title", 300) || "Incident";
@@ -85,7 +88,7 @@ export function IncidentCard({ row, detail }: { row?: Row; detail?: unknown }) {
     return <p className="iris-empty" role="status">No incident was found for this question.</p>;
   }
 
-  const name = displayId ? `${displayId} · ${title}` : title;
+  const name = named(displayId ? `${displayId} · ${title}` : title, names);
   const heading = id ? (
     <SafeLink kind="incident" id={id}>
       {name}
@@ -115,11 +118,11 @@ export function IncidentCard({ row, detail }: { row?: Row; detail?: unknown }) {
         <dt>Root cause</dt>
         <dd>
           {identified && statement ? (
-            <span className="iris-accent accent-cause">{statement}</span>
+            <span className="iris-accent accent-cause">{named(statement, names)}</span>
           ) : (
             <>
               Not identified yet.
-              {possible && <> Possibly because of: {possible}</>}
+              {possible && <> Possibly because of: {named(possible, names)}</>}
             </>
           )}
         </dd>
@@ -127,7 +130,7 @@ export function IncidentCard({ row, detail }: { row?: Row; detail?: unknown }) {
         {locStatement && (
           <>
             <dt>Where the evidence points</dt>
-            <dd>{locStatement}</dd>
+            <dd>{named(locStatement, names)}</dd>
           </>
         )}
 
@@ -147,7 +150,7 @@ export function IncidentCard({ row, detail }: { row?: Row; detail?: unknown }) {
                   {devices.slice(0, 8).map((d) => (
                     <li key={d}>
                       <SafeLink kind="device" id={d}>
-                        {d}
+                        {named(d, names)}
                       </SafeLink>
                     </li>
                   ))}
@@ -191,25 +194,27 @@ export function incidentEvidence(detail: unknown): { known: string[]; missing: s
 // ── ChangeCard ────────────────────────────────────────────────────────────────
 
 export function ChangeCard({ row, critical = false }: { row?: Row; critical?: boolean }) {
+  const names = useIrisDeviceNames();
   if (!row) return <p className="iris-empty" role="status">No change was found for this question.</p>;
   const changeId = str(row, "change_id");
   const incidentId = str(row, "incident_id");
   const time = str(row, "time");
+  const heading = named(changeTitle(row), names);
   return (
     <article className="iris-card" aria-label="Change">
       <header className="iris-card-head">
         <h3 className="iris-h">
           {changeId ? (
             <SafeLink kind="change" id={changeId}>
-              {changeTitle(row)}
+              {heading}
             </SafeLink>
           ) : (
-            changeTitle(row)
+            heading
           )}
         </h3>
         {critical && <span className="iris-pill accent-critical">Critical change</span>}
       </header>
-      {cellText(row.summary) && <p className="iris-text">{cellText(row.summary)}</p>}
+      {cellText(row.summary) && <p className="iris-text">{named(cellText(row.summary), names)}</p>}
       <dl className="iris-kv">
         <dt>When</dt>
         <dd>{time ? fmtDateTime(time) : <span className="iris-muted">Not recorded</span>}</dd>

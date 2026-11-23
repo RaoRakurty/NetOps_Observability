@@ -50,6 +50,8 @@ import JsonDiff from "./JsonDiff";
 import EvidenceDrawer from "./EvidenceDrawer";
 import { BarView, TimeSeriesView, type DrillDown } from "./charts";
 import { ChangeCard, IncidentCard, RecommendationCard, incidentEvidence } from "./cards";
+import { useDeviceNames, type DeviceNames } from "../lib/deviceNames";
+import { IrisDeviceNamesContext, named, namer, useIrisDeviceNames } from "./deviceNamesContext";
 
 /** Views that draw the result's rows/series — these honour the empty state. */
 const DATA_VIEWS: ReadonlySet<ViewType> = new Set<ViewType>([
@@ -73,14 +75,15 @@ function isChangeRow(r: Row): boolean {
   return typeof r.change_id === "string";
 }
 
-export function timelineEvents(result: ResultSet, plan: PresentationPlan): TimelineEvent[] {
+/** `names`: the caller's inventory — a device id in a label reads as its hostname. */
+export function timelineEvents(result: ResultSet, plan: PresentationPlan, names?: DeviceNames | null): TimelineEvent[] {
   return result.rows.map((r, i) => {
     const id = rowId(r, i);
     if (isChangeRow(r)) {
       return {
         id,
         ts: str(r, "time"),
-        label: changeTitle(r),
+        label: named(changeTitle(r), names),
         detail: str(r, "actor") || undefined,
         accent: accentForHighlight(highlightFor(plan, [str(r, "change_id")])),
         link: { kind: "change", id: str(r, "change_id") },
@@ -91,7 +94,7 @@ export function timelineEvents(result: ResultSet, plan: PresentationPlan): Timel
     return {
       id,
       ts: str(r, "created_at") || str(r, "time"),
-      label: title,
+      label: named(title, names),
       detail: cellText(r.state) ?? undefined,
       accent: accentForHighlight(highlightFor(plan, [incident, id])),
       link: incident ? { kind: "incident", id: incident } : undefined,
@@ -125,6 +128,7 @@ function SummaryView({ result, plan }: { result: ResultSet; plan: ValidatedPlan 
 }
 
 function NoGraph({ what, result }: { what: string; result: ResultSet }) {
+  const names = useIrisDeviceNames();
   const ents = result.provenance.entities;
   return (
     <div className="iris-summary">
@@ -137,7 +141,7 @@ function NoGraph({ what, result }: { what: string; result: ResultSet }) {
             <li key={`${e.type}-${e.id}-${i}`}>
               {humanize(e.type)}:{" "}
               <SafeLink kind={e.type} id={e.id}>
-                {e.id}
+                {named(e.id, names)}
               </SafeLink>
             </li>
           ))}
@@ -161,6 +165,9 @@ export default function PresentationPlanRenderer({
   /** Told whenever the operator drills into a chart (the renderer also shows the rows). */
   onDrill?: (d: DrillDown) => void;
 }) {
+  // The caller's own inventory (tenant-scoped /api/devices): every device id an
+  // answer displays reads as its hostname; null until loaded or on failure.
+  const names = useDeviceNames();
   const norm = useMemo(() => normalizeResult(rawResult), [rawResult]);
   const plan = useMemo<ValidatedPlan | null>(() => {
     if (!norm.ok) return null;
@@ -214,7 +221,7 @@ export default function PresentationPlanRenderer({
       case "TIMELINE":
         return (
           <IrisTimeline
-            events={timelineEvents(result, plan)}
+            events={timelineEvents(result, plan, names)}
             ariaLabel={plan.title}
             onSelect={
               result.rows.some(isChangeRow)
@@ -285,7 +292,7 @@ export default function PresentationPlanRenderer({
           <ul className="iris-evidence-list">
             {result.rows.slice(0, 50).map((r, i) => (
               <li key={`${rowId(r, i)}#${i}`}>
-                <span>{isChangeRow(r) ? changeTitle(r) : entityLabel(r)}</span>
+                <span>{isChangeRow(r) ? named(changeTitle(r), names) : entityLabel(r, namer(names))}</span>
                 <button type="button" className="iris-linkbtn" onClick={() => setEvidence({ row: r })}>
                   Why am I seeing this?
                 </button>
@@ -312,10 +319,12 @@ export default function PresentationPlanRenderer({
   const wtext = windowText(result);
   const secondaryNode =
     plan.secondary_view && !(empty && DATA_VIEWS.has(plan.secondary_view)) ? renderView(plan.secondary_view, true) : null;
+  const title = named(plan.title, names);
   return (
-    <section className="iris-answer" aria-label={plan.title}>
+    <IrisDeviceNamesContext.Provider value={names}>
+    <section className="iris-answer" aria-label={title}>
       <header className="iris-answer-head">
-        <h3 className="iris-title">{plan.title}</h3>
+        <h3 className="iris-title">{title}</h3>
         {wtext && <span className="iris-muted">{wtext}</span>}
       </header>
 
@@ -342,7 +351,7 @@ export default function PresentationPlanRenderer({
       {result.notes.length > 0 && (
         <ul className="iris-notes" aria-label="Notes">
           {result.notes.map((n, i) => (
-            <li key={i}>{n}</li>
+            <li key={i}>{named(n, names)}</li>
           ))}
         </ul>
       )}
@@ -383,5 +392,6 @@ export default function PresentationPlanRenderer({
       {evidence && <EvidenceDrawer result={result} row={evidence.row} onClose={() => setEvidence(null)} />}
       {openChange && <ChangeDrawer row={openChange} result={result} onClose={() => setOpenChange(null)} />}
     </section>
+    </IrisDeviceNamesContext.Provider>
   );
 }

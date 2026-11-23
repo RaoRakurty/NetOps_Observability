@@ -8,6 +8,11 @@
 
 import { test, expect, type Page, type Route } from "@playwright/test";
 
+// First paint after a navigation compiles the lazy page chunk on the cold dev
+// server: the repo-wide 30 s first-paint wait. Only the FIRST assertion after
+// each goto/reload takes it; every later assertion keeps the default, tight wait.
+const FIRST_PAINT = 30_000;
+
 const ME = { username: "alice", role: "operator", tenant_id: "t_acme", platform_admin: false, accessible_tenants: ["t_acme"], all_tenants: false };
 const HEALTH = { scope: "global", score: 96, band: "healthy", confidence: "high", coverage_status: "OK", signal_classes_live: ["availability"], contributions: [], stale_inputs: [] };
 
@@ -54,8 +59,7 @@ test("make a copy of the default, save it, open it by its address, delete it", a
   const store: Saved[] = [];
   await mockApi(page, store);
   await page.goto("/#/overview/dashboards");
-  // First visit compiles the chunk on the dev server: allow for it.
-  await expect(page.getByTestId("dashboard-list")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("dashboard-list")).toBeVisible({ timeout: FIRST_PAINT });
   await page.getByRole("button", { name: /Make a copy of the default/ }).click();
   await expect(page.getByLabel("Dashboard name")).toHaveValue("Copy of Overview");
   await page.getByLabel("Dashboard name").fill("NOC wall");
@@ -67,13 +71,14 @@ test("make a copy of the default, save it, open it by its address, delete it", a
 
   // A reload by address opens the same dashboard.
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "NOC wall" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "NOC wall" })).toBeVisible({ timeout: FIRST_PAINT });
 
   // The picker on Overview lists it.
   await page.goto("/#/overview/operations");
-  await expect(page.getByTestId("dashboard-picker").locator("option", { hasText: "NOC wall" })).toHaveCount(1);
+  await expect(page.getByTestId("dashboard-picker").locator("option", { hasText: "NOC wall" })).toHaveCount(1, { timeout: FIRST_PAINT });
 
   await page.goto("/#/overview/dashboards");
+  await expect(page.getByTestId("dashboard-list")).toBeVisible({ timeout: FIRST_PAINT });
   await page.getByRole("button", { name: "Delete NOC wall" }).click();
   await page.getByRole("button", { name: 'Delete "NOC wall"' }).click();
   await expect(page.getByText("No dashboards yet. Start from one of the three above.")).toBeVisible();
@@ -83,7 +88,7 @@ test("make a copy of the default, save it, open it by its address, delete it", a
 test("another tenant's dashboard address reads 'does not exist', never a blank page", async ({ page }) => {
   await mockApi(page, []);
   await page.goto("/#/overview/dashboards/0f1e2d3c4b5a69788796a5b4c3d2e1f0");
-  await expect(page.getByTestId("dashboard-missing")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("dashboard-missing")).toBeVisible({ timeout: FIRST_PAINT });
   await expect(page.getByText("This dashboard does not exist")).toBeVisible();
   await expect(page.getByText("It was deleted, or it belongs to another tenant.")).toBeVisible();
 });

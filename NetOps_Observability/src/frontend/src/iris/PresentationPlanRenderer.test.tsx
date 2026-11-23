@@ -17,12 +17,29 @@ vi.mock("../components/EChart", () => ({
   },
 }));
 
+// The renderer reads the caller's inventory (/api/devices) to name devices.
+// `inventory` is what that read answers; empty unless a test sets it.
+type Dev = { id: string; name: string; address: string };
+let inventory: Dev[] = [];
+vi.mock("../services/api", async (orig) => {
+  const real = await orig<typeof import("../services/api")>();
+  return {
+    ...real,
+    api: new Proxy(real.api, {
+      get: (t, k) => (k === "devices" ? async () => inventory : Reflect.get(t, k)),
+    }),
+  };
+});
+
 import PresentationPlanRenderer from "./PresentationPlanRenderer";
 import { VIEW_TYPES } from "./presentation";
 import { HOSTILE, HOSTILE_IMG, baseResult, changeRow, compareResult, incidentResult, seriesResult } from "../test/irisFixtures";
+import { resetDeviceNamesForTest } from "../lib/deviceNames";
 
 beforeEach(() => {
   captured.length = 0;
+  inventory = [];
+  resetDeviceNamesForTest();
 });
 afterEach(cleanup);
 
@@ -278,5 +295,72 @@ describe("PresentationPlanRenderer — the server's plan", () => {
       expect(container.textContent).toContain(HOSTILE);
       unmount();
     }
+  });
+});
+
+// Owner, 2026-11-23: "keep the hostname as it is; internal ids stay internal,
+// never shown". An answer names a device by its internal id
+// (`<sysName>-<address hash>`); every place the operator reads it says the
+// hostname from the caller's own inventory, while links keep the id.
+describe("PresentationPlanRenderer — devices read by hostname, never the internal id", () => {
+  const ID = "cedge-81-dde8d64d";
+  const UNNAMED = "edge-9-0a0b0c0d";
+  const named = () => {
+    inventory = [
+      { id: ID, name: "cEDGE-81", address: "10.255.255.81" },
+      { id: UNNAMED, name: "", address: "10.255.255.9" },
+    ];
+  };
+  const lastOption = () =>
+    captured[captured.length - 1].option as { series: { name: string }[]; yAxis?: { data?: string[] } };
+
+  it("names a chart's lines by hostname, and keeps the id when inventory has no name", async () => {
+    named();
+    const result = seriesResult({
+      series: [
+        { entity: { device: ID, ifname: "Gi2" }, points: [{ t: 1789898400, v: 10 }] },
+        { entity: { device: UNNAMED }, points: [{ t: 1789898400, v: 3 }] },
+      ],
+    });
+    render(<PresentationPlanRenderer result={result} plan={{ primary_view: "TIME_SERIES", title: "Utilization" }} />);
+    await vi.waitFor(() => expect(lastOption().series.map((s) => s.name)).toEqual(["cEDGE-81 · Gi2", UNNAMED]));
+    expect(JSON.stringify(lastOption())).not.toContain("dde8d64d");
+  });
+
+  it("names a bar by hostname, an interface entity as name:if", async () => {
+    named();
+    const result = compareResult({
+      rows: [
+        { device: ID, value: 40, previous: 30, delta: 10 },
+        { interface: `${ID}:Gi2`, value: 25, previous: 20, delta: 5 },
+      ],
+    });
+    render(<PresentationPlanRenderer result={result} plan={{ primary_view: "BAR", title: "Latency" }} />);
+    await vi.waitFor(() => expect(lastOption().yAxis?.data).toEqual(["cEDGE-81", "cEDGE-81:Gi2"]));
+  });
+
+  it("shows the hostname in a table cell while the link still opens the device by its id", async () => {
+    named();
+    const result = baseResult({ query_type: "metric_topn", metric: "cpu", unit: "%", rows: [{ device: ID, value: 91 }] });
+    render(<PresentationPlanRenderer result={result} plan={{ primary_view: "TABLE", title: "Busiest" }} />);
+    const link = await screen.findByRole("link", { name: "cEDGE-81" });
+    expect(link.getAttribute("href") ?? "").toContain(ID);
+    expect(screen.queryByText(ID)).toBeNull();
+  });
+
+  it("names the entities a map-less answer lists, and the plan title", async () => {
+    named();
+    const result = seriesResult({
+      provenance: { source: "victoriametrics", executed_at: "2026-09-20T12:00:01Z", duration_ms: 1, entities: [{ type: "device", id: ID }] },
+    });
+    render(<PresentationPlanRenderer result={result} plan={{ primary_view: "TOPOLOGY", title: `Neighbours of ${ID}` }} />);
+    expect(await screen.findByRole("heading", { name: "Neighbours of cEDGE-81" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "cEDGE-81" }).getAttribute("href") ?? "").toContain(ID);
+  });
+
+  it("shows the value as it is while the inventory has nothing for it", async () => {
+    const result = baseResult({ query_type: "metric_topn", metric: "cpu", unit: "%", rows: [{ device: ID, value: 91 }] });
+    render(<PresentationPlanRenderer result={result} plan={{ primary_view: "TABLE", title: "Busiest" }} />);
+    expect(await screen.findByRole("link", { name: ID })).toBeInTheDocument();
   });
 });

@@ -7,7 +7,8 @@
 // failure, the delete confirm, and a template that starts with real panels.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
+import { StrictMode } from "react";
 
 const api = {
   listSaved: vi.fn(), getSaved: vi.fn(), createSaved: vi.fn(), updateSaved: vi.fn(), deleteSaved: vi.fn(),
@@ -80,6 +81,25 @@ describe("My dashboards — the list", () => {
     fireEvent.click(screen.getByRole("button", { name: 'Delete "NOC wall"' }));
     await waitFor(() => expect(api.deleteSaved).toHaveBeenCalledWith("0f1e2d3c4b5a69788796a5b4c3d2e1f0"));
     expect((await screen.findByRole("alert")).textContent).toMatch(/permission|could not be deleted/i);
+  });
+
+  it("a deleted dashboard stays deleted when an older list read answers last", async () => {
+    // StrictMode mounts twice, so two list reads are in flight; the FIRST one
+    // answers only after the delete's own re-read (as the network may order it).
+    location.hash = "#/overview/dashboards";
+    let answerStale: (v: unknown) => void = () => {};
+    api.listSaved
+      .mockImplementationOnce(() => new Promise((res) => { answerStale = res; }))
+      .mockResolvedValueOnce([board()])
+      .mockResolvedValueOnce([]);
+    api.deleteSaved.mockResolvedValue(undefined);
+    render(<StrictMode><MyDashboards /></StrictMode>);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete NOC wall" }));
+    fireEvent.click(screen.getByRole("button", { name: 'Delete "NOC wall"' }));
+    expect(await screen.findByText(/No dashboards yet/)).toBeTruthy();
+    await act(async () => { answerStale([board()]); });
+    expect(screen.getByText(/No dashboards yet/)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /NOC wall/ })).toBeNull();
   });
 });
 
