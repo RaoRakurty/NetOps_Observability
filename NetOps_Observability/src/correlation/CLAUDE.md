@@ -225,7 +225,9 @@ list (ifindex, addresses, VPN, description) reaches `interface_ips` and `ifindex
 api's interface bridge (`if_bridge.go`, `internal/ifbridge`), keyed by the inventory device
 the controller's key resolves to OWNER-STRICTLY (never by address). VPN ≥ 65528 and
 loopback/link-local addresses are skipped at the source; SNMP and NMS rows for one device
-merge (same port canonically → the SNMP spelling; disagreement → the newer reading); NMS rows
+merge (same port canonically → the SNMP spelling; disagreement → the newer reading; one
+address on several ports of one device → the walk's port, else the non-tunnel one, tracker
+437 — a cEdge's `Tunnel1` never names `GigabitEthernet1`'s address); NMS rows
 outlive their polls for the same 7 days. The wire format is unchanged, so stage [1] reads
 them like SNMP rows. Gauge: `netops_nms_iface_bridge_rows{source,outcome}`.
 
@@ -750,9 +752,16 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   the A4 dwell watch, and the aggregation plane's K1 identity
   (`aggregation.RECOVERY_CLEAR_BASE`, policy `p3.k3.v2`; one-to-one, so the forwarded
   set is unchanged). The RCA document's never-established reading also counts a BGP
-  clear for the peer as established (`rcaNeverEstablishedOnly`). `up` is a positional
+  clear for the peer as established (`rcaNeverEstablishedOnly`). The archive slice keeps
+  every loose clear in the object's bounds tenant-wide, so the RCA report's recovery stage
+  and the ticket emitter gate read a clear (or a `*_status` up) as recovery only when it is
+  on one of the incident's own anomalous entities (tracker 443,
+  `rca.RecoveryEvidenceForIncident`; read side, engine unchanged). `up` is a positional
   claim (380 PR 2): rows classify the state a transition goes TO, so `from FULL to
-  EXSTART` is a down, not a recovery. Not clears, deliberately: STP forwarding (a
+  EXSTART` is a down, not a recovery. 2-Way is neither on BOTH OSPF lanes: the
+  syslog row's `to 2WAY` and the trap row's `twoWay(4)` / bare `4` read `unknown`
+  (tracker 444; before it the trap read every DROTHER demotion as a `high` loss).
+  Not clears, deliberately: STP forwarding (a
   topology change), FHRP roles, LLDP neighbour adds. **Wireless too (tracker 442,
   2026-11-23):** an AP rejoin / radio back up is `wireless_ap_down_clear` /
   `wireless_radio_down_clear` (nms/wireless_events.go); before it the `wireless_*_up`

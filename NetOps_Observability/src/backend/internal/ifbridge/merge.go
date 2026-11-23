@@ -4,7 +4,9 @@
 package ifbridge
 
 import (
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -23,6 +25,11 @@ const (
 	MergeConflictWon  = "conflict_won"  // the sources disagree and this one is newer
 	MergeConflictLost = "conflict_lost" // the sources disagree and the other one is newer
 	MergeSharedAddr   = "shared_address"
+	// MergeMultiPort counts (device, address) pairs the controller reported on
+	// more than one port of ONE device (cEdge: Tunnel1 rides GigabitEthernet1's
+	// address). The bridge names one of them (pickAddrPort); the count says how
+	// often it had to choose.
+	MergeMultiPort = "multi_port_address"
 )
 
 // SNMP is the SNMP half as the collector publishes it.
@@ -79,6 +86,21 @@ func defaultSamePort(a, b string) bool {
 	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
+// tunnelNamePattern names a tunnel virtual interface by its vendor spelling:
+// Cisco IOS/IOS-XE/NX-OS and Arista `Tunnel1`/`Tu1`, IOS-XR `tunnel-ip1` /
+// `tunnel-te1`, Juniper `gr-` (GRE), `ip-` (IP-IP), `st0` (secure tunnel),
+// `fti0` (flexible tunnel), Nokia `tunnel-1`, vEdge/Linux `ipsec1`, `gre1`,
+// `vti0`. A digit must follow, so `Stack1` or a bare word is not a tunnel.
+var tunnelNamePattern = regexp.MustCompile(`(?i)^(tunnel(-ip|-te|-mte|-tp)?|tu|gr-|ip-|st|fti|ipsec|vti|gre)-?\d`)
+
+// TunnelPort reports a tunnel virtual interface: by the IANA ifType the
+// controller states (KindTunnel), else by its name. A tunnel borrows the
+// address of the port it rides (`ip unnumbered`, an SD-WAN TLOC); it never
+// owns it.
+func TunnelPort(ifName, kind string) bool {
+	return kind == KindTunnel || tunnelNamePattern.MatchString(strings.TrimSpace(ifName))
+}
+
 type nmsVal struct {
 	name, vrf string
 	at        int64
@@ -90,6 +112,68 @@ func put(m map[string]map[string]string, dev, k, v string) {
 		m[dev] = map[string]string{}
 	}
 	m[dev][k] = v
+}
+
+// pickAddrPort names the ONE port of a device an address stands for when the
+// controller lists it on several (tracker 437). The row order is never the
+// answer: the store sorts rows by name, so `Tunnel1` would beat
+// `GigabitEthernet1` and Juniper `gr-`/`st0` would beat `ge-` on every poll.
+// In order:
+//
+//  1. the port the device's own SNMP walk names for the address (ipAddrTable
+//     maps an address to exactly one ifIndex), so a controller reading agrees
+//     with the walk instead of overriding it;
+//  2. a port that is not a tunnel (TunnelPort): a tunnel borrows the address
+//     of the port it rides and never owns it;
+//  3. the lowest ifIndex (a row without one last), then the name,
+//     case-insensitively, then the VRF — a stable tie-break.
+//
+// multi reports that the rows name more than one port (canonically: two
+// spellings of one port are one port).
+func pickAddrPort(rows []Row, snmpName string, same SamePort) (pick Row, multi bool) {
+	pick = rows[0]
+	for _, r := range rows[1:] {
+		if !same(r.IfName, pick.IfName) {
+			multi = true
+		}
+		if betterAddrPort(r, pick, snmpName, same) {
+			pick = r
+		}
+	}
+	return pick, multi
+}
+
+// betterAddrPort reports whether a ranks before b under pickAddrPort's order.
+func betterAddrPort(a, b Row, snmpName string, same SamePort) bool {
+	if snmpName != "" {
+		if sa, sb := same(a.IfName, snmpName), same(b.IfName, snmpName); sa != sb {
+			return sa
+		}
+	}
+	if ta, tb := TunnelPort(a.IfName, a.Kind), TunnelPort(b.IfName, b.Kind); ta != tb {
+		return tb
+	}
+	ia, oka := ifIndexOrder(a.IfIndex)
+	ib, okb := ifIndexOrder(b.IfIndex)
+	if oka != okb {
+		return oka
+	}
+	if ia != ib {
+		return ia < ib
+	}
+	if na, nb := strings.ToLower(a.IfName), strings.ToLower(b.IfName); na != nb {
+		return na < nb
+	}
+	if a.IfName != b.IfName {
+		return a.IfName < b.IfName
+	}
+	return a.VRF < b.VRF
+}
+
+// ifIndexOrder reads a validated ifIndex for ordering; ok=false when absent.
+func ifIndexOrder(s string) (uint64, bool) {
+	n, err := strconv.ParseUint(s, 10, 32)
+	return n, err == nil
 }
 
 // mergeOne folds one NMS value into one SNMP-seeded map entry and reports the
@@ -151,6 +235,7 @@ func Merge(snmp SNMP, nms State, same SamePort, owners map[string]string) Merged
 		}
 		out.NMS[dev] = copyDeviceRows(*d)
 		idx, addr, alias := map[string]nmsVal{}, map[string]nmsVal{}, map[string]nmsVal{}
+		holders := map[string][]Row{} // address → every row of this device that lists it
 		for _, r := range d.Rows {
 			if r.IfIndex != "" {
 				idx[r.IfIndex] = nmsVal{name: r.IfName, at: d.At}
@@ -159,8 +244,15 @@ func Merge(snmp SNMP, nms State, same SamePort, owners map[string]string) Merged
 				}
 			}
 			for _, a := range r.Addrs {
-				addr[a] = nmsVal{name: r.IfName, vrf: r.VRF, at: d.At}
+				holders[a] = append(holders[a], r)
 			}
+		}
+		for a, rows := range holders {
+			r, multi := pickAddrPort(rows, snmp.Addr[dev][a], same)
+			if multi {
+				count(SourceNMS, MergeMultiPort)
+			}
+			addr[a] = nmsVal{name: r.IfName, vrf: r.VRF, at: d.At}
 		}
 		for _, k := range sortedKeys(idx) {
 			v := idx[k]

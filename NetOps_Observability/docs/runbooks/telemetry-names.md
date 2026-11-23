@@ -22,7 +22,11 @@ Metrics:
   the interface bridge is the SNMP walk's rows merged with each controller's interface
   list (`if_bridge.go`, `internal/ifbridge`). `bridged` is what stands in the address and
   ifIndex maps per source; `agreed`/`conflict_won`/`conflict_lost` compare the two sources
-  for one device (newer reading wins); for the NMS source, `device_unresolved`,
+  for one device (newer reading wins); `multi_port_address` counts addresses a controller
+  listed on more than one port of one device (a cEdge's `Tunnel1` riding
+  `GigabitEthernet1`) — the bridge names the port the device's own walk names, else the
+  non-tunnel port, else the lowest ifIndex, never the row order (tracker 437); for the NMS
+  source, `device_unresolved`,
   `device_ambiguous`, `internal_vpn`, `unidentifying_address`, `truncated` and `stale` say why
   a controller's record reached no row.
 - `netops_inventory_facts{fact,source,state}`: how model, site and role were settled for each
