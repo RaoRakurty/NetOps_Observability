@@ -42,7 +42,10 @@ collector counts, per-collector rows and flow sources moved to
 
 ### Step 2 - Pick a symptom or an open case
 
-Under **What's wrong?**, search or select one entry point. The nine canonical
+Under **Start troubleshooting**, pick a case under **Open cases**, or describe
+the problem under **Describe a problem** and press **Start investigation**.
+The card for a case carries an icon for its kind: a pulse for a case Correlix
+correlated, a pen for one you described. The nine canonical
 workflows and the lanes each one opens:
 
 | Symptom | Lanes it opens |
