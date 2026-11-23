@@ -454,7 +454,10 @@ func (s *server) buildTicketPayloadForObject(ctx context.Context, scope, exclude
 	view := rca.BuildPathView(id, meta, sigRows, edgeRows)
 	facts := buildCorrTicketFacts(meta, sigRows, view)
 	policy := (&ticketSweeper{store: s.ticketing, srv: s}).resolvePolicy(ctx, owner, "servicenow")
-	payload := buildTicketPayload(view, facts, policy, envOr("RCA_BASE_URL", ""))
+	// The ticket names devices by hostname (the OWNING tenant's devices only,
+	// §3a) — ids stay in the machine fields.
+	payload := buildTicketPayload(view, facts, policy, envOr("RCA_BASE_URL", "")).
+		WithOperatorText(s.tenantDeviceNames(owner).Text)
 	return payload, policy, owner, mergedInto, http.StatusOK, nil
 }
 

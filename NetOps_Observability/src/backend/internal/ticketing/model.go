@@ -159,6 +159,36 @@ type Payload struct {
 	AssignmentGroup   string   `json:"assignment_group,omitempty"`
 }
 
+// WithOperatorText returns a copy of p whose human-readable fields — the words
+// a person reads in the ticket — are passed through f. Identifiers (the
+// correlation id, the RCA link, the signature, the assignment group) are never
+// touched, so dedupe, links and routing keep keying on the ids. Used to name a
+// device by its hostname instead of its internal id (owner, 2026-11-23). A nil
+// f returns p unchanged.
+func (p Payload) WithOperatorText(f func(string) string) Payload {
+	if f == nil {
+		return p
+	}
+	all := func(in []string) []string {
+		if in == nil {
+			return nil
+		}
+		out := make([]string, len(in))
+		for i, s := range in {
+			out[i] = f(s)
+		}
+		return out
+	}
+	p.Title = f(p.Title)
+	p.Summary = f(p.Summary)
+	p.RecommendedAction = f(p.RecommendedAction)
+	p.AffectedScope = f(p.AffectedScope)
+	p.AffectedEntities = all(p.AffectedEntities)
+	p.EvidenceUsed = all(p.EvidenceUsed)
+	p.MissingEvidence = all(p.MissingEvidence)
+	return p
+}
+
 // Decision is the pure verdict of the incident policy: open a ticket or
 // hold, with an operator-readable reason (surfaced verbatim in the UI's
 // Recommended-Action blocked-reason text — no raw-alert language).

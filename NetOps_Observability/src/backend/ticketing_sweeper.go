@@ -6,6 +6,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"netops/backend/internal/devname"
 	"netops/backend/internal/rca"
 	"netops/backend/internal/ticketing"
 	"os"
@@ -213,7 +214,7 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 			lp = &link
 		}
 
-		act := decideSweepAction(view, facts, policy, lp, sw.baseURL, now)
+		act := decideSweepAction(view, facts, policy, lp, sw.baseURL, now, sw.deviceNames(c.tenant))
 		if act.SuppressionReason != "" {
 			// NEVER a silent drop (§10): the gate's hold is observable and
 			// structured; the object re-evaluates naturally on the next sweep.
@@ -244,10 +245,23 @@ func (sw *ticketSweeper) evaluate(ctx context.Context, c sweepCandidate, now tim
 
 // decideSweepAction delegates to the package decision (P2 RA.5); the payload
 // is assembled lazily so the package never sees main's RCA view types.
-func decideSweepAction(view rcaPathView, facts ticketing.CorrFacts, policy ticketing.IncidentPolicy, link *ticketing.Link, baseURL string, now time.Time) ticketing.SweepAction {
+//
+// names (may be nil) rewrites device ids to hostnames in the ticket's operator
+// text. It runs before PayloadHash, so a device rename updates an open ticket
+// once — and the first sweep after this change updates each open ticket once.
+func decideSweepAction(view rcaPathView, facts ticketing.CorrFacts, policy ticketing.IncidentPolicy, link *ticketing.Link, baseURL string, now time.Time, names *devname.Replacer) ticketing.SweepAction {
 	return ticketing.DecideSweepAction(facts, policy, link, now, func() ticketing.Payload {
-		return buildTicketPayload(view, facts, policy, baseURL)
+		return buildTicketPayload(view, facts, policy, baseURL).WithOperatorText(names.Text)
 	})
+}
+
+// deviceNames: the owning tenant's id → hostname rewrite for its outbound
+// tickets (nil without a server, e.g. in unit tests — ids then stand).
+func (sw *ticketSweeper) deviceNames(tenant string) *devname.Replacer {
+	if sw.srv == nil {
+		return nil
+	}
+	return sw.srv.tenantDeviceNames(tenant)
 }
 
 func (sw *ticketSweeper) resolvePolicy(ctx context.Context, tenant, system string) ticketing.IncidentPolicy {

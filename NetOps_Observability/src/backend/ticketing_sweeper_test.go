@@ -83,14 +83,14 @@ func TestDecideSweepAction(t *testing.T) {
 	view := sampleView()
 
 	// 1) Confirmed customer-facing fault, no existing link → CREATE.
-	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, nil, "", now); act.Kind != "create" {
+	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, nil, "", now, nil); act.Kind != "create" {
 		t.Fatalf("confirmed customer fault should create, got %q", act.Kind)
 	}
 
 	// 2) Undetermined → hold (no grounded cause).
 	undet := confirmedCustomerFacts()
 	undet.Verdict = "undetermined"
-	if act := decideSweepAction(view, undet, policy, nil, "", now); act.Kind != "" {
+	if act := decideSweepAction(view, undet, policy, nil, "", now, nil); act.Kind != "" {
 		t.Fatalf("undetermined must not ticket, got %q", act.Kind)
 	}
 
@@ -99,7 +99,7 @@ func TestDecideSweepAction(t *testing.T) {
 	internal.Internal = true
 	iv := view
 	iv.Internal = true
-	if act := decideSweepAction(iv, internal, policy, nil, "", now); act.Kind != "" {
+	if act := decideSweepAction(iv, internal, policy, nil, "", now, nil); act.Kind != "" {
 		t.Fatalf("internal monitoring must not ticket, got %q", act.Kind)
 	}
 
@@ -109,14 +109,14 @@ func TestDecideSweepAction(t *testing.T) {
 		TenantID: "t_a", CorrObjectID: view.CorrObjectID, ExternalSystem: "servicenow",
 		Status: "open", LastPayloadHash: ticketing.PayloadHash(created),
 	}
-	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, openLink, "", now); act.Kind != "" {
+	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, openLink, "", now, nil); act.Kind != "" {
 		t.Fatalf("open ticket with unchanged state must not re-enqueue, got %q", act.Kind)
 	}
 
 	// 5) Open ticket whose RCA state MOVED ON (payload hash differs) → UPDATE.
 	staleLink := *openLink
 	staleLink.LastPayloadHash = "deadbeefdeadbeef"
-	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, &staleLink, "", now); act.Kind != "update" {
+	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, &staleLink, "", now, nil); act.Kind != "update" {
 		t.Fatalf("open ticket with changed state should update, got %q", act.Kind)
 	}
 }
@@ -133,7 +133,7 @@ func TestDecideSweepActionConsistencyGate(t *testing.T) {
 	// P1-contradictory facts → create suppressed with reason.
 	bad := confirmedCustomerFacts()
 	bad.ConsistencyIssues = []string{"recovered_before_last_anomaly: closure recovery evidence at X precedes anomalous evidence through Y"}
-	act := decideSweepAction(view, bad, policy, nil, "", now)
+	act := decideSweepAction(view, bad, policy, nil, "", now, nil)
 	if act.Kind != "" {
 		t.Fatalf("contradictory facts enqueued a %q action", act.Kind)
 	}
@@ -148,12 +148,12 @@ func TestDecideSweepActionConsistencyGate(t *testing.T) {
 		Status: "open", LastPayloadHash: "deadbeefdeadbeef",
 	}
 	_ = created
-	if act := decideSweepAction(view, bad, policy, stale, "", now); act.Kind != "" || act.SuppressionReason == "" {
+	if act := decideSweepAction(view, bad, policy, stale, "", now, nil); act.Kind != "" || act.SuppressionReason == "" {
 		t.Fatalf("contradictory update not held: kind=%q reason=%q", act.Kind, act.SuppressionReason)
 	}
 
 	// Clean facts pass through unchanged.
-	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, nil, "", now); act.Kind != "create" || act.SuppressionReason != "" {
+	if act := decideSweepAction(view, confirmedCustomerFacts(), policy, nil, "", now, nil); act.Kind != "create" || act.SuppressionReason != "" {
 		t.Fatalf("clean facts should create: kind=%q reason=%q", act.Kind, act.SuppressionReason)
 	}
 
@@ -162,7 +162,7 @@ func TestDecideSweepActionConsistencyGate(t *testing.T) {
 	canary := confirmedCustomerFacts()
 	canary.Validation = true
 	canary.ConsistencyIssues = nil
-	if act := decideSweepAction(view, canary, policy, nil, "", now); act.Kind != "" || act.SuppressionReason != "" {
+	if act := decideSweepAction(view, canary, policy, nil, "", now, nil); act.Kind != "" || act.SuppressionReason != "" {
 		t.Fatalf("validation scenario handling changed: kind=%q reason=%q", act.Kind, act.SuppressionReason)
 	}
 }
@@ -272,7 +272,7 @@ func TestSweeperEnqueueIsTenantScoped(t *testing.T) {
 
 	// Two tenants' objects both decide CREATE; the sweep enqueues each under the
 	// object's OWN tenant (derived from the candidate row, never a request body).
-	act := decideSweepAction(view, confirmedCustomerFacts(), policy, nil, "", time.Now().UTC())
+	act := decideSweepAction(view, confirmedCustomerFacts(), policy, nil, "", time.Now().UTC(), nil)
 	if act.Kind != "create" {
 		t.Fatalf("precondition: expected create, got %q", act.Kind)
 	}

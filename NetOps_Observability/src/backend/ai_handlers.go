@@ -270,6 +270,10 @@ func (s *server) aiAskRun(r *http.Request, claims jwtClaims, req aiAskRequest, q
 		s.aiScore.ObserveRequest(string(ai.ClassInvestigation), "error", 0)
 		return ai.Answer{}, err
 	}
+	// Devices read by hostname, never the internal id — the asker's own visible
+	// devices only (§3a). Before the turn is recorded, so the transcript and the
+	// ledger hold what the asker saw.
+	ans.RewriteOperatorText(s.callerDeviceNames(claims, "").Text)
 	// N-H4: one observation per ask, JSON and stream alike, by the class of
 	// the answer actually shipped.
 	class, outcome := ai.ClassFor(ans.Mode, ans.Intent)
