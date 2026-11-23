@@ -86,6 +86,17 @@ export default function NavFlyout({
 
   const children = section.children ?? [];
 
+  // Collapsible leaves (NavLeaf.collapsible): their sub-items stay hidden until
+  // the leaf is clicked. A leaf the current route is inside starts open, so the
+  // page you are on is never hidden behind a click.
+  const inside = (leafId: string, subs: { route?: string }[] | undefined) =>
+    curPath === `${section.id}/${leafId}` ||
+    curPath.startsWith(`${section.id}/${leafId}/`) ||
+    (subs ?? []).some((x) => x.route !== undefined && curPath === x.route);
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
+  const isOpen = (leafId: string, subs: { route?: string }[] | undefined) =>
+    toggled[leafId] ?? inside(leafId, subs);
+
   return (
     <div
       ref={ref}
@@ -122,18 +133,26 @@ export default function NavFlyout({
               const active = section.id === activeSection && leaf.id === activeLeaf;
               const header = leaf.group && leaf.group !== lastGroup ? leaf.group : null;
               lastGroup = leaf.group;
+              const collapsible = !!leaf.collapsible && (leaf.subItems?.length ?? 0) > 0;
+              const open = collapsible && isOpen(leaf.id, leaf.subItems);
               return (
                 <Fragment key={leaf.id}>
                   {header && <div className="nav-flyout-group" role="presentation">{header}</div>}
                   <button
                     type="button"
                     role="menuitem"
-                    className={`nav-flyout-item${active ? " active" : ""}${leaf.subItems ? " has-sub" : ""}`}
-                    onClick={() => onNavigate(`${section.id}/${leaf.id}`)}
+                    className={`nav-flyout-item${active ? " active" : ""}${leaf.subItems ? " has-sub" : ""}${collapsible ? " collapsible" : ""}`}
+                    aria-expanded={collapsible ? open : undefined}
+                    onClick={() =>
+                      collapsible
+                        ? setToggled((t) => ({ ...t, [leaf.id]: !open }))
+                        : onNavigate(`${section.id}/${leaf.id}`)
+                    }
                   >
                     {leaf.label}
+                    {collapsible && <span className="nav-flyout-chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>}
                   </button>
-                  {(leaf.subItems ?? []).map((sub) => {
+                  {(!collapsible || open) && (leaf.subItems ?? []).map((sub) => {
                     const target = sub.route ?? `${section.id}/${leaf.id}/${sub.id}`;
                     const subActive = curPath === target;
                     return (
