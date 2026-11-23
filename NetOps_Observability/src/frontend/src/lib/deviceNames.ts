@@ -89,6 +89,34 @@ export function nameDeviceIn(text: string, id: string | undefined, name: string 
   }
 }
 
+const URL_RUNE = /[/=?#&%@\\]/;
+
+/** Swap EVERY whole-token device id the inventory names in operator text — the
+ *  server RCA title, an engine sentence — for its name. Mirrors the server's
+ *  internal/devname Replacer: a token is swapped only when it is exactly a known
+ *  id; never inside a link or query (preceded by / = ? # & % @); trailing
+ *  punctuation ('.', the '-' of an "a->b" arrow) is not part of an id; an
+ *  interface keeps its colon form ("cedge-81-dde8d64d:Gi2" → "cEDGE-81:Gi2"). */
+export function nameDevicesIn(text: string, names: DeviceNames | null | undefined): string {
+  if (!text || !names || names.size === 0) return text;
+  let out = "";
+  let last = 0;
+  for (let i = 0; i < text.length;) {
+    if (!ID_RUNE.test(text[i])) { i++; continue; }
+    let j = i;
+    while (j < text.length && ID_RUNE.test(text[j])) j++;
+    let end = j;
+    while (end > i && (text[end - 1] === "." || text[end - 1] === "-" || text[end - 1] === "_")) end--;
+    const name = names.get(text.slice(i, end));
+    if (name && name !== text.slice(i, end) && (i === 0 || !URL_RUNE.test(text[i - 1]))) {
+      out += text.slice(last, i) + name;
+      last = end;
+    }
+    i = j;
+  }
+  return last === 0 ? text : out + text.slice(last);
+}
+
 /** One shared, short-lived read of the caller's inventory. A failed read is not
  *  cached, so the next caller tries again. */
 export function loadDeviceNames(now: number = Date.now()): Promise<DeviceNames> {
