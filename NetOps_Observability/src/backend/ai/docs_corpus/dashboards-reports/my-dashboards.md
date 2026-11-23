@@ -65,14 +65,14 @@ tenant opens.
 1. Go to **Overview → My dashboards**.
 2. Next to the dashboard, select **Make this the team default**. The list marks
    it **Team default**.
-3. To go back to the built-in Overview, select **Reset to built-in**.
+3. To go back to the Operations Overview, select **Reset to built-in**.
 
 Everyone in the tenant now opens that dashboard from **Overview**. The
 **Dashboard** picker reads **Overview (team default)** and still offers
-**Built-in Overview**, which opens at `#/overview/operations/builtin`. Each
+**Operations Overview**, which opens at `#/overview/operations/builtin`. Each
 person's own dashboards stay in the list as before.
 
 Only a dashboard of your own tenant can be the team default, and another tenant
 never sees it. If the team default is deleted, or someone may not read
-dashboards, Overview shows the built-in page with a short note saying the team
+dashboards, Overview shows the Operations Overview with a short note saying the team
 default is not available. Only a tenant administrator sees the two buttons.

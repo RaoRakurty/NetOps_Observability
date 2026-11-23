@@ -13,13 +13,18 @@ import { dashHref } from "./dashboardModel";
 const DEFAULT_VALUE = "__default";
 const BUILTIN_VALUE = "__builtin";
 const MANAGE_VALUE = "__manage";
+const STANDARD_VALUE = "__standard";
 
 /** The built-in Overview's own address, for when the tenant has a team default. */
 export const BUILTIN_OVERVIEW_HREF = "#/overview/operations/builtin";
 
+/** The 2026-11-22 merged Overview layout, kept one address away since the
+ *  Operations Overview came back as the default (owner, 2026-11-23). */
+export const STANDARD_OVERVIEW_HREF = "#/overview/operations/standard";
+
 /** `teamDefault`: the tenant has a team-default dashboard, so "Overview
  *  (default)" opens it and the built-in Overview gets its own entry. */
-export default function DashboardPicker({ current, teamDefault = false }: { current: "default" | "builtin" | string; teamDefault?: boolean }) {
+export default function DashboardPicker({ current, teamDefault = false }: { current: "default" | "builtin" | "standard" | string; teamDefault?: boolean }) {
   const [boards, setBoards] = useState<SavedObject[]>([]);
   useEffect(() => {
     let alive = true;
@@ -30,20 +35,23 @@ export default function DashboardPicker({ current, teamDefault = false }: { curr
     return () => { alive = false; };
   }, []);
 
-  const value = current === "default" ? DEFAULT_VALUE : current === "builtin" ? BUILTIN_VALUE : current;
+  const value = current === "default" ? DEFAULT_VALUE : current === "builtin" ? BUILTIN_VALUE
+    : current === "standard" ? STANDARD_VALUE : current;
   const go = (v: string) => {
     if (v === DEFAULT_VALUE) location.hash = "#/overview/operations";
     else if (v === BUILTIN_VALUE) location.hash = BUILTIN_OVERVIEW_HREF;
+    else if (v === STANDARD_VALUE) location.hash = STANDARD_OVERVIEW_HREF;
     else if (v === MANAGE_VALUE) location.hash = dashHref({ kind: "list" });
     else location.hash = dashHref({ kind: "open", id: v });
   };
-  const named = current !== "default" && current !== "builtin";
+  const named = current !== "default" && current !== "builtin" && current !== "standard";
   return (
     <label className="ov-picker">
       <span className="ov-picker-l">Dashboard</span>
       <select value={value} onChange={(e) => go(e.target.value)} aria-label="Dashboard" data-testid="dashboard-picker">
         <option value={DEFAULT_VALUE}>{teamDefault ? "Overview (team default)" : "Overview (default)"}</option>
-        {(teamDefault || current === "builtin") && <option value={BUILTIN_VALUE}>Built-in Overview</option>}
+        {(teamDefault || current === "builtin") && <option value={BUILTIN_VALUE}>Operations Overview</option>}
+        <option value={STANDARD_VALUE}>Standard layout</option>
         {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         {named && !boards.some((b) => b.id === current) && <option value={current}>This dashboard</option>}
         <option value={MANAGE_VALUE}>Manage dashboards…</option>
