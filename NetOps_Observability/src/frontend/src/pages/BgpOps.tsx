@@ -539,6 +539,8 @@ export default function BgpOps({ embedded = false }: { embedded?: boolean } = {}
     () => updateTotals(updates?.updates, rs?.last_seen?.origin),
     [updates, rs],
   );
+  // What an unread route-change count says instead of a number.
+  const unreadUpdates = status ? "Not read yet" : "Nothing selected";
   const todo = useMemo(() => nextSteps({
     resource: status?.resource,
     incident: activeIncident,
@@ -765,13 +767,16 @@ export default function BgpOps({ embedded = false }: { embedded?: boolean } = {}
           actions={<AskIris topic="bgp.suspicious-announcements" label="Suspicious" />}
           wide
         >
+          {/* Until the route changes are read (or when the read failed) the
+              counts are UNKNOWN: a dash, never a reassuring "0 · None". */}
           <Kpis cols={3}>
-            <Kpi n={totals.learned} label="Routes learned"
-              interp="In this window"
+            <Kpi n={updates ? totals.learned : "—"} label="Routes learned"
+              interp={updates ? "In this window" : unreadUpdates}
+              tone={updates ? undefined : "var(--muted)"}
               title="Announcements seen for this resource over the fetched window." />
-            <Kpi n={totals.withdrawn} label="Routes withdrawn"
-              interp={totals.withdrawn > 0 ? "In this window" : "None"}
-              tone={totals.withdrawn > 0 ? "var(--crit)" : undefined}
+            <Kpi n={updates ? totals.withdrawn : "—"} label="Routes withdrawn"
+              interp={!updates ? unreadUpdates : totals.withdrawn > 0 ? "In this window" : "None"}
+              tone={!updates ? "var(--muted)" : totals.withdrawn > 0 ? "var(--crit)" : undefined}
               title="Withdrawals seen for this resource over the fetched window." />
             <Kpi
               n={totals.suspicious === null ? "—" : totals.suspicious}

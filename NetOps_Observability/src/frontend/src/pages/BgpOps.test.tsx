@@ -519,14 +519,55 @@ describe("the numbers a NOC admin reads first", () => {
     });
     const { container } = render(<BgpOps />);
     submitQuery("203.0.113.0/24");
-    const upd = await waitFor(() => {
+    // The labels render before the route changes are read; wait for the VALUES
+    // (the loaded signal), not the labels — reading the tiles at the labels was
+    // the CI race (2026-11-23: it read the pre-load row).
+    const updTiles = () => {
       const el = container.querySelector('[data-section="updates"]') as HTMLElement;
-      expect(within(el).getByText("Routes learned")).toBeTruthy();
-      return el;
-    });
-    const tiles = [...upd.querySelectorAll(".bgp-kpi")] as HTMLElement[];
-    expect(tiles.map((t) => t.querySelector(".bgp-kpi-n")?.textContent)).toEqual(["2", "1", "1"]);
+      return [...el.querySelectorAll(".bgp-kpi")].map((t) => t.querySelector(".bgp-kpi-n")?.textContent);
+    };
+    await waitFor(() => expect(updTiles()).toEqual(["2", "1", "1"]));
+    const upd = container.querySelector('[data-section="updates"]') as HTMLElement;
     expect(within(upd).getByText("Suspicious")).toBeTruthy();
+  });
+
+  it("shows dashes, never a reassuring zero, until the route changes are read", async () => {
+    bgpStatus.mockResolvedValue({
+      resource: "203.0.113.0/24", kind: "prefix",
+      routing_status: { announced: true, last_seen: { origin: "AS64500" } },
+    });
+    const pending = deferred<unknown>();
+    bgpUpdates.mockReturnValue(pending.promise);
+    const { container } = render(<BgpOps />);
+    const upd = () => container.querySelector('[data-section="updates"]') as HTMLElement;
+    const values = () => [...upd().querySelectorAll(".bgp-kpi")].map((t) => t.querySelector(".bgp-kpi-n")?.textContent);
+    // Nothing selected: unknown, not zero.
+    await waitFor(() => expect(values()).toEqual(["—", "—", "—"]));
+    expect(within(upd()).getAllByText("Nothing selected")).toHaveLength(2);
+    // Selected, but the read is still in flight: still unknown.
+    submitQuery("203.0.113.0/24");
+    await waitFor(() => expect(bgpUpdates).toHaveBeenCalled());
+    await waitFor(() => expect(within(upd()).getAllByText("Not read yet")).toHaveLength(2));
+    expect(values()).toEqual(["—", "—", "—"]);
+    expect(within(upd()).queryByText("None")).toBeNull();
+    // The read lands: real numbers.
+    pending.resolve({ resource: "203.0.113.0/24", kind: "prefix", updates: { updates: [{ type: "W", timestamp: "2026-09-06T10:10:00" }] } });
+    await waitFor(() => expect(values()).toEqual(["0", "1", "—"]));
+  });
+
+  it("a failed route-change read stays a dash, not zero", async () => {
+    bgpStatus.mockResolvedValue({
+      resource: "203.0.113.0/24", kind: "prefix",
+      routing_status: { announced: true, last_seen: { origin: "AS64500" } },
+    });
+    bgpUpdates.mockRejectedValue(new Error("RIPEstat timed out"));
+    const { container } = render(<BgpOps />);
+    submitQuery("203.0.113.0/24");
+    await waitFor(() => expect(bgpUpdates).toHaveBeenCalled());
+    const upd = container.querySelector('[data-section="updates"]') as HTMLElement;
+    await waitFor(() => expect(within(upd).getAllByText("Not read yet")).toHaveLength(2));
+    const values = [...upd.querySelectorAll(".bgp-kpi")].map((t) => t.querySelector(".bgp-kpi-n")?.textContent);
+    expect(values).toEqual(["—", "—", "—"]);
   });
 });
 
