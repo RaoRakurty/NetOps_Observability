@@ -363,8 +363,8 @@ OTHER_LANE_KINDS = frozenset({
     "synthetic_http_latency_high", "synthetic_icmp_loss",
     "synthetic_tcp_connect_fail", "synthetic_tcp_probe_fail",
     "synthetic_timeout", "synthetic_tls_fail", "wireless_ap_down",
-    "wireless_ap_join_flap", "wireless_ap_up", "wireless_radio_down",
-    "wireless_radio_up",
+    "wireless_ap_join_flap", "wireless_ap_down_clear", "wireless_radio_down",
+    "wireless_radio_down_clear",  # tracker 442: recoveries are clears
 })
 
 

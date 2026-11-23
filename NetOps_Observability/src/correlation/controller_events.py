@@ -64,10 +64,8 @@ _ENTITY_BY_KIND = {
     # Go synthesis (nms/wireless_events.go), so binding is direct and the
     # rank-1 containment grounding works from the id structure alone.
     "wireless_ap_down": EntityType.ACCESS_POINT,
-    "wireless_ap_up": EntityType.ACCESS_POINT,
     "wireless_ap_join_flap": EntityType.ACCESS_POINT,
     "wireless_radio_down": EntityType.RADIO,
-    "wireless_radio_up": EntityType.RADIO,
     "wireless_wlc_member_failover": EntityType.WIRELESS_CONTROLLER,
     "wireless_channel_util_high": EntityType.RADIO,
     "wireless_interference": EntityType.RADIO,
@@ -75,6 +73,14 @@ _ENTITY_BY_KIND = {
     "wireless_coverage_low_rssi": EntityType.RADIO,
     "wireless_radar_event": EntityType.RADIO,
     "wireless_retry_rate_high": EntityType.RADIO,
+}
+
+# Tracker 442: a wireless recovery is `<fault kind>_clear` (nms/wireless_events.go).
+# An api older than that change, or a replayed record, still carries the retired
+# spelling, which was its own kind and so a LIVE node; it folds onto the clear here.
+_RETIRED_RECOVERY_KINDS = {
+    "wireless_ap_up": "wireless_ap_down_clear",
+    "wireless_radio_up": "wireless_radio_down_clear",
 }
 
 # Routing-session kinds bind to "<device>:<peer>" when the peer is known.
@@ -214,6 +220,7 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
     if not tenant:
         return None
     kind = str(ev.get("normalized_event_type") or "controller_alarm").strip()
+    kind = _RETIRED_RECOVERY_KINDS.get(kind, kind)
     source_system = str(ev.get("source_system") or "controller").strip()
 
     device = str(ev.get("device_id") or ev.get("device_name") or "").strip()

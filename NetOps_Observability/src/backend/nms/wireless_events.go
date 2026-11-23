@@ -82,7 +82,11 @@ func WirelessStateChangeEvents(spec ConnectorSpec, tenant, integrationID string,
 
 // wirelessEventKind maps one transition to its normalized event kind +
 // severity. Returns "" to emit nothing (unknown target states stay silent —
-// an unmappable transition must not fabricate a fault).
+// an unmappable transition must not fabricate a fault). A recovery is
+// `<fault kind>_clear` (tracker 442), the convention every other lane uses: the
+// engine's build_nodes, the RCA document and the UI read only that suffix as a
+// recovery. The retired `wireless_ap_up` / `wireless_radio_up` spellings were
+// live nodes; the engine folds them onto the clear for an older api.
 func wirelessEventKind(ch StateChange) (kind, severity string) {
 	switch ch.Record.StateKind {
 	case "ap_join":
@@ -97,14 +101,14 @@ func wirelessEventKind(ch StateChange) (kind, severity string) {
 				// Recovery during a flap storm is part of the flap, not a clear.
 				return "wireless_ap_join_flap", "warn"
 			}
-			return "wireless_ap_up", "info"
+			return "wireless_ap_down_clear", "info"
 		}
 	case "radio_oper":
 		if ch.To == "down" {
 			return "wireless_radio_down", "warn"
 		}
 		if ch.To == "up" {
-			return "wireless_radio_up", "info"
+			return "wireless_radio_down_clear", "info"
 		}
 	}
 	return "", ""

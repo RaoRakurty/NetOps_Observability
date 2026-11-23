@@ -48,13 +48,13 @@ EMITTED_KINDS: frozenset[str] = PRODUCER_EMITTED_KINDS | EVIDENCE_BUS_KINDS
 # Emitted-but-unconsumed kinds that are INTENTIONALLY required by no signature.
 # Structured: every entry says why it is allowed to stay unconsumed.
 INTENTIONAL_BLIND: dict[str, dict] = {
-    "wireless_ap_up": {
-        "reason": "#128 recovery/clear signal — supports and closes, never fault evidence",
-        "owner": "correlix", "date_added": "2026-07-26",
+    "wireless_ap_down_clear": {
+        "reason": "tracker 442 — a wireless recovery, reported as a clear like every other lane's (the retired wireless_ap_up / wireless_radio_up spellings were live nodes). build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-23",
     },
-    "wireless_radio_up": {
-        "reason": "#128 recovery/clear signal — supports and closes, never fault evidence",
-        "owner": "correlix", "date_added": "2026-07-26",
+    "wireless_radio_down_clear": {
+        "reason": "tracker 442 — a wireless recovery, reported as a clear like every other lane's (the retired wireless_ap_up / wireless_radio_up spellings were live nodes). build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
+        "owner": "correlix", "date_added": "2026-11-23",
     },
     "device_alarm": {
         "reason": "the #80 §4 generic catch-all — matches no signature by design",
