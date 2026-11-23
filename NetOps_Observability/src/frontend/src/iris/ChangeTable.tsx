@@ -33,6 +33,8 @@ import {
 import { accentForHighlight } from "./IrisTimeline";
 import { SafeLink } from "./links";
 import ChangeDrawer from "./ChangeDrawer";
+import type { DeviceNames } from "../lib/deviceNames";
+import { named, useIrisDeviceNames } from "./deviceNamesContext";
 import ChangeDiff from "../pages/experience/ChangeDiff";
 
 type Keyed = { key: string; row: Row };
@@ -44,8 +46,9 @@ interface IncidentGroup {
   rows: Keyed[];
 }
 
-function textCell(v: unknown) {
-  const t = cellText(v);
+/** A cell's text; with `names`, a device id in it reads as the hostname. */
+function textCell(v: unknown, names: DeviceNames | null = null) {
+  const t = named(cellText(v), names);
   return t ?? <span className="iris-muted">Not recorded</span>;
 }
 
@@ -60,6 +63,7 @@ export default function ChangeTable({
   plan?: PresentationPlan;
   ariaLabel?: string;
 }) {
+  const names = useIrisDeviceNames();
   const [open, setOpen] = useState<Row | null>(null);
   const keyed = useMemo<Keyed[]>(() => rows.map((row, i) => ({ key: `${rowId(row, i)}#${i}`, row })), [rows]);
   const anyDiff = useMemo(() => rows.some((r) => r.before !== undefined || r.after !== undefined), [rows]);
@@ -131,7 +135,7 @@ export default function ChangeTable({
             <span className="iris-muted">Not recorded</span>
           ),
       },
-      { key: "object", header: "Object", sortable: true, text: ({ row }) => str(row, "object"), render: ({ row }) => textCell(row.object) },
+      { key: "object", header: "Object", sortable: true, text: ({ row }) => named(str(row, "object"), names), render: ({ row }) => textCell(row.object, names) },
     );
     if (anyDiff) {
       cols.push({
@@ -161,7 +165,7 @@ export default function ChangeTable({
       },
     );
     return cols;
-  }, [anyDiff, plan, perIncident]);
+  }, [anyDiff, plan, perIncident, names]);
 
   if (rows.length === 0) {
     return <p className="iris-empty" role="status">No changes in this window.</p>;
@@ -180,7 +184,7 @@ export default function ChangeTable({
                 <SafeLink kind="incident" id={g.id}>
                   {g.display}
                 </SafeLink>
-                {g.title && <span className="iris-incident-group-title"> {g.title}</span>}
+                {g.title && <span className="iris-incident-group-title"> {named(g.title, names)}</span>}
               </h4>
               <DataTable<Keyed>
                 rows={g.rows}

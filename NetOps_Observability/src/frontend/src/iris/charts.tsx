@@ -18,6 +18,8 @@ import EChart, { type EChartEvents } from "../components/EChart";
 import { axisStyle, chartBase, timeAxisTicks } from "../theme/charts";
 import { cssVar } from "../theme/tokens";
 import { entityLabel, fmtNumber, type OutSeries, type ResultSet, type Row } from "./presentation";
+import type { DeviceNames } from "../lib/deviceNames";
+import { namer, useIrisDeviceNames } from "./deviceNamesContext";
 
 export interface DrillDown {
   label: string;
@@ -32,7 +34,10 @@ export function measuredSeries(series: OutSeries[]): OutSeries[] {
   return series.filter((s) => s.points.some((p) => p.v !== null));
 }
 
-export function timeSeriesOption(series: OutSeries[], unit: string): Record<string, unknown> {
+/** `names`: the caller's inventory — a line is named by the hostname, never the
+ *  internal device id (owner, 2026-11-23). */
+export function timeSeriesOption(series: OutSeries[], unit: string, names?: DeviceNames | null): Record<string, unknown> {
+  const nameOf = namer(names);
   return {
     ...chartBase,
     tooltip: { ...chartBase.tooltip, ...TOOLTIP, trigger: "axis" },
@@ -42,7 +47,7 @@ export function timeSeriesOption(series: OutSeries[], unit: string): Record<stri
     yAxis: { type: "value", ...axisStyle, name: unit || undefined },
     series: series.map((s) => ({
       type: "line",
-      name: entityLabel(s.entity),
+      name: entityLabel(s.entity, nameOf),
       showSymbol: false,
       // A null sample is a GAP — connectNulls false keeps it visible as one.
       connectNulls: false,
@@ -58,20 +63,21 @@ export function TimeSeriesView({
   result: ResultSet;
   onDrill: (d: DrillDown) => void;
 }) {
+  const names = useIrisDeviceNames();
   const series = useMemo(() => measuredSeries(result.series), [result.series]);
-  const option = useMemo(() => timeSeriesOption(series, result.unit), [series, result.unit]);
+  const option = useMemo(() => timeSeriesOption(series, result.unit, names), [series, result.unit, names]);
   const events = useMemo<EChartEvents>(
     () => ({
       click: (p: { seriesIndex?: number }) => {
         const s = typeof p?.seriesIndex === "number" ? series[p.seriesIndex] : undefined;
         if (!s) return;
         onDrill({
-          label: entityLabel(s.entity),
+          label: entityLabel(s.entity, namer(names)),
           rows: s.points.map((pt) => ({ ...s.entity, time: new Date(pt.t * 1000).toISOString(), value: pt.v })),
         });
       },
     }),
-    [series, onDrill],
+    [series, onDrill, names],
   );
   if (series.length === 0) return <p className="iris-empty" role="status">Nothing found in this window.</p>;
   const gaps = series.some((s) => s.points.some((p) => p.v === null));
@@ -99,8 +105,9 @@ export interface BarModel {
 
 const NOT_RECORDED = "Not recorded";
 
-/** Group rows into bars. Pure. Returns null when the rows have nothing to bar. */
-export function barModel(result: ResultSet, groupField?: string): BarModel | null {
+/** Group rows into bars. Pure. Returns null when the rows have nothing to bar.
+ *  `names`: the caller's inventory — a bar is named by the hostname. */
+export function barModel(result: ResultSet, groupField?: string, names?: DeviceNames | null): BarModel | null {
   const rows = result.rows;
   if (rows.length === 0) return null;
 
@@ -118,16 +125,19 @@ export function barModel(result: ResultSet, groupField?: string): BarModel | nul
       (by.get(k) as Row[]).push(r);
     }
     order.sort((a, b) => (by.get(b) as Row[]).length - (by.get(a) as Row[]).length);
+    // A group key can be a device (group_by device): it reads as the hostname.
+    const groupName = namer(names);
     return {
       kind: "counts",
-      categories: order,
+      categories: groupName ? order.map(groupName) : order,
       groups: order.map((k) => by.get(k) as Row[]),
       series: [{ name: result.query_type === "change_list" ? "Changes" : "Incidents", values: order.map((k) => (by.get(k) as Row[]).length) }],
       labels: order.map(() => null),
     };
   }
 
-  const categories = rows.map((r) => entityLabel(r));
+  const nameOf = namer(names);
+  const categories = rows.map((r) => entityLabel(r, nameOf));
   const groups = rows.map((r) => [r]);
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
@@ -203,7 +213,8 @@ export function BarView({
   groupField?: string;
   onDrill: (d: DrillDown) => void;
 }) {
-  const model = useMemo(() => barModel(result, groupField), [result, groupField]);
+  const names = useIrisDeviceNames();
+  const model = useMemo(() => barModel(result, groupField, names), [result, groupField, names]);
   const option = useMemo(() => (model ? barOption(model, result.unit) : null), [model, result.unit]);
   const events = useMemo<EChartEvents>(
     () => ({
