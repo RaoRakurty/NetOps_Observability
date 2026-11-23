@@ -17,9 +17,12 @@
 # baseline until the end-state installer question enables the mesh.
 #
 # Certs are re-issued by the api at ~TTL/2. Postgres reads the key ONCE at
-# startup (and on SIGHUP for the cert): the deployment reloads postgres via
-# `docker kill -s HUP` from the rotation hook, or relies on the 24h TTL being
-# far longer than routine restart cadence. (SEC-019.1 formalizes rotation.)
+# startup (and on SIGHUP for the cert): a reload is delivered in-container
+# (`docker compose exec -T postgres kill -HUP 1`) — NEVER `docker kill -s HUP`,
+# which marks the container manually stopped so unless-stopped no longer
+# restarts it after a reboot (the 2026-11-23 vmauth outage) — or relies on the
+# 24h TTL being far longer than routine restart cadence. (SEC-019.1 formalizes
+# rotation.)
 set -eu
 
 SRC="${PG_TLS_SRC:-/certs-src}"
