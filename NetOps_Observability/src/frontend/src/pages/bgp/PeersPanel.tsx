@@ -45,6 +45,7 @@ import {
 } from "./bgpAlerts.model";
 import { Section, ShowAll, SubBlock, useCap } from "./Section";
 import AskIris from "../../components/AskIris";
+import { deviceDisplayName, useDeviceNames } from "../../lib/deviceNames";
 
 /** Rows shown before the operator asks for the rest (one-page view, 2026-09-03). */
 const FIRST_PEERS = 12;
@@ -65,6 +66,8 @@ function stateChip(r: PeerRow) {
 }
 
 export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
+  // Metric rows carry the device id; an operator reads the hostname.
+  const devNames = useDeviceNames();
   const [sessions, setSessions] = useState<BgpBmpSessionsResp | null>(null);
   const [bmp, setBmp] = useState<BmpProbe>("ok");
   const [bmpErr, setBmpErr] = useState("");
@@ -187,7 +190,7 @@ export function PeersPanel({ incidents }: { incidents?: BgpIncident[] }) {
               <tbody>
                 {peerCap.rows.map((r) => (
                   <tr key={r.key}>
-                    <td className="mono">{r.device || "—"}</td>
+                    <td className="mono">{r.device ? deviceDisplayName(r.device, devNames) : "—"}</td>
                     <td className="mono">{r.peer || "—"}</td>
                     <td className="mono">{r.peerAs ? `AS${r.peerAs}` : "—"}</td>
                     <td>{stateChip(r)}</td>

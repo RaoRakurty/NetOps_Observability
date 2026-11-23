@@ -18,6 +18,7 @@ import { useIsPhone } from "../lib/useIsPhone";
 import {
   ALERT_TABS, type AlertsTab, type AlertFilters, type AlertView,
   isSuppressed, statusLabel, statusTone, toAlertView, alertTiles, filterAlerts, facetValues, activeAlertFilterCount,
+  alertSummary,
 } from "./alertsModel";
 
 // Operations → Active Alerts, grouped by EPISODE: repeated firings of the same
@@ -144,10 +145,7 @@ export default function Alerts() {
       { key: "alert", header: "Alert", sortable: true, text: (v) => `${v.title} ${v.detail}`, render: alertCell },
       { key: "device", header: "Device", width: 170, sortable: true, text: (v) => v.device,
         render: (v) => (
-          <div className="lv-two">
-            <span className="al-device">{v.device}</span>
-            {v.deviceId && <span className="lv-trunc lv-addr" style={mono} title={v.deviceId}>{v.deviceId}</span>}
-          </div>
+          <span className="al-device">{v.device}</span>
         ) },
       { key: "count", header: "Count", width: 84, sortable: true,
         text: (v) => String(v.episode.count), sortValue: (v) => v.episode.count, render: countCell },
@@ -347,7 +345,7 @@ export function EpisodeDetailBody({
   episode: AlertEpisode;
   onUpdated?: (ep: AlertEpisode) => void;
   onViewLogs?: () => void;
-  /** The device's inventory name; the raw id is shown beside it when it differs. */
+  /** The device's inventory name. The internal id is never shown (owner, 2026-11-23). */
   deviceName?: string;
 }) {
   const [ep, setEp] = useState<AlertEpisode>(episode);
@@ -395,7 +393,7 @@ export function EpisodeDetailBody({
         <Chip label={statusLabel(ep.status)} tone={statusTone(ep.status)} />
         {ep.flapping && <Chip label="Flapping" tone="var(--warn)" title={`Rapid state changes detected (${ep.flip_count ?? 0} flips)`} />}
       </div>
-      {ep.summary && <div style={{ fontSize: 14 }}>{ep.summary}</div>}
+      {ep.summary && <div style={{ fontSize: 14 }}>{alertSummary(ep, deviceName || ep.resource || "")}</div>}
       {isSuppressed(ep) && (
         <div style={{ fontSize: 14, color: "var(--muted)" }}>
           Notifications paused
@@ -404,9 +402,7 @@ export function EpisodeDetailBody({
         </div>
       )}
       <div>
-        {row("Device", ep.resource
-          ? <span>{deviceName || ep.resource}{deviceName && deviceName !== ep.resource && <span style={{ ...mono, color: "var(--muted)" }}> · {ep.resource}</span>}</span>
-          : <span>Platform</span>)}
+        {row("Device", ep.resource ? <span>{deviceName || ep.resource}</span> : <span>Platform</span>)}
         {row("First seen", <span style={mono}>{fmt(ep.first_seen)}</span>)}
         {row("Last seen", <span style={mono}>{fmt(ep.last_seen)}</span>)}
         {row("Occurrences", <span style={mono}>{ep.count}</span>)}

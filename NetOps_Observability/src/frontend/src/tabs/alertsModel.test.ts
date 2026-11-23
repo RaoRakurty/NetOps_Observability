@@ -21,17 +21,29 @@ describe("alertsModel — Active Alerts as a presenter", () => {
     ]);
   });
 
-  it("a row says what fired where, with the device by name and the raw id kept", () => {
+  it("a row says what fired where, with the device by name and never its internal id", () => {
     const v = toAlertView(ep({ resource: "vedge-20-02efdcad", summary: "CPU 97%", count: 7 }), names);
     expect(v.title).toBe("HighCPU on vEdge-20");
     expect(v.detail).toBe("CPU 97% · 7 firings");
     expect(v.device).toBe("vEdge-20");
-    expect(v.deviceId).toBe("vedge-20-02efdcad");
+    // Owner, 2026-11-23: the id stays internal — nothing in the view carries it.
+    expect(JSON.stringify({ ...v, episode: undefined })).not.toContain("02efdcad");
+  });
+
+  it("a summary rendered with the internal id reads with the device's name", () => {
+    const v = toAlertView(ep({ resource: "vedge-20-02efdcad", summary: "vedge-20-02efdcad if1 inbound traffic anomaly (z>3)" }), names);
+    expect(v.detail).toBe("vEdge-20 if1 inbound traffic anomaly (z>3) · 1 firing");
+  });
+
+  it("search still finds a row by its device id", () => {
+    const items = [ep({ resource: "vedge-20-02efdcad" }), ep({ id: "other", resource: "leaf9" })];
+    const views = items.map((e) => toAlertView(e, names));
+    expect(filterAlerts(views, { q: "02efdcad" }).map((v) => v.episode.resource)).toEqual(["vedge-20-02efdcad"]);
   });
 
   it("an unknown device shows its id, a stack-level episode says Platform", () => {
     expect(deviceLabel(ep({ resource: "leaf9" }), names)).toBe("leaf9");
-    expect(toAlertView(ep({ resource: "leaf9" }), names).deviceId).toBe("");
+    expect(toAlertView(ep({ resource: "leaf9" }), names).device).toBe("leaf9");
     expect(toAlertView(ep({}), names).title).toBe("HighCPU");
     expect(deviceLabel(ep({}), null)).toBe("Platform");
   });
