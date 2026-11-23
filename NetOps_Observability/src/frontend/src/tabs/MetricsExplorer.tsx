@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "../components/EChart";
 import { api, PromSeries } from "../services/api";
+import { deviceDisplayName, useDeviceNames } from "../lib/deviceNames";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric } from "../theme/charts";
 
 // Native Metrics Explorer — a Grafana-style surface that renders charts
@@ -162,6 +163,7 @@ function MetricPicker({ names, onPick }: { names: string[]; onPick: (n: string) 
 }
 
 export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
+  const devNames = useDeviceNames();
   const [query, setQuery] = useState("avg by (device) (device_cpu_percent)");
   const [unit, setUnit] = useState<string | undefined>("%");
   const [series, setSeries] = useState<PromSeries[]>([]);
@@ -225,8 +227,9 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
 
   const option = useMemo(() => {
     const label = (m: Record<string, string>) => {
-      // Prefer the friendly device/source label over raw instance/job.
-      const dev = m.device || m.source || m.instance || "";
+      // Prefer the friendly device/source label over raw instance/job. The
+      // `device` label is the internal id; the legend shows the hostname.
+      const dev = (m.device ? deviceDisplayName(m.device, devNames) : "") || m.source || m.instance || "";
       const iface = m.interface_name || m.index || m.interface || "";
       const name = m.__name__ ?? "value";
       if (dev || iface) return [dev, iface].filter(Boolean).join(" · ");
@@ -264,7 +267,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
         };
       }),
     };
-  }, [series, unit]);
+  }, [series, unit, devNames]);
 
   return (
     <>

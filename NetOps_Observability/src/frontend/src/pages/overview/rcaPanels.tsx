@@ -16,6 +16,7 @@ import ErrorBoundary from "../../components/ErrorBoundary";
 import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL } from "../../components/rca/labels";
 import { usePolled } from "../panels";
 import { impactOf } from "./overviewModel";
+import { deviceDisplayName, useDeviceNames } from "../../lib/deviceNames";
 
 // ── shared vocabulary ───────────────────────────────────────────────────────
 
@@ -340,6 +341,8 @@ export function WhatChanged() {
 
 export function CapacityOutlook() {
   const { data, err } = usePolled(() => api.metricsForecast(), 20_000);
+  // The forecast keys rows by device id; an operator reads the hostname.
+  const names = useDeviceNames();
   if (err && !data) return <RcaPanel title="Capacity outlook" state="degraded" />;
   if (!data) return <RcaPanel title="Capacity outlook" state="inactive" note="Reading…" />;
   const rows = data.interfaces ?? [];
@@ -364,7 +367,7 @@ export function CapacityOutlook() {
         const tone = r.status === "saturated" || r.days_to_90 < 14 ? "var(--crit)" : r.days_to_90 < 30 ? "var(--warn)" : "var(--fg-subtle)";
         return (
           <div key={i} className="fp-row" style={{ borderLeftColor: tone, cursor: "default", gap: 9 }}>
-            <span className="fp-num">{r.device}</span>
+            <span className="fp-num">{deviceDisplayName(r.device, names)}</span>
             <span style={{ color: "var(--fg-muted)" }}>{r.interface}</span>
             <span className="fp-num" style={{ marginLeft: "auto", fontWeight: 600, color: tone }}>
               {r.status === "saturated" ? "at capacity" : `~${Math.round(r.days_to_90)}d to 90%`}

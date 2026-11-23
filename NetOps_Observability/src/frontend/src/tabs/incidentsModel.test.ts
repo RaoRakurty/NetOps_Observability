@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import type { Incident } from "../services/api";
 import {
   INCIDENT_SOURCE_TABS, inSourceTab, filterIncidents, statusCounts, countsNote, pageNote, ownerText, statusText,
-  activeIncidentFilterCount, isActiveIncident, incidentWhere, whereText,
+  activeIncidentFilterCount, isActiveIncident, incidentWhere, incidentTitle, whereText,
 } from "./incidentsModel";
 import { buildDevicePlaces, deviceSite } from "../lib/deviceNames";
 import type { Device } from "../services/api";
@@ -71,6 +71,16 @@ describe("WHERE an incident is (tracker 438)", () => {
     d({ id: "edge-1-bb", name: "edge-1", address: "10.0.0.2", reported_site_id: "100" }),
     d({ id: "core-cc", name: "core", address: "10.0.0.3" }),
   ]);
+
+  it("a title minted with the internal id reads with the device's name (owner, 2026-11-23)", () => {
+    expect(incidentTitle(inc({ device_id: "core-cc", title: "core-cc if9 inbound traffic anomaly (z>3)" }), places))
+      .toBe("core if9 inbound traffic anomaly (z>3)");
+    expect(incidentTitle(inc({ device_id: "edge-1-aa", title: "edge-1-aa CPU 97%" }), places)).toBe("edge-1 (10.0.0.1) CPU 97%");
+    // Unknown device, no device, no inventory: the stored title, unchanged.
+    expect(incidentTitle(inc({ device_id: "gone-zz", title: "gone-zz down" }), places)).toBe("gone-zz down");
+    expect(incidentTitle(inc({ title: "WAN loss at DFW" }), places)).toBe("WAN loss at DFW");
+    expect(incidentTitle(inc({ device_id: "core-cc", title: "core-cc down" }), null)).toBe("core-cc down");
+  });
 
   it("names the device and its site; two same-named devices are told apart by address", () => {
     expect(incidentWhere(inc({ device_id: "edge-1-aa" }), places)).toEqual({ device: "edge-1 (10.0.0.1)", site: "HQ", id: "edge-1-aa" });

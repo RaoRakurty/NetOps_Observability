@@ -15,12 +15,13 @@
 //   • owner is a column, "Unassigned" when nobody has it.
 
 import type { Incident } from "../services/api";
-import type { DevicePlaces } from "../lib/deviceNames";
+import { nameDeviceIn, type DevicePlaces } from "../lib/deviceNames";
 
 /** WHERE an incident is (tracker 438): the firing device by its inventory name
- *  and its site. `id` is the raw device id, shown beside the name when they
- *  differ. A device the caller's inventory does not hold keeps its id; an
- *  incident with no device (stack, Digital Experience, a person) is empty. */
+ *  and its site. `id` is the internal device id — kept for links and search,
+ *  never shown (owner, 2026-11-23). A device the caller's inventory does not
+ *  hold keeps its id as the name; an incident with no device (stack, Digital
+ *  Experience, a person) is empty. */
 export type IncidentWhere = { device: string; site: string; id: string };
 
 export function incidentWhere(i: Pick<Incident, "device_id">, places: DevicePlaces | null): IncidentWhere {
@@ -28,6 +29,15 @@ export function incidentWhere(i: Pick<Incident, "device_id">, places: DevicePlac
   if (!id) return { device: "", site: "", id: "" };
   const p = places?.get(id);
   return { device: p?.name || id, site: p?.site || "", id };
+}
+
+/** The incident's title with its device named as an operator reads it. A title
+ *  minted from an alert before the engine named devices carries the internal id
+ *  ("cedge-40-fdf7b64f if9 inbound traffic anomaly"); only that exact id is
+ *  swapped, and only for a name the caller's own inventory gave. */
+export function incidentTitle(i: Pick<Incident, "title" | "device_id">, places: DevicePlaces | null): string {
+  const id = (i.device_id || "").trim();
+  return nameDeviceIn(i.title || "", id, id ? places?.get(id)?.name : undefined);
 }
 
 /** One line for search and sorting: "edge-a · HQ", "edge-a", or "". */
