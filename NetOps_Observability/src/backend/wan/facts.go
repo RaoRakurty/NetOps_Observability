@@ -39,6 +39,12 @@ type DeviceInputs struct {
 	Marks map[string]string
 	// Linked: ifName → the WAN-candidate device it is directly connected to.
 	Linked map[string]string
+	// SNMP is the device's own IF-MIB facts per ifName (the merged bridge's
+	// spelling). They fill only interfaces the bridge already knows.
+	SNMP map[string]SNMPIf
+	// ExternalBGP is ExternalBGPPeers over the device's BGP4-MIB sessions,
+	// keyed by local address.
+	ExternalBGP map[string]ExternalPeer
 }
 
 // BuildFacts folds one device's inputs into the classifier's facts. canon is
@@ -99,6 +105,21 @@ func BuildFacts(in DeviceInputs, canon func(string) string) DeviceFacts {
 		a.addrs[ip] = true
 	}
 
+	// The device's own IF-MIB ifType: fills the kind the controller did not
+	// state, on interfaces the bridge already knows (never invents one).
+	for n, si := range in.SNMP {
+		a := ifs[canon(n)]
+		if a == nil {
+			continue
+		}
+		if a.f.Kind == "" {
+			a.f.Kind = si.Kind
+		}
+		if a.f.Kind == KindWANMedia && a.f.IfType == "" {
+			a.f.IfType = si.Type
+		}
+	}
+
 	// cEdge: Tunnel1 carries the same VPN 0 address as GigabitEthernet1.
 	tunnelByAddr := map[string]string{}
 	for _, a := range ifs {
@@ -157,6 +178,7 @@ func BuildFacts(in DeviceInputs, canon func(string) string) DeviceFacts {
 			}
 		}
 		f.NextHop = nextHopFor(in, f.Name)
+		f.ExternalBGP = externalFor(f.Addrs, in.ExternalBGP)
 		f.Mark = marks[k]
 		f.Linked = linked[k]
 		out.Ifaces = append(out.Ifaces, f)

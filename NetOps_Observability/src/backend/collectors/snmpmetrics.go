@@ -65,6 +65,11 @@ type metricsCollector struct {
 	// ifAliases is each device's last-read ifAlias table (if_rows_nms.go),
 	// published for the interface bridge's descriptions. Owned by pollOnce.
 	ifAliases ifAliasRows
+	// ifTypes is each device's last-read IF-MIB ifType table and bgpSessions its
+	// last-read BGP4-MIB sessions (tracker 436), published for the WAN rule.
+	// Owned by pollOnce.
+	ifTypes     ifAliasRows
+	bgpSessions bgpSessionRows
 
 	mu     sync.RWMutex
 	status Status
@@ -78,9 +83,11 @@ func NewSNMPMetrics(targets TargetFunc) Collector {
 		profiles: loadProfiles(),
 		status:   Status{Name: "snmpmetrics", Healthy: true, Kind: "metrics"},
 
-		ifRowStore: valkeyIfRowStore{},
-		ifRows:     newIfRowState(),
-		ifAliases:  ifAliasRows{},
+		ifRowStore:  valkeyIfRowStore{},
+		ifRows:      newIfRowState(),
+		ifAliases:   ifAliasRows{},
+		ifTypes:     ifAliasRows{},
+		bgpSessions: bgpSessionRows{},
 	}
 	c.pollFn = c.pollDevice
 	return c
@@ -196,6 +203,16 @@ func (c *metricsCollector) pollOnce(ctx context.Context) {
 			redisPublish(ctx, "interface-alias", ifAliasKey, string(b), ifAliasTTLSec)
 		}
 	}
+	// deviceID → ifIndex → IF-MIB ifType, and deviceID → BGP4-MIB sessions: the
+	// WAN rule's evidence on a router no controller describes (tracker 436).
+	if types := c.ifTypes.updateWith(targets, results, outcomeIfType); len(types) > 0 || len(targets) > 0 {
+		if b, err := json.Marshal(types); err == nil {
+			redisPublish(ctx, "interface-type", ifTypeKey, string(b), ifTypeTTLSec)
+		}
+	}
+	if sessions := c.bgpSessions.update(targets, results); len(sessions) > 0 || len(targets) > 0 {
+		publishBGPSessions(ctx, sessions)
+	}
 
 	// deviceID → sysLocation, read by the inventory to show the site the device
 	// itself is configured with. Same replace+TTL discipline.
@@ -270,6 +287,13 @@ type deviceOutcome struct {
 	// empty map means "no descriptions configured", not "not read".
 	ifalias     map[string]string
 	ifaliasRead bool
+	// iftype is ifIndex → IF-MIB ifType (decimal); iftypeRead says the walk
+	// finished. bgp is the device's BGP4-MIB sessions; bgpRead says it is the
+	// device's whole answer (tracker 436).
+	iftype      map[string]string
+	iftypeRead  bool
+	bgp         BGPSessions
+	bgpRead     bool
 	location    string           // SNMPv2-MIB sysLocation as the device is configured ("" = not set)
 	softwareRev string           // ENTITY-MIB entPhysicalSoftwareRev of the chassis/module ("" = none)
 	chassis     *ChassisIdentity // ENTITY-MIB chassis serial + model (nil = none reported)
@@ -326,6 +350,12 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 	// names; empty when the operator configured no interface description.
 	var ifAliases map[string]string
 	ifAliasesOK := false
+	// ifIndex→ifType (IANAifType), walked with the names: the medium of each
+	// port, which the WAN rule reads on a router no controller describes.
+	var ifTypes map[string]string
+	ifTypesOK := false
+	// BGP4-MIB facts the BGP panels already read, kept for the WAN rule.
+	var bgp bgpSessionReading
 	// Memory pools reported as used/free bytes (Cisco CISCO-MEMORY-POOL and
 	// every other vendor in that shape) carry no percentage, and every
 	// consumer — the device popup, the health score, topology and the memory
@@ -353,6 +383,10 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 				if isIface && ifNames == nil {
 					ifNames, ifNamesOK = ifNameMapChecked(dctx, addr, creds)
 					ifAliases, ifAliasesOK = ifAliasMapChecked(dctx, addr, creds)
+					ifTypes, ifTypesOK = ifTypeMapChecked(dctx, addr, creds)
+				}
+				if m.Name == "device_bgp_peer_remote_as" {
+					bgp.noteRemoteAS(rows)
 				}
 				for idx, v := range rows {
 					if isIface {
@@ -395,6 +429,9 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 				if err != nil {
 					continue
 				}
+				if m.Name == "device_bgp_local_as" {
+					bgp.localAS = valueInt(v)
+				}
 				lines = append(lines, fmt.Sprintf("%s{device=%q,vendor=%q} %d %d",
 					m.Name, tg.ID, vendor, valueInt(v), now))
 				if ev, ok := buildMetricEvent(m.Name, tg.ID, vendor, "", "", "", valueInt(v), now); ok {
@@ -403,6 +440,11 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 			}
 		}
 	}
+	// The local address of each BGP4-MIB session: one column, walked only on a
+	// device that listed a peer above (tracker 436 (b)).
+	out.bgp, out.bgpRead = bgp.sessions(func() (map[string]berVal, error) {
+		return snmpWalkColumn(dctx, addr, creds, bgpPeerLocalAddrOID)
+	})
 	// Derived memory percentage per pool (used / (used + free)), only when the
 	// device did not report one and no richer transport owns the family here.
 	memOwned := (SNMPMetric{Name: "device_mem_percent", Owner: "gnmi"}).ownedElsewhere(tg)
@@ -475,6 +517,7 @@ func (c *metricsCollector) pollDevice(ctx context.Context, tg Target) deviceOutc
 		}
 		out.ifindex = ifNames // ifIndex → ifName, for the EntityResolver (C7.1)
 		out.ifalias, out.ifaliasRead = ifAliases, ifAliasesOK && ifNamesOK
+		out.iftype, out.iftypeRead = ifTypes, ifTypesOK && ifNamesOK
 		// An address whose port has no name is left out of m, so without the whole
 		// name table the address walk is not the device's whole answer either.
 		namesAnswered := ifNamesOK && len(ifNames) > 0
@@ -559,6 +602,26 @@ func ifAliasMapChecked(ctx context.Context, addr string, creds snmpCreds) (map[s
 		// are a cardinality + exposition hazard (caps.go, audit PIPE-MED-11).
 		if s := sanitizeLabel(string(v.raw)); s != "" {
 			out[idx] = s
+		}
+	}
+	return out, true
+}
+
+// ifTypeOID is IF-MIB ifType (IANAifType), the interface's medium.
+var ifTypeOID = []int{1, 3, 6, 1, 2, 1, 2, 2, 1, 3}
+
+// ifTypeMapChecked walks ifType keyed by ifIndex, as decimal text (the bridge
+// validates it: ifbridge.ParseIfType), and says whether the walk finished, so a
+// failed walk never replaces a device's last-known types with nothing.
+func ifTypeMapChecked(ctx context.Context, addr string, creds snmpCreds) (map[string]string, bool) {
+	out := map[string]string{}
+	rows, err := snmpWalkColumn(ctx, addr, creds, ifTypeOID)
+	if err != nil {
+		return out, false
+	}
+	for idx, v := range rows {
+		if n := valueInt(v); n > 0 {
+			out[idx] = strconv.FormatInt(n, 10)
 		}
 	}
 	return out, true

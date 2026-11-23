@@ -572,6 +572,10 @@ type server struct {
 	// polled every few seconds and the bundle is the same for every principal
 	// (visibility is applied after, per request).
 	wanEvidenceCache wanEvidenceCache
+	// wanBGP is the BGP4-MIB sessions source for the WAN rule's eBGP evidence
+	// (tracker 436 (b)); nil = a ~30 s cache of collectors.FetchBGPSessions.
+	wanBGP      func(context.Context) (map[string]collectors.BGPSessions, error)
+	wanBGPCache wanBGPCache
 	// wanMarks is the operator's per-interface WAN marks (tenantKV). nil: none.
 	wanMarks *wanMarkStore
 	// wanNeighbors is the directly-connected-neighbour source (LLDP/CDP/BGP-LS

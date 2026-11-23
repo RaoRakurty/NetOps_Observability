@@ -511,7 +511,8 @@ describe("isDirty", () => {
 describe("why an interface counts as WAN", () => {
   it("names every basis the server sends in plain words, and a dash otherwise", () => {
     for (const b of ["operator", "sdwan_transport_port", "sdwan_tloc", "sdwan_tunnel_source", "declared_next_hop",
-      "transport_vpn_no_tunnel", "described_as_wan", "public_address", "linked", "wan_router_only"]) {
+      "transport_vpn_no_tunnel", "described_as_wan", "public_address", "linked", "wan_router_only",
+      "wan_media_type", "external_bgp_peer"]) {
       const label = wanBasisLabel(b);
       expect(label).not.toBe("—");
       expect(label).not.toContain("_");
