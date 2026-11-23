@@ -10,7 +10,7 @@ import { RouterNode } from "./RouterNode";
 import { FirewallNode } from "./FirewallNode";
 import { CloudNode } from "./CloudNode";
 import { CloudResourceNode } from "./CloudResourceNode";
-import { GroupNode } from "./GroupNode";
+import { GroupNode, GroupLabelNode } from "./GroupNode";
 import { UnresolvedNode } from "./UnresolvedNode";
 
 export const nodeTypes = {
@@ -25,6 +25,7 @@ export const nodeTypes = {
   // canvas — there is no separate cloud renderer to keep in sync any more (#131).
   cloudResourceNode: CloudResourceNode,
   groupNode: GroupNode,
+  groupLabelNode: GroupLabelNode,
   unresolvedNode: UnresolvedNode,
 };
 
@@ -34,5 +35,5 @@ export { RouterNode } from "./RouterNode";
 export { FirewallNode } from "./FirewallNode";
 export { CloudNode } from "./CloudNode";
 export { CloudResourceNode } from "./CloudResourceNode";
-export { GroupNode } from "./GroupNode";
+export { GroupNode, GroupLabelNode } from "./GroupNode";
 export { UnresolvedNode } from "./UnresolvedNode";

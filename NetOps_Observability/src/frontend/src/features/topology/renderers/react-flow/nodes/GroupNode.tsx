@@ -126,27 +126,53 @@ function GroupNodeBase(props: NodeProps) {
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
-      {/* label chip top-left — interactive */}
-      <div style={{ position: "absolute", top: 8, left: 10, display: "inline-flex", alignItems: "center", gap: 7,
-        padding: "3px 6px 3px 9px", borderRadius: 9, background: "var(--panel)", border: "1px solid var(--border)",
-        boxShadow: "0 1px 3px rgba(16,24,40,0.10)", pointerEvents: "auto" }}>
-        <span title={HEALTH_LABEL[health]} style={{ width: 8, height: 8, borderRadius: "50%", background: color,
-          boxShadow: `0 0 0 2px ${HEALTH_TINT[health]}`, flex: "0 0 auto" }} />
-        <span style={{ fontSize: 9.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--fg-subtle)" }}>{kindLabel}</span>
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis",
-          whiteSpace: "nowrap", maxWidth: 220 }}>{group.label}</span>
-        <span style={{ fontSize: 10, color: "var(--fg-subtle)" }}>· {counts.total}</span>
-        <button onClick={toggle} title="Collapse group" aria-label="Collapse group"
-          style={{ display: "inline-flex", alignItems: "center", padding: "2px 4px", color: "var(--fg-muted)",
-            background: "transparent", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}>
-          <Chevron collapsed={false} />
-        </button>
-      </div>
+      {/* The label chip is its own node (GroupLabelNode), drawn ABOVE the links:
+          a box sits behind the links so it never hides them, which left its own
+          chip under every tunnel crossing it — unclickable and undraggable on a
+          meshed estate (owner 2026-11-23). */}
     </div>
   );
 }
 
 export const GroupNode = memo(GroupNodeBase);
+
+/**
+ * GroupLabelNode — an expanded box's label chip (kind · name · count · collapse),
+ * rendered as its own node above the links. It is the box's HANDLE: click it to
+ * open the site, drag it to move the whole site (TopologyCanvas carries the
+ * members), press the chevron to collapse it.
+ */
+function GroupLabelNodeBase(props: NodeProps) {
+  const data = props.data as unknown as RFGroupData;
+  const { group, counts, health, onToggle, emphasis } = data;
+  const color = HEALTH_COLOR[health];
+  const kindLabel = isDiscoveredGroup(group) ? "Discovered site" : GROUP_TYPE_LABEL[group.group_type] ?? group.group_type;
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggle?.(group.id);
+  };
+  return (
+    <div title="Site handle — moves the whole site and opens its details"
+      style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "grab",
+        padding: "3px 6px 3px 9px", borderRadius: 9, background: "var(--panel)",
+        border: `1px solid ${emphasis === "spotlight" ? "var(--accent)" : "var(--border)"}`,
+        boxShadow: "0 1px 3px rgba(16,24,40,0.10)", opacity: emphasis === "dim" ? 0.6 : 1, whiteSpace: "nowrap" }}>
+      <span title={HEALTH_LABEL[health]} style={{ width: 8, height: 8, borderRadius: "50%", background: color,
+        boxShadow: `0 0 0 2px ${HEALTH_TINT[health]}`, flex: "0 0 auto" }} />
+      <span style={{ fontSize: 9.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--fg-subtle)" }}>{kindLabel}</span>
+      <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis",
+        whiteSpace: "nowrap", maxWidth: 220 }}>{group.label}</span>
+      <span style={{ fontSize: 10, color: "var(--fg-subtle)" }}>· {counts.total}</span>
+      <button onClick={toggle} title="Collapse group" aria-label="Collapse group" className="nodrag"
+        style={{ display: "inline-flex", alignItems: "center", padding: "2px 4px", color: "var(--fg-muted)",
+          background: "transparent", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}>
+        <Chevron collapsed={false} />
+      </button>
+    </div>
+  );
+}
+
+export const GroupLabelNode = memo(GroupLabelNodeBase);
 export default GroupNode;
 
 /** containerSkin renders the fill/border for one nesting level.

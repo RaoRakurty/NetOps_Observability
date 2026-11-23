@@ -62,14 +62,16 @@ function fitPadding(showInventory: boolean): Padding {
 }
 
 
-import { detectArchetype, archetypeLayout, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
+import { detectArchetype, archetypeLayout, autoArchetype, ARCHETYPES, type Archetype } from "../../utils/topologyArchetype";
 import { TopologyInventoryPanel } from "../../components/TopologyInventoryPanel";
 import ViewNotices from "../../components/ViewNotices";
 import type { LayoutResult } from "../../layout/layoutTypes";
 import { loadSavedLayout, saveNodePosition, clearSavedLayoutsMatching } from "../../layout/savedLayoutStore";
+import { dropMovedGroupRects, groupDescendants, moveGroup } from "../../layout/groupDrag";
 import { topologyToReactFlow } from "./topologyToReactFlow";
 import { carryMeasured } from "./carryMeasured";
 import type { RFNodeData, RFEdgeData, RFGroupData } from "./rfTypes";
+import { groupIdOfNode, GROUP_LABEL_PREFIX } from "./rfTypes";
 
 type AnyNodeData = RFNodeData | RFGroupData;
 import { nodeTypes } from "./nodes";
@@ -513,12 +515,10 @@ function CanvasInner({
     () => (view && !rawOverCeiling ? detectArchetype(view) : null),
     [view, rawOverCeiling],
   );
-  const effectiveArchetype: Archetype | null =
-    arrange !== "auto"
-      ? arrange
-      : detected && detected.confidence >= 0.8 && detected.archetype !== "irregular"
-        ? detected.archetype
-        : null;
+  // Auto never arranges a GROUPED view (sites) or the WAN picture by a shape:
+  // the analytic shapes ignore containers (autoArchetype has the why).
+  const autoShape = useMemo(() => (view ? autoArchetype(view, detected) : null), [view, detected]);
+  const effectiveArchetype: Archetype | null = arrange !== "auto" ? arrange : autoShape;
 
   // saved-layout key: invalidated when the view, layout type, arrangement, or
   // CONTENT changes. Content-keyed (audit S4): node cardinality alone let pins
@@ -542,10 +542,14 @@ function CanvasInner({
       if (!alive) return;
       elkPositions.current = pos;
       // operator pins override the computed layout for the nodes they cover (skill §3).
-      const saved = loadSavedLayout(layoutKey);
+      // Only DEVICE pins count — a box is never persisted (layout/groupDrag) — and
+      // a box with a hand-placed member is re-drawn around its members, not at
+      // the rectangle the layout solved for where they used to be.
+      const groupIds = new Set(view.groups.map((g) => g.id));
+      const saved = Object.fromEntries(Object.entries(loadSavedLayout(layoutKey)).filter(([id]) => !groupIds.has(id)));
       const pinCount = Object.keys(saved).length;
       setLayoutPinned(pinCount > 0);
-      setPositions(pinCount > 0 ? { ...pos, ...saved } : pos);
+      setPositions(pinCount > 0 ? dropMovedGroupRects(view, { ...pos, ...saved }, Object.keys(saved)) : pos);
       // Key the "a fresh layout landed → re-fit" signal on the LAYOUT KEY, which is
       // content-hashed. Keying it on view_id+archetype meant a canvas whose CONTENT
       // changed without changing identity never re-fitted — which is exactly what
@@ -568,17 +572,38 @@ function CanvasInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, layoutKey, effectiveArchetype, overCeiling]);
 
-  // Persist a dragged node and keep it pinned for this session. Group nodes are
-  // excluded (their position is derived from children — audit S8): they are no
-  // longer draggable, and the guard keeps a junk pin out even if that changes.
+  // Dragging a BOX moves its members (owner 2026-11-23: boxes were "all glued
+  // together"): the members ride along live while the pointer moves, and on drop
+  // they are persisted where they landed and the box is re-drawn around them.
+  // The box's own position is never persisted (audit S8) — layout/groupDrag.
+  // (onNodeDragStart / onNodeDrag live below useNodesState — they move the
+  // members' React Flow nodes while the pointer moves.)
+  // id = the node the pointer holds (the box or its label chip); group = the box.
+  const groupDrag = useRef<{ id: string; group: string; start: { x: number; y: number }; members: Map<string, { x: number; y: number }> } | null>(null);
+  // Persist a dragged device (and keep it pinned for this session); a dragged box
+  // persists every device it carried. Either way the boxes around the moved
+  // devices are re-drawn around them.
   const onNodeDragStop = useCallback<OnNodeDrag<Node<AnyNodeData>>>(
     (_e, n) => {
-      if (!layoutKey || n.type === "groupNode") return;
+      const g = groupDrag.current;
+      groupDrag.current = null;
+      if (!layoutKey || !view) return;
+      if (groupIdOfNode(n)) {
+        if (!g || g.id !== n.id) return;
+        const dx = n.position.x - g.start.x;
+        const dy = n.position.y - g.start.y;
+        if (dx === 0 && dy === 0) return; // a click, not a move
+        const res = moveGroup(view, positions, g.group, dx, dy);
+        for (const [id, p] of Object.entries(res.moved)) saveNodePosition(layoutKey, id, p);
+        setPositions(res.positions);
+        if (Object.keys(res.moved).length > 0) setLayoutPinned(true);
+        return;
+      }
       saveNodePosition(layoutKey, n.id, n.position);
-      setPositions((p) => ({ ...p, [n.id]: n.position }));
+      setPositions((p) => dropMovedGroupRects(view, { ...p, [n.id]: n.position }, [n.id]));
       setLayoutPinned(true);
     },
-    [layoutKey],
+    [layoutKey, view, positions],
   );
 
   const onResetLayout = useCallback(() => {
@@ -738,6 +763,42 @@ function CanvasInner({
     setRfEdges(derived.edges);
   }, [derived, setRfNodes, setRfEdges]);
 
+  // A box drag: remember where every member started, then carry them by the
+  // pointer's delta so the whole site moves together (onNodeDragStop persists).
+  const onNodeDragStart = useCallback<OnNodeDrag<Node<AnyNodeData>>>(
+    (_e, n) => {
+      groupDrag.current = null;
+      const gid = groupIdOfNode(n);
+      if (!gid || !view) return;
+      // Everything that moves with the box: its devices, the boxes inside it,
+      // the box itself and every box's label chip — minus the node the pointer
+      // holds (React Flow moves that one).
+      const desc = groupDescendants(view, gid);
+      const boxes = [gid, ...desc.groups];
+      const members = new Map<string, { x: number; y: number }>();
+      for (const id of [...desc.nodes, ...boxes, ...boxes.map((b) => `${GROUP_LABEL_PREFIX}${b}`)]) {
+        if (id === n.id) continue;
+        const rn = rf.getNode(id);
+        if (rn) members.set(id, { ...rn.position });
+      }
+      groupDrag.current = { id: n.id, group: gid, start: { ...n.position }, members };
+    },
+    [view, rf],
+  );
+  const onNodeDrag = useCallback<OnNodeDrag<Node<AnyNodeData>>>(
+    (_e, n) => {
+      const g = groupDrag.current;
+      if (!g || g.id !== n.id) return;
+      const dx = n.position.x - g.start.x;
+      const dy = n.position.y - g.start.y;
+      setRfNodes((prev) => prev.map((x) => {
+        const m = g.members.get(x.id);
+        return m ? { ...x, position: { x: m.x + dx, y: m.y + dy } } : x;
+      }));
+    },
+    [setRfNodes],
+  );
+
   // Fit the view once a fresh layout lands. maxZoom caps the fit so a SMALL graph (a
   // 2–3 node incident path) opens at a sensible default zoom instead of blowing up to
   // fill the viewport.
@@ -775,8 +836,10 @@ function CanvasInner({
   }, [fullscreen]);
 
   const onNodeClick = useCallback<NodeMouseHandler>((_e, n) => {
-    // group nodes select as a group (drawer shows aggregate); devices select as nodes.
-    if (n.type === "groupNode") setSelection({ groupId: n.id });
+    // group nodes (and their label chips) select as a group (drawer shows
+    // aggregate); devices select as nodes.
+    const gid = groupIdOfNode(n);
+    if (gid) setSelection({ groupId: gid });
     else setSelection({ nodeId: n.id });
   }, []);
   const onEdgeClick = useCallback<EdgeMouseHandler>((_e, ed) => {
@@ -796,7 +859,8 @@ function CanvasInner({
     });
   }, []);
   const onNodeMouseEnter = useCallback<NodeMouseHandler>((e, n) => {
-    setHoverNode(n.id);
+    // A box's label chip hovers as the box it labels.
+    setHoverNode(groupIdOfNode(n) ?? n.id);
     setHoverPos({ x: e.clientX, y: e.clientY });
   }, []);
   const onNodeMouseLeave = useCallback(() => { setHoverNode(undefined); setHoverPos(undefined); }, []);
@@ -1045,7 +1109,7 @@ function CanvasInner({
             <span className="topo-incident-picker-label">Shape</span>
             <select value={arrange} onChange={(e) => setArrange(e.target.value as Arrangement)} aria-label="Arrange by topology shape">
               <option value="auto">
-                Auto{detected && detected.archetype !== "irregular" && detected.confidence >= 0.8 ? ` (${ARCHETYPES.find((a) => a.id === detected.archetype)?.label ?? detected.archetype})` : ""}
+                Auto{autoShape ? ` (${ARCHETYPES.find((a) => a.id === autoShape)?.label ?? autoShape})` : ""}
               </option>
               {ARCHETYPES.map((a) => (
                 <option key={a.id} value={a.id}>{a.label}</option>
@@ -1253,6 +1317,8 @@ function CanvasInner({
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
+              onNodeDragStart={onNodeDragStart}
+              onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
               onMove={onMove}
               onNodeMouseEnter={onNodeMouseEnter}
