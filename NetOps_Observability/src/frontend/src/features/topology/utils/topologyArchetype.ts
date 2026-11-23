@@ -270,3 +270,27 @@ export function archetypeLayout(view: TopologyView, archetype: Archetype): Layou
       return null;
   }
 }
+
+/**
+ * What "Shape: Auto" arranges by. The analytic shapes (ring / mesh / star / bus)
+ * place every device on one figure and know nothing about containers, so on a
+ * view that is GROUPED they scatter each site's members around the figure and
+ * the site boxes stop meaning anything. They also replace the layout engine
+ * outright — including the WAN picture (wanOverlayLayout: transports in the
+ * middle, every branch site its own box), which an SD-WAN estate always
+ * "detects" as a mesh or a star because every edge shares the transports and
+ * the overlay tunnels (owner, 2026-11-23: "Topology is still not able to box
+ * the sites based on site-ids").
+ *
+ * So Auto only ever picks a shape for an UNGROUPED view (at most one container
+ * with members) that is not the WAN picture. A shape the operator picks by hand
+ * still applies — that is a deliberate choice, not a guess.
+ */
+export function autoArchetype(view: TopologyView, detected: ArchetypeVerdict | null): Archetype | null {
+  if (!detected || detected.archetype === "irregular" || detected.confidence < 0.8) return null;
+  if (view.layout_type === "wan_overlay") return null;
+  const ids = new Set(view.nodes.map((n) => n.id));
+  const populated = view.groups.filter((g) => g.children.some((c) => ids.has(c))).length;
+  if (populated >= 2) return null;
+  return detected.archetype;
+}

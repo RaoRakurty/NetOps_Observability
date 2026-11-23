@@ -26,8 +26,15 @@
 // #/overview/operations/builtin. A team default that was deleted, or that this
 // user may not read, falls back to the built-in page with a quiet note. The
 // built-in page's reads start only when it is the page shown.
+//
+// Owner, 2026-11-23: "I actually like the dashboard I used to have, bring it
+// back" (Operations Overview). With no team default, #/overview/operations is
+// the Operations Overview again (pages/FrontPage.tsx, restored as it was before
+// the 2026-11-22 merge). The merged layout below stays one address away at
+// #/overview/operations/standard, so nothing built on 2026-11-22 is lost.
 
 import { useEffect, useState } from "react";
+import FrontPage from "../FrontPage";
 import { api, type AuthUser, type SavedObject } from "../../services/api";
 import PathHealthList from "../../components/PathHealthList";
 import { useOverviewData } from "./useOverviewData";
@@ -77,19 +84,23 @@ function useTeamDefault(): TeamDefault {
   return team;
 }
 
-/** Whether the address asks for the built-in page (#/overview/operations/builtin). */
-function isBuiltinHash(hash: string): boolean {
-  return hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] === "builtin";
+/** The sub-address under the Overview leaf: "builtin" (the built-in page while a
+ *  team default exists), "standard" (the 2026-11-22 merged layout) or "". */
+type OverviewRoute = "builtin" | "standard" | "";
+
+function routeOf(hash: string): OverviewRoute {
+  const seg = hash.replace(/^#\/?/, "").split("?")[0].split("/")[2];
+  return seg === "builtin" || seg === "standard" ? seg : "";
 }
 
-function useBuiltinRoute(): boolean {
-  const [builtin, setBuiltin] = useState(() => isBuiltinHash(location.hash));
+function useOverviewRoute(): OverviewRoute {
+  const [route, setRoute] = useState<OverviewRoute>(() => routeOf(location.hash));
   useEffect(() => {
-    const on = () => setBuiltin(isBuiltinHash(location.hash));
+    const on = () => setRoute(routeOf(location.hash));
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
-  return builtin;
+  return route;
 }
 
 /** The team-default dashboard shown as the Overview. */
@@ -113,24 +124,29 @@ function TeamOverview({ board }: { board: SavedObject }) {
 
 export default function OverviewPage() {
   const team = useTeamDefault();
-  const builtin = useBuiltinRoute();
+  const route = useOverviewRoute();
+  const platformAdmin = usePlatformAdmin();
   if (team.state === "loading") {
     return <div className="overview-page card" aria-busy="true" data-testid="overview-loading">Loading the Overview…</div>;
   }
-  if (team.state === "board" && !builtin) return <TeamOverview board={team.board} />;
+  if (team.state === "board" && route === "") return <TeamOverview board={team.board} />;
+  if (route === "standard") return <BuiltinOverview teamDefault={team.state === "board"} />;
   return (
-    <BuiltinOverview
-      teamDefault={team.state === "board"}
-      note={team.state === "unavailable"
-        ? "Your team's default dashboard is no longer available, so this is the built-in Overview."
-        : undefined}
-    />
+    <div data-testid="operations-overview">
+      {team.state === "unavailable" && (
+        <div className="ccw-hint ov-note" role="status" data-testid="team-default-unavailable">
+          Team default dashboard unavailable — showing the Operations Overview.
+        </div>
+      )}
+      <FrontPage platformAdmin={platformAdmin}
+        picker={<DashboardPicker current={team.state === "board" ? "builtin" : "default"} teamDefault={team.state === "board"} />} />
+    </div>
   );
 }
 
-/** The built-in Overview. `teamDefault`: the tenant has a team default and this
- *  is the built-in page opened by its own address. */
-function BuiltinOverview({ teamDefault, note }: { teamDefault: boolean; note?: string }) {
+/** The 2026-11-22 merged layout, at #/overview/operations/standard.
+ *  `teamDefault`: the tenant has a team default (the picker offers it). */
+function BuiltinOverview({ teamDefault }: { teamDefault: boolean }) {
   const d = useOverviewData();
   const platformAdmin = usePlatformAdmin();
   const problems = d.corr ? customerProblems(d.corr) : undefined;
@@ -144,12 +160,10 @@ function BuiltinOverview({ teamDefault, note }: { teamDefault: boolean; note?: s
           <div className="ov-sub">What is broken, where, and what to do first.</div>
         </div>
         <div className="ov-head-right">
-          <DashboardPicker current={teamDefault ? "builtin" : "default"} teamDefault={teamDefault} />
+          <DashboardPicker current="standard" teamDefault={teamDefault} />
           <Liveness />
         </div>
       </div>
-
-      {note && <div className="ccw-hint ov-note" data-testid="team-default-unavailable">{note}</div>}
 
       <AttentionBlock d={d} />
 

@@ -87,6 +87,20 @@ export const NODE_TYPE_FOR_KIND: Record<string, string> = {
  *  the generic cloud/WAN glyph on the on-prem fabric is untouched. */
 export const CLOUD_RESOURCE_NODE_TYPE = "cloudResourceNode";
 
+/** Node-id prefix of an expanded box's label chip (GroupLabelNode); the rest of
+ *  the id is the group id. The chip is the box's handle on the canvas. */
+export const GROUP_LABEL_PREFIX = "group-label:";
+
+/** The group a box OR its label chip stands for; undefined for anything else. */
+export function groupIdOfNode(n: { id: string; type?: string; data?: unknown }): string | undefined {
+  if (n.type === "groupNode") return n.id;
+  if (n.type === "groupLabelNode") {
+    const g = (n.data as { group?: { id?: string } } | undefined)?.group?.id;
+    return g ?? (n.id.startsWith(GROUP_LABEL_PREFIX) ? n.id.slice(GROUP_LABEL_PREFIX.length) : undefined);
+  }
+  return undefined;
+}
+
 /** Maps a domain EdgeVariant to the registered React Flow edge `type` key. */
 export const EDGE_TYPE_FOR_VARIANT: Record<string, string> = {
   topology: "topologyEdge",

@@ -8,7 +8,7 @@
 // just fixed page and then cases where we can escalate or open ticket … simplify
 // these pages and make it intuitive"):
 //
-//   1 What's wrong?      2 The answer      3 The evidence
+//   1 Start troubleshooting      2 The answer      3 The evidence
 //
 // The things that must never regress:
 //  · ONE WAY IN — a single list holds every open case, correlated or described.
@@ -176,7 +176,7 @@ afterEach(() => cleanup());
 describe("the three blocks", () => {
   it("opens with ONLY the picker — no answer and no evidence until something is picked", async () => {
     await show(<InvestigationPage />);
-    expect(blockHeadings()).toEqual(["What's wrong?"]);
+    expect(blockHeadings()).toEqual(["Start troubleshooting"]);
     expect(screen.queryByTestId("ts-answer-block")).toBeNull();
     expect(screen.queryByTestId("ts-evidence")).toBeNull();
   });
@@ -185,7 +185,7 @@ describe("the three blocks", () => {
     await show(<InvestigationPage initialCaseId={CASE_ID} />);
     // "The answer" carries a visible heading since the P1 restyle (each block
     // reads as a board group with its own head band).
-    expect(blockHeadings()).toEqual(["What's wrong?", "The answer", "The evidence"]);
+    expect(blockHeadings()).toEqual(["Start troubleshooting", "The answer", "The evidence"]);
     const blocks = Array.from(document.querySelectorAll(".ts-block"));
     expect(blocks.map((b) => b.getAttribute("data-testid")))
       .toEqual(["ts-pick", "ts-answer-block", "ts-evidence"]);
@@ -203,6 +203,40 @@ describe("the three blocks", () => {
     expect(screen.queryByRole("group", { name: "How to start" })).toBeNull();
     // no per-lane "Details" button anywhere
     expect(screen.queryAllByRole("button", { name: /^Details$/ })).toHaveLength(0);
+  });
+
+  // Owner, 2026-11-23: lighter type, new wording for "What's wrong?", the tasks
+  // arranged as cards, troubleshooting icons. Icons are decorative only.
+  it("lays block 1 out as two cards — the open cases and the describe box", async () => {
+    await show(<InvestigationPage />);
+    const pick = screen.getByTestId("ts-pick");
+    expect(within(pick).getByRole("heading", { name: "Open cases", level: 3 })).toBeInTheDocument();
+    expect(within(pick).getByRole("heading", { name: "Describe a problem", level: 3 })).toBeInTheDocument();
+    expect(within(screen.getByTestId("ts-describe")).getByRole("button", { name: "Start investigation" })).toBeInTheDocument();
+    expect(within(pick).getByText("Pick an open case, or describe a problem that is not listed.")).toBeInTheDocument();
+    expect(screen.queryByText(/What's wrong/)).toBeNull();
+  });
+
+  it("gives every block head an icon that never joins the heading's text or name", async () => {
+    await show(<InvestigationPage initialCaseId={CASE_ID} />);
+    const heads = Array.from(document.querySelectorAll(".ts-group-head"));
+    expect(heads).toHaveLength(3);
+    for (const h of heads) {
+      const mark = h.querySelector(".ts-mark");
+      expect(mark?.getAttribute("aria-hidden")).toBe("true");
+      expect(mark?.querySelector("svg")).not.toBeNull();
+      expect(mark?.textContent).toBe("");
+    }
+    expect(screen.getByRole("heading", { name: /^Start troubleshooting/, level: 2 })).toBeInTheDocument();
+    // every case row carries a decorative icon; its button name is still the case
+    const row = screen.getByRole("button", { name: /Link state change/ });
+    const ic = row.querySelector(".ts-case-ic");
+    expect(ic?.getAttribute("aria-hidden")).toBe("true");
+    // the actions keep their exact names with an icon beside the text
+    for (const name of ["Open ticket", "Escalate to TAC"]) {
+      const b = screen.getByRole("button", { name });
+      expect(b.querySelector("svg[aria-hidden='true']")).not.toBeNull();
+    }
   });
 
   it("puts ONE Ask Iris explanation on the picker heading, not a paragraph of prose", async () => {
@@ -252,7 +286,7 @@ describe("block 1 — what's wrong?", () => {
 
 describe("describing a problem", () => {
   const describeIt = async (text: string) => {
-    fireEvent.change(screen.getByLabelText("Not listed? Describe it"), { target: { value: text } });
+    fireEvent.change(screen.getByLabelText("What are users or devices experiencing?"), { target: { value: text } });
     await click("Start investigation");
   };
 
@@ -288,7 +322,7 @@ describe("describing a problem", () => {
   it("refuses to start on words that say nothing", async () => {
     await show(<InvestigationPage />);
     expect(screen.getByRole("button", { name: "Start investigation" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Not listed? Describe it"), { target: { value: "   " } });
+    fireEvent.change(screen.getByLabelText("What are users or devices experiencing?"), { target: { value: "   " } });
     expect(screen.getByRole("button", { name: "Start investigation" })).toBeDisabled();
     expect(mocks.createIncident).not.toHaveBeenCalled();
   });
@@ -697,7 +731,7 @@ describe("picking", () => {
 
   it("renders with no shell provider and does not crash", async () => {
     await show(<InvestigationPage />);
-    expect(screen.getByRole("heading", { name: /What's wrong\?/, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Start troubleshooting/, level: 2 })).toBeInTheDocument();
   });
 
   it("opens the case a deep link named", async () => {

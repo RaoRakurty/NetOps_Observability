@@ -6,7 +6,8 @@
  * The page is THREE BLOCKS (owner, 2026-09-06: "There are two sections which
  * look similar … simplify these pages and make it intuitive"):
  *
- *   1. What's wrong?  — one list of open cases + one box to describe a new one
+ *   1. Start troubleshooting — two cards: the open cases, and one box to
+ *                              describe a new problem
  *   2. The answer     — one card: cause, layer, blast radius, onset, actions
  *   3. The evidence   — one collapsed disclosure over the lanes
  *
@@ -33,42 +34,74 @@
 /* ── the block frame ─────────────────────────────────────────────────────── */
 .ts-block { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
 .ts-block-h {
-  margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
+  margin: 0; font-size: 18px; font-weight: 500; letter-spacing: -0.01em;
   display: flex; align-items: center; gap: 4px;
 }
 .ts-bad { margin: 0; font-size: 14px; line-height: 1.5; color: var(--bad, #ef4444); }
 
-/* ── 1 · the one list, then the one box ──────────────────────────────────── */
+/* ── 1 · start troubleshooting: two cards ──────────────────────────────────
+   Owner, 2026-11-23: "the font is too bold … align with our entire theme …
+   arrange these tasks in a modern intuitive way and add icons". The theme's
+   board heads, card titles and the Overview title all read at weight 500, so
+   this surface does too: 500 for headings, titles and values, 400 for body.
+   The open cases and the describe box sit side by side on wide screens and
+   stack on narrow ones; every icon is decorative beside its text label. */
+.ts-lede { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.ts-start {
+  display: grid; gap: 14px; align-items: start;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+}
+@media (max-width: 960px) { .ts-start { grid-template-columns: minmax(0, 1fr); } }
+.ts-card {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm, 9px);
+  background: var(--surface-2, var(--hover));
+}
+.ts-card-h {
+  margin: 0; display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 500; letter-spacing: -0.01em; color: var(--fg);
+}
+.ts-card-ic { color: var(--g, var(--accent)); flex: 0 0 auto; }
+.ts-card-top { display: flex; align-items: center; gap: 8px; }
+.ts-count { margin-left: auto; font-size: 12.5px; font-weight: 500; }
+.ts-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 0; }
+.ts-empty-ic { color: var(--good, #16a34a); flex: 0 0 auto; }
+
 .ts-cases {
   list-style: none; margin: 0; padding: 0; display: grid; gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
 .ts-case {
   width: 100%; height: 100%; text-align: left; cursor: pointer;
-  display: grid; gap: 3px 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: grid; gap: 3px 10px; align-items: start;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   padding: 10px 12px; border-radius: 9px;
-  border: 1px solid var(--border); background: transparent; color: var(--fg);
+  border: 1px solid var(--border); background: var(--surface); color: var(--fg);
+  transition: border-color .12s ease, background-color .12s ease;
 }
 .ts-case:hover { border-color: var(--accent); }
 .ts-case.on { border-color: var(--accent); background: var(--accent-soft); }
 .ts-case:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ts-case-l { grid-column: 1; font-weight: 600; font-size: 14px; line-height: 1.4; }
-.ts-case-f { grid-column: 1; }
+.ts-case-ic {
+  grid-column: 1; grid-row: 1 / span 2; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px; color: var(--g, var(--accent));
+  background: color-mix(in srgb, var(--g, var(--accent)) 14%, transparent);
+}
+.ts-case[data-kind="investigation"] .ts-case-ic { color: var(--accent); background: var(--accent-soft); }
+.ts-case-l { grid-column: 2; font-weight: 500; font-size: 14px; line-height: 1.4; }
+.ts-case-f { grid-column: 2; }
 .ts-case-chip {
-  grid-column: 2; grid-row: 1 / span 2; align-self: center;
+  grid-column: 3; grid-row: 1 / span 2; align-self: center;
   font-size: 12.5px; white-space: nowrap;
 }
 
-.ts-describe { display: flex; flex-direction: column; gap: 6px; }
-.ts-describe-l { font-size: 14px; font-weight: 500; color: var(--fg); }
-.ts-describe-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.ts-describe-row input {
-  flex: 1 1 320px; min-width: 0; padding: 9px 12px; border-radius: 8px; font-size: 14px;
+.ts-describe-l { font-size: 14px; font-weight: 400; color: var(--muted); }
+.ts-describe input {
+  width: 100%; min-width: 0; padding: 9px 12px; border-radius: 8px; font-size: 14px;
   border: 1px solid var(--border); background: var(--bg-2, var(--bg)); color: var(--fg);
 }
-.ts-describe-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ts-describe-row button { font-size: 14px; }
+.ts-describe input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ts-start-btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
 
 /* ── 2 · the answer card ─────────────────────────────────────────────────── */
 .ts-answer {
@@ -79,15 +112,15 @@
 .ts-answer[data-answer="confirmed"] { border-left-color: var(--bad, #ef4444); }
 .ts-answer[data-answer="likely"] { border-left-color: var(--warn, #d97706); }
 .ts-answer[data-answer="recovered"] { border-left-color: var(--good, #16a34a); }
-.ts-answer-h { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; }
+.ts-answer-h { margin: 0; font-size: 18px; font-weight: 500; line-height: 1.35; letter-spacing: -0.01em; }
 .ts-answer-f { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .ts-answer-f b { color: var(--fg); font-weight: 500; }
 .ts-answer-chip { margin-top: 3px; font-size: 12.5px; }
 .ts-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.ts-actions button { font-size: 14px; }
+.ts-actions button { font-size: 14px; display: inline-flex; align-items: center; gap: 7px; }
 
 /* ── 3 · the one evidence disclosure ─────────────────────────────────────── */
-.ts-inv .ts-ev-toggle { align-self: flex-start; font-size: 14px; }
+.ts-inv .ts-ev-toggle { align-self: flex-start; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
 .ts-ev-body { display: flex; flex-direction: column; gap: 14px; }
 .ts-ev-body[hidden] { display: none; }
 .ts-lanes { align-items: stretch; }
@@ -103,7 +136,7 @@
 .tsl-card { display: flex; flex-direction: column; gap: 8px; margin-bottom: 0; }
 .tsl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .tsl-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.tsl-title { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.tsl-title { margin: 0; font-size: 16px; font-weight: 500; letter-spacing: -0.01em; }
 .tsl-sum { margin: 0; font-size: 14px; line-height: 1.5; color: var(--fg); }
 .tsl-sum.bad { color: var(--bad, #ef4444); }
 .tsl-notwired { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); }
@@ -131,7 +164,7 @@
   gap: 9px; align-items: baseline; font-size: 14px;
 }
 .tsl-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tsl-k { font-weight: 600; }
+.tsl-k { font-weight: 500; }
 .tsl-v { color: var(--fg); }
 .tsl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); align-self: center; }
 .tsl-dot.good, .tsl-dot.healthy { background: var(--good, #22c55e); }
@@ -159,11 +192,11 @@
    are of it), so they share one set of rules rather than drifting apart. */
 .tac-panel { display: flex; flex-direction: column; gap: 14px; margin: 10px 0; font-size: 14px; }
 .tac-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.tac-h { margin: 0; font-size: 16px; font-weight: 600; }
+.tac-h { margin: 0; font-size: 16px; font-weight: 500; }
 .tac-ver { font-family: var(--font-mono, ui-monospace, monospace); }
 .tac-start { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .tac-step { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
-.tac-step-h { margin: 0; font-size: 16px; font-weight: 600; }
+.tac-step-h { margin: 0; font-size: 16px; font-weight: 500; }
 .tac-section { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .tac-section-h { margin: 6px 0 0; font-size: 12.5px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
 .tac-note { margin: 0; font-size: 13px; line-height: 1.5; }
@@ -443,7 +476,8 @@
 /* ── Paths redesign P1 (2026-11-20): the Flow Trace board structure ─────────
    Each block reads as a colour-keyed board group (the .dm-group look Measured
    paths uses), headed by a band in the block's hue; lanes are board panels;
-   the answer's four facts are a stat grid. Type: 16/600 headings, 14 body,
+   the answer's four facts are a stat grid. Type: 16/500 headings (owner,
+   2026-11-23: 600 read as too bold against the theme), 14 body,
    12.5 for chips only. Hues are tokens set per block via --g. */
 .ts-group {
   padding: 0; gap: 0; overflow: hidden;
@@ -453,12 +487,20 @@
 .ts-group > :not(.ts-group-head) + :not(.ts-group-head) { margin-top: 14px; }
 .ts-group > :last-child { margin-bottom: 14px; }
 .ts-group .ts-group-head {
-  display: flex; align-items: center; gap: 8px; margin: 0 0 14px;
-  padding: 10px 14px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg);
+  display: flex; align-items: center; gap: 10px; margin: 0 0 14px;
+  padding: 10px 14px; font-size: 16px; font-weight: 500; letter-spacing: -0.01em; color: var(--fg);
   background: color-mix(in srgb, var(--g, var(--accent)) 14%, var(--surface));
   border-left: 3px solid var(--g, var(--accent));
 }
 .ts-group > .ts-group-head + * { margin-top: 0; }
+.ts-group .ts-group-head .ts-block-h { font-size: 16px; font-weight: 500; }
+/* The block's icon badge: the block's icon on a soft disc in its hue. Not
+   numbered — the numbered step badges were retired on 2026-09-06. */
+.ts-mark {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 30px; height: 30px; border-radius: 8px; color: var(--g, var(--accent));
+  background: color-mix(in srgb, var(--g, var(--accent)) 16%, var(--surface));
+}
 
 .ts-facts {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 4px 0 0;
@@ -469,13 +511,13 @@
   padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px);
   background: var(--surface-2, var(--hover));
 }
-.ts-fact dt { margin: 0; font-size: 14px; color: var(--muted); font-weight: 500; }
+.ts-fact dt { margin: 0; font-size: 14px; color: var(--muted); font-weight: 400; }
 .ts-fact dd {
-  margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; color: var(--fg);
+  margin: 0; font-size: 16px; font-weight: 500; line-height: 1.35; color: var(--fg);
   overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
 }
 
-.ts-path .panel-tools h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.ts-path .panel-tools h3 { margin: 0; font-size: 16px; font-weight: 500; letter-spacing: -0.01em; }
 .ts-path .rca-ws { background: transparent; }
 
 .tsl-card.panel { padding: var(--sp-4, 16px); }
@@ -486,4 +528,4 @@
    Flows and Paths scopes carry). .panel-tools h3 outranks .tsl-title on
    specificity, so the lane title is restated here. */
 .ts-inv .fact-line, .ts-inv .mini-meta, .ts-inv .tsl-foot, .ts-inv .ts-case-f { font-size: 14px; }
-.ts-inv .tsl-title, .ts-inv .panel-tools h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.ts-inv .tsl-title, .ts-inv .panel-tools h3 { font-size: 16px; font-weight: 500; letter-spacing: -0.01em; }
