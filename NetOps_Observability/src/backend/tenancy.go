@@ -5,6 +5,7 @@ package backend
 
 import (
 	"net/http"
+	"netops/backend/internal/devname"
 	"netops/backend/internal/owner"
 	"netops/backend/internal/saved"
 	"netops/backend/internal/untaggedclaim"
@@ -703,6 +704,43 @@ func (s *server) visibleDevicesFor(c jwtClaims) []models.Device {
 		return nil
 	}
 	return s.deviceVisibilityFor(c).filter(s.discovery.Devices())
+}
+
+// deviceNameReplacer is the id → hostname rewrite for OPERATOR TEXT (RCA
+// document, ticket body, Iris answer): an operator reads the device's hostname,
+// never its internal `<sysName>-<address hash>` id (owner, 2026-11-23). devs is
+// the device set the reader may already see; owner, when set, narrows it to the
+// ONE tenant the text belongs to, so a cross-tenant reader never carries another
+// tenant's device names into this tenant's case or ticket (§3a). Naming rule:
+// internal/devname (same-name devices of a tenant told apart by address).
+func deviceNameReplacer(devs []models.Device, owner string) *devname.Replacer {
+	scoped := owner != ""
+	want := canonicalCorrTenant(owner)
+	in := make([]devname.Entry, 0, len(devs))
+	for _, d := range devs {
+		t := deviceTenant(d)
+		if scoped && canonicalCorrTenant(t) != want {
+			continue
+		}
+		in = append(in, devname.Entry{ID: d.ID, Name: d.Name, Address: d.Address, Tenant: t})
+	}
+	return devname.NewReplacer(devname.Names(in))
+}
+
+// callerDeviceNames: the rewrite for text shown to this caller about one
+// tenant's object (owner "" = whatever the caller may see).
+func (s *server) callerDeviceNames(c jwtClaims, owner string) *devname.Replacer {
+	return deviceNameReplacer(s.visibleDevicesFor(c), owner)
+}
+
+// tenantDeviceNames: the rewrite for text sent on a tenant's behalf with no
+// interactive reader (the ticket sweeper's outbound ticket) — that tenant's
+// own devices only.
+func (s *server) tenantDeviceNames(owner string) *devname.Replacer {
+	if s.discovery == nil {
+		return nil
+	}
+	return deviceNameReplacer(s.discovery.Devices(), canonicalCorrTenant(owner))
 }
 
 // visibleSitesFor reads the DECLARED-SITES store (the internal Source of Truth)

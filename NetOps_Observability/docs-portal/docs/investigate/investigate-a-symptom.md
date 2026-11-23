@@ -1,6 +1,6 @@
 ---
 title: Investigate a symptom
-description: Start from an open case or describe a new one, read seven evidence lanes in parallel, and hand the fault to the seam that owns it.
+description: Start from an open case or describe a new one, read the answer and the seven evidence lanes behind it, then ask Iris, open a ticket or escalate to TAC.
 page_type: task
 sidebar_position: 5
 ---
@@ -8,16 +8,15 @@ sidebar_position: 5
 # Investigate a symptom
 
 The Troubleshooting workspace is where the operator drives and Correlix does the
-legwork. You name what is wrong, or pick an open correlation case, and the
-workspace opens the evidence lanes that workflow needs, all at once, each one
-naming the API it read.
+legwork. You pick an open case, or describe what is wrong, and the workspace
+gives you the answer first and every evidence lane behind it, all read at once.
 
 ## Before you begin
 
 - Read access to **Investigate** (`infrastructure:read`).
-- A symptom in the operator's own words, or the id of an open case. Both entry
-  points are equal: a case shows what Correlix concluded, a symptom starts a
-  bisection with no verdict.
+- An open case, or the problem in your own words. A case Correlix correlated
+  carries its verdict; a problem you describe starts with none, and the
+  evidence lanes still read for it.
 - Know that a lane reporting nothing is telling you one of two different facts.
   *Not connected* means the source was never wired on this deployment. *Empty*
   means the source is wired and was quiet. The workspace never collapses them.
@@ -40,7 +39,7 @@ collector counts, per-collector rows and flow sources moved to
 **Platform → Tools → Stack Health**, in the Collection section.
 :::
 
-### Step 2 - Pick a symptom or an open case
+### Step 2 - Pick an open case or describe a problem
 
 Under **Start troubleshooting**, pick a case under **Open cases**, or describe
 the problem under **Describe a problem** and press **Start investigation**.
@@ -58,69 +57,84 @@ Whichever you pick, the workspace opens **every** evidence lane: no lane is
 pre-narrowed for you. (The nine-symptom picker, with its own lanes per
 symptom, was retired on 2026-09-06.)
 
-### Step 3 - Read the verdict header
+### Step 3 - Read the answer
 
-- With a **case** selected, the workspace renders the same six-question RCA
-  header the RCA workspace renders for that object. There is one verdict
-  vocabulary in the product, not two.
-- With only a **symptom** selected, the header says plainly that there is no
-  correlated verdict and that the layers are being bisected. Under it, the
-  layer ladder reports each rung as `evidence available`, `nothing observed in
-  this window`, `no source wired for this layer`, `not part of this symptom`, or
-  `still reading the sources`. The rungs are Physical, L2 / link, IGP, BGP,
-  Path / seam, Application, and Logs and changes. A rung is never counted as
-  answered merely because one of its lanes is on screen.
+Under **The answer**, the headline says what Correlix concluded, in plain
+words, and never more than the engine said:
 
-### Step 4 - Read the lanes
+- a confirmed cause reads as the cause itself;
+- a suspected one reads as the most likely cause, not yet confirmed;
+- a recovered problem reads **This problem has recovered**;
+- a cause the evidence contradicted reads **The leading cause was ruled out**;
+- no verdict at all — always the case for a problem you described — reads
+  **No cause confirmed yet**.
 
-Every lane names its source on the card, so nothing on the page is
-unverifiable:
+Four facts sit under the headline:
 
-| Lane | Reads |
+| Fact | What it says |
 |---|---|
-| Digital experience and probes | `/api/paths/health` |
-| What changed | `/api/events/feed?class=changes` |
-| Device and protocol health | `/api/metrics/query` |
-| Path | `/api/probe/paths` |
-| Routing and BGP | `/api/metrics/query` |
-| Flows | `/api/flows/top` |
-| Correlated events | `/api/events/feed` |
+| **Breaking at** | The layer — Physical link, Routing, Overlay / Service or Application — where an evidence lane found a problem on this case's device. Until a lane does, it reads **Unknown**: data in a lane is evidence to read, not a located fault. |
+| **Affects** | The devices and sites the case names, or **Nothing named yet**. |
+| **Since** | When the case started, or **Not stated**. |
+| **Owner** | Who owns the fix. Until the evidence points at one, it says nobody is named yet rather than guessing a team. |
 
-Each lane is in exactly one of five states: **loading**, **error** (the server's
-message, verbatim), **not connected**, **empty**, or **ready**. The distinction
-that matters in practice:
+A chip beside them gives the engine's confidence as **High**, **Medium** or
+**Low confidence**, or **Not scored**. For a correlated case, **Case path**
+draws where on the path the fault sits — the same path view the RCA workspace
+shows.
 
-- A metric family that has never been scraped is **not connected**. The lane
-  says which collector is not collecting, for example that no routing-protocol
-  metric has ever been scraped.
-- A family that exists with nothing out of state right now is **empty**.
-- No flow exporter ever seen is **not connected**; exporters sending with no
-  matching conversation is **empty**.
-- The change lane reads the same event store the feed does, so it is wired on
-  every deployment. No rows there is honestly **empty**, and the lane footer
-  states that proximity in time is not a causal claim.
+### Step 4 - Read the evidence
 
-**Device and protocol health** carries a **Protocol diagnostics** button that
-opens the BGP, OSPF and IS-IS panel in place. See
-[Diagnose a BGP, OSPF or IS-IS issue](/investigate/protocol-diagnostics).
+Select **Show the evidence**. The lanes keep reading while it is closed: they
+are what earn the **Breaking at** line.
+
+| Lane | Open in |
+|---|---|
+| User experience | WAN circuits |
+| Recent changes | Logs |
+| Devices & links | Device Monitoring |
+| Network path | WAN circuits |
+| Routing | Protocol Monitoring |
+| Traffic | Flows |
+| Alerts & events | Logs |
+
+Each card leads with one sentence of what it found, for example how many
+interfaces are down right now, and links to the page that has the full read.
+Each lane is in exactly one of five states: **loading**, **error** (the
+server's message, verbatim), **not connected**, **empty**, or **ready**.
+
+A lane with nothing to show is not dropped. It folds into one line under the
+cards, and the two quiet states stay different facts:
+
+- **Nothing feeds** *lane* — the source was never wired on this deployment, so
+  the layer cannot be seen at all.
+- **Nothing from** *lane* — the source is wired and was quiet in this window.
+
+For a correlated case, the engine's six-question RCA header sits at the bottom
+of the evidence: the same header the RCA workspace renders, one verdict
+vocabulary in the product, not two.
 
 ### Step 5 - Ask Iris, then hand it off
 
-1. In the **Iris co-pilot** lane, select **Ask Iris** for a grounded, cited read
-   of this investigation: what the evidence supports, what is missing, and a
-   recommended next step. Nothing is executed on your behalf.
-2. In **Handoff**, read the owner. Where the evidence has not attributed the
-   fault to a seam, the panel says no seam owner is attributed yet rather than
-   naming a team.
-3. Select **Create ticket** or **Export PDF**. Both are attached to a
-   correlation case, so they are unavailable on a symptom-only investigation.
+The buttons under the answer act on the case you picked:
+
+1. **Ask Iris** gives a grounded, cited read of this investigation: what the
+   evidence supports, what is missing, and a recommended next step. Nothing is
+   executed on your behalf.
+2. **Open ticket** sends the case to the configured ticket system. A ticket
+   needs a correlated case, so the button is unavailable on a problem you
+   described, and the page says so.
+3. **Escalate to TAC** collects the diagnostic command outputs for a vendor
+   TAC case from the device you choose and builds a redacted bundle on the
+   server. Only the commands that failed are listed, each with its reason. See
+   [Export a redacted bundle for vendor support](/investigate/send-to-tac).
 
 ## Result
 
-The layers with real evidence, the layers nothing is watching, and the layers
-that stayed quiet are each visible as different facts, in one screen. Where a case
-backs the investigation, the same verdict, owner and hand-off actions are on the
-page with them.
+The answer, the layer it breaks at and who owns it are on one screen. The
+evidence behind it stays one click away, with the layers that have real
+evidence, the layers nothing is watching, and the layers that stayed quiet each
+shown as a different fact.
 
 ## Related
 

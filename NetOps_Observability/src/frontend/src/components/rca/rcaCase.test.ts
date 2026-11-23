@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, it, expect } from "vitest";
-import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE, flowsLaneHref } from "./rcaCase";
+import { buildRcaCase, buildCaseEvents, EXAMPLE_CASE, flowsLaneHref, deviceLabel } from "./rcaCase";
 import { flowsHref, parseDeepLink } from "../../lib/flowsLink";
 import { signal, timeline, corrObject } from "../../test/factories";
 
@@ -974,5 +974,22 @@ describe("traffic lane → Explore → Flows", () => {
 
   it("the link reads back as the same device, interface and window", () => {
     expect(parseDeepLink(flowsLaneHref([flow()], ws, we))).toEqual({ device: "10.1.0.1", ifIndex: "7", from: ws, to: we });
+  });
+});
+
+describe("hostnames on the RCA case, never the internal id (owner 2026-11-23)", () => {
+  const names = new Map([["cedge-81-dde8d64d", "cEDGE-81"], ["vedge-51-79fbba30", "vEdge-51"]]);
+  it("deviceLabel names a device, an interface (colon form) and both ends of a path", () => {
+    expect(deviceLabel("cedge-81-dde8d64d", names)).toBe("cEDGE-81");
+    expect(deviceLabel("cedge-81-dde8d64d:Gi2", names)).toBe("cEDGE-81:Gi2");
+    expect(deviceLabel("vedge-51-79fbba30->cedge-81-dde8d64d", names)).toBe("vEdge-51 → cEDGE-81");
+    expect(deviceLabel("edge-9-aaaa:Gi1", names)).toBe("edge-9-aaaa:Gi1"); // unknown: unchanged
+  });
+  it("the server report title reads with the device named", () => {
+    const tl = timeline({ verdict_tier: "suspected", top_hypothesis: "undetermined", signals: [signal({ kind: "link_down", entity_id: "cedge-81-dde8d64d:Gi2", attached: true })] });
+    const obj = corrObject({ verdict_tier: "suspected", state: "open", signal_count: 1 });
+    const c = buildRcaCase(tl, obj, {}, "NetOps", [], undefined, { reportTitle: "Interface down on cedge-81-dde8d64d:Gi2", deviceNames: names });
+    expect(c.title).toBe("Interface down on cEDGE-81:Gi2");
+    expect(c.title).not.toContain("dde8d64d");
   });
 });

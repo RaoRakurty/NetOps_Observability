@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { buildDeviceLabels, buildDeviceNames, deviceDisplayName, loadDeviceNames, nameDeviceIn, resetDeviceNamesForTest } from "./deviceNames";
+import { buildDeviceLabels, buildDeviceNames, deviceDisplayName, loadDeviceNames, nameDeviceIn, nameDevicesIn, resetDeviceNamesForTest } from "./deviceNames";
 import { seriesLabel as boardSeriesLabel } from "../pages/panels";
 import { seriesLabel } from "../components/board/panels";
 import { api, type Device } from "../services/api";
@@ -93,5 +93,21 @@ describe("the internal device id never reaches operator text (owner 2026-11-23)"
     expect(boardSeriesLabel({ device: "cedge-40-b99e47eb", index: "3" }, n)).toBe("cEDGE-40·3");
     expect(boardSeriesLabel({ device: "cedge-40-b99e47eb" }, n)).toBe("cEDGE-40");
     expect(boardSeriesLabel({ device: "cedge-40-b99e47eb" })).toBe("cedge-40-b99e47eb"); // before names load
+  });
+});
+
+describe("nameDevicesIn — every known id in operator text named (owner 2026-11-23)", () => {
+  const n = new Map([["cedge-81-dde8d64d", "cEDGE-81"], ["vedge-51-79fbba30", "vEdge-51"]]);
+  it("names each id and keeps the interface colon form", () => {
+    expect(nameDevicesIn("Link down on cedge-81-dde8d64d:Gi2", n)).toBe("Link down on cEDGE-81:Gi2");
+    expect(nameDevicesIn("cedge-81-dde8d64d lost BGP to vedge-51-79fbba30.", n)).toBe("cEDGE-81 lost BGP to vEdge-51.");
+    expect(nameDevicesIn("vedge-51-79fbba30->cedge-81-dde8d64d", n)).toBe("vEdge-51->cEDGE-81");
+  });
+  it("leaves links, longer tokens and unknown ids alone", () => {
+    for (const t of ["#/devices/cedge-81-dde8d64d", "?device=cedge-81-dde8d64d", "cedge-81-dde8d64d-old", "xcedge-81-dde8d64d", "edge-9-aaaa down"]) {
+      expect(nameDevicesIn(t, n)).toBe(t);
+    }
+    expect(nameDevicesIn("cedge-81-dde8d64d", null)).toBe("cedge-81-dde8d64d");
+    expect(nameDevicesIn("", n)).toBe("");
   });
 });

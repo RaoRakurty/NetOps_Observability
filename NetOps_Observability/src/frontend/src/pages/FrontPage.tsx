@@ -8,6 +8,7 @@ import PathHealthList from "../components/PathHealthList";
 import ErrorBoundary from "../components/ErrorBoundary";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { SiteHealth } from "./overview/boardParts";
+import { deviceDisplayName, nameDevicesIn, useDeviceNames } from "../lib/deviceNames";
 import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected, mentionsInternal } from "../components/rca/labels";
 import { CorrSignal } from "../services/api";
 
@@ -271,6 +272,7 @@ function RcaCoverage() {
 // ── Panel 4 — What Changed ──────────────────────────────────────────────────
 function WhatChanged() {
   const { data, err } = usePoll(() => api.eventsFeed({ from: "24h", class: "changes", limit: "12" }));
+  const names = useDeviceNames();
   if (err) return <Panel title="What changed" state="degraded" />;
   const items: FeedItem[] = data?.items ?? [];
   if (items.length === 0) return <Panel title="What changed" state="inactive" note="No changes in the last 24h." hint="Topology, inventory, and alert-state changes appear here." />;
@@ -280,7 +282,7 @@ function WhatChanged() {
         {items.map((it) => (
           <div key={it.signal_id} style={{ display: "flex", gap: 9, fontSize: 12.5, alignItems: "baseline" }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: SEV_VAR[it.severity] ?? "var(--fg-subtle)", flexShrink: 0, marginTop: 4 }} />
-            <span style={{ color: "var(--fg)", minWidth: 0 }}>{upProto(it.title)}</span>
+            <span style={{ color: "var(--fg)", minWidth: 0 }}>{upProto(nameDevicesIn(it.title, names))}</span>
             <span className="fp-num" style={{ marginLeft: "auto", color: "var(--fg-muted)", whiteSpace: "nowrap" }}>{it.ts.slice(11, 16)}</span>
           </div>
         ))}
@@ -322,6 +324,9 @@ function ImpactSummary() {
 // ── Panel 10 — Capacity Outlook ─────────────────────────────────────────────
 export function CapacityOutlook() {
   const { data, err } = usePoll(() => api.metricsForecast());
+  // The forecast keys rows by device id; an operator reads the hostname
+  // (owner, 2026-11-23 — the internal id stays internal).
+  const names = useDeviceNames();
   if (err) return <Panel title="Capacity outlook" state="degraded" />;
   const rows = data?.interfaces ?? [];
   if (rows.length === 0) return <Panel title="Capacity outlook" state="inactive" note="No interface utilization data yet." />;
@@ -345,7 +350,7 @@ export function CapacityOutlook() {
         const tone = r.status === "saturated" || r.days_to_90 < 14 ? "var(--crit)" : r.days_to_90 < 30 ? "var(--warn)" : "var(--fg-subtle)";
         return (
           <div key={i} className="fp-row" style={{ borderLeftColor: tone, cursor: "default", gap: 9 }}>
-            <span className="fp-num">{r.device}</span>
+            <span className="fp-num">{deviceDisplayName(r.device, names)}</span>
             <span style={{ color: "var(--fg-muted)" }}>{r.interface}</span>
             <span className="fp-num" style={{ marginLeft: "auto", fontWeight: 600, color: tone }}>
               {r.status === "saturated" ? "at capacity" : `~${Math.round(r.days_to_90)}d to 90%`}
@@ -361,6 +366,7 @@ export function CapacityOutlook() {
 // ── Panel 2 — Top Health Contributors ───────────────────────────────────────
 function TopHealthContributors() {
   const { data, err } = usePoll(() => api.healthScore("global"));
+  const names = useDeviceNames();
   if (err) return <Panel title="Top health contributors" state="degraded" />;
   if (!data) return <Panel title="Top health contributors" state="inactive" note="Reading…" />;
   if (data.coverage_status === "INSUFFICIENT_TELEMETRY")
@@ -375,7 +381,7 @@ function TopHealthContributors() {
           <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
             <span className="fp-num" style={{ fontWeight: 600, minWidth: 30, textAlign: "right", color: c.points >= 12 ? "var(--crit)" : c.points >= 6 ? "var(--warn)" : "var(--fg)" }}>{c.points}</span>
             <span style={{ fontSize: 12.5, color: "var(--fg-subtle)", textTransform: "uppercase", letterSpacing: 0.05, minWidth: 80, flexShrink: 0 }}>{c.signal_class.replace(/_/g, " ")}</span>
-            <span style={{ color: "var(--fg)", minWidth: 0 }}>{c.reason}</span>
+            <span style={{ color: "var(--fg)", minWidth: 0 }}>{nameDevicesIn(c.reason, names)}</span>
           </div>
         ))}
       </div>
@@ -570,6 +576,7 @@ function KpiStrip() {
 // ── Top issue spotlight — THE product sentence (explainable, network-native) ──
 function TopIssueSpotlight() {
   const { data } = usePoll(() => api.correlations(80, 2592000, "open"));
+  const names = useDeviceNames();
   const [tl, setTl] = useState<CorrTimeline | null>(null);
   const objs = (data?.data ?? []).filter((o) => o.verdict_tier !== "undetermined" && !isInternalStackAffected(o.affected));
   const top = objs.find((o) => o.verdict_tier === "confirmed") ?? objs[0];
@@ -585,7 +592,8 @@ function TopIssueSpotlight() {
   const tone = confirmed ? "var(--crit)" : "var(--warn)";
   let affected: Record<string, string[]> = {};
   try { affected = JSON.parse(top.affected || "{}"); } catch { /* ignore */ }
-  const device = affected.devices?.[0] || (affected.interfaces?.[0]?.split(":")[0]) || "the network";
+  const rawDevice = affected.devices?.[0] || (affected.interfaces?.[0]?.split(":")[0]) || "";
+  const device = rawDevice ? deviceDisplayName(rawDevice, names) : "the network";
   const sig = top.top_hypothesis !== "undetermined" ? upProto(signatureName(top.top_hypothesis).toLowerCase()) : "network issue";
   const phrases: string[] = [];
   if (tl) {

@@ -5,6 +5,7 @@ import { confirmAdvice, confirmProtocol } from "./confirmAdvice";
 import { CorrTimeline, CorrObject, CorrSignal, Seam, VerificationRun } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason, evidenceSourceLabel, isSecurityModality, securityClassTitle, securityProvider, seamTypeLabel, SECURITY_MODALITY, SECURITY_SOURCE_LABEL } from "./labels";
 import { weakestFidelity } from "../../lib/fidelity";
+import { nameDevicesIn } from "../../lib/deviceNames";
 import { parseTs } from "../../lib/time";
 import type { TopoGraph } from "./topoGraph";
 import type { TopologyContext } from "./topologyContext";
@@ -239,8 +240,18 @@ export interface CaseEventExtras {
 // renders as that name ("cEDGE-81", P-424934); anything else keeps the
 // entityLabel rules.
 export function deviceLabel(raw: string, names?: ReadonlyMap<string, string>): string {
-  const name = names?.get(raw.trim());
-  return name ? name : entityLabel(raw);
+  const t = raw.trim();
+  const name = names?.get(t);
+  if (name) return name;
+  if (names && names.size > 0) {
+    // A path "a->b" names each end; an interface "id:Gi2" keeps its colon
+    // form with the device named ("cEDGE-81:Gi2", as the PDF reads).
+    if (t.includes("->")) return t.split("->").map((p) => deviceLabel(p, names)).join(" → ");
+    const ci = t.indexOf(":");
+    const base = ci > 0 ? names.get(t.slice(0, ci)) : undefined;
+    if (base) return `${base}:${t.slice(ci + 1)}`;
+  }
+  return entityLabel(raw);
 }
 
 // buildCaseEvents — pure derivation of the chronological event list from data
@@ -740,7 +751,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
   // The server report's title wins (RCA document v2 §3.1: the title names the
   // OBSERVED condition; an unconfirmed hypothesis is only a suffix). One title
   // rule, in one place — the page and the PDF read the same words.
-  const serverTitle = (extras?.reportTitle ?? "").trim();
+  // The server builds it from entity ids: the devices are named here, from the
+  // caller's own inventory (the PDF names them server-side, same rule).
+  const serverTitle = nameDevicesIn((extras?.reportTitle ?? "").trim(), extras?.deviceNames);
   if (serverTitle) title = serverTitle;
 
   const confidence = confirmed ? "High" : attachedCount >= 2 ? "Medium" : "Low";

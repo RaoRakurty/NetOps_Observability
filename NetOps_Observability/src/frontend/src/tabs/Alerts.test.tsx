@@ -158,13 +158,20 @@ describe("EpisodeDetailBody triage affordances", () => {
   });
 
   it("assigns to a username and snoozes for a preset duration", async () => {
-    episodeAssign.mockResolvedValue({ ...baseEpisode, assigned_to: "noc-lee", assigned_by: "admin" });
+    // The assign answer arrives a little later, as it does on a loaded CI runner.
+    episodeAssign.mockImplementation(() => new Promise((r) => setTimeout(() => r({ ...baseEpisode, assigned_to: "noc-lee", assigned_by: "admin" }), 50)));
     episodeSnooze.mockResolvedValue({ ...baseEpisode, snoozed_until: new Date(Date.now() + 7_200_000).toISOString() });
     render(<EpisodeDetailBody episode={baseEpisode} />);
 
     fireEvent.change(screen.getByLabelText("Assignee"), { target: { value: "noc-lee" } });
     fireEvent.click(screen.getByRole("button", { name: "Assign" }));
     await waitFor(() => expect(episodeAssign).toHaveBeenCalledWith("ep-1", "noc-lee"));
+    // Tracker 429: every action button is disabled while a request is in flight.
+    // The call above is recorded the moment Assign is clicked, long before the
+    // answer lands, so wait for the assignment itself (and the buttons coming
+    // back) — a click on a still-disabled Snooze is silently dropped.
+    expect(await screen.findByText("Assigned to")).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Snooze" }) as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: "Snooze" }));
     await waitFor(() => expect(episodeSnooze).toHaveBeenCalledTimes(1));
