@@ -128,7 +128,11 @@ export default function IrisTriggers() {
         </p>
       )}
       {!data.durable && <p style={muted}>This installation keeps triggers in memory; a restart clears them.</p>}
-      <SettingsForm settings={data.settings} tokensToday={data.tokens_today} onSave={(s) => act(() => api.saveInvestigationTriggerSettings(s), "The settings could not be saved.")} />
+      {/* Keyed on the server's VALUES: a reload that returns the same settings
+          keeps the admin's unsaved edits; a save that changed them (or another
+          admin's change) remounts the form with what the server holds. */}
+      <SettingsForm key={settingsKey(data.settings)} settings={data.settings} tokensToday={data.tokens_today}
+        onSave={(s) => act(() => api.saveInvestigationTriggerSettings(s), "The settings could not be saved.")} />
 
       <div style={{ marginTop: 10 }}><strong>Triggers</strong></div>
       {data.triggers.length === 0 && <p style={muted}>No triggers yet.</p>}
@@ -162,13 +166,21 @@ export default function IrisTriggers() {
   );
 }
 
+/** The identity of the server's settings, by value (a reload builds new objects). */
+export function settingsKey(s: InvestigationTriggerSettings): string {
+  return `${s.enabled ? 1 : 0}|${s.max_runs_per_day}|${s.max_tokens_per_day}`;
+}
+
 function SettingsForm({ settings, tokensToday, onSave }: {
   settings: InvestigationTriggerSettings;
   tokensToday: number;
   onSave: (s: InvestigationTriggerSettings) => Promise<void>;
 }) {
+  // The draft is seeded ONCE per mount; the parent remounts on a server-side
+  // change (key). It used to be reset from props in an effect: every reload
+  // builds a new settings object, so turning a trigger on/off wiped unsaved
+  // edits, and an effect flushed after the admin's click overwrote it.
   const [f, setF] = useState(settings);
-  useEffect(() => setF(settings), [settings]);
   return (
     <ol style={{ ...text14, paddingLeft: 20, margin: "4px 0" }} data-testid="trigger-settings">
       <li style={row}>
