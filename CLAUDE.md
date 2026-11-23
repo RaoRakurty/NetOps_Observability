@@ -112,7 +112,12 @@ inventory of what "doing its job" actually means.
    layer that survives the whole stack dying. Checks a FIXED list of compose
    services running/healthy (`EXPECTED_SERVICES`, overridable with
    `WATCHDOG_SERVICES`; the default does not include gnmic, vmauth, secrets-seal,
-   cloud-ingest, keycloak or gotenberg) + probes `:8000` + api liveness, and (2026-09-02) queries
+   cloud-ingest, keycloak or gotenberg). Beyond that list, any container of the
+   stack whose restart policy is `always`/`unless-stopped` but which is not running
+   is the critical `STRANDED_SERVICE` (2026-11-23: vmauth stayed down after a reboot
+   because a `docker kill -s HUP` had set Docker's manual-stop flag;
+   `STRANDED_CHECK=0` disables it; detect only, never auto-starts). It also
+   probes `:8000` + api liveness, and (2026-09-02) queries
    VictoriaMetrics directly for **consumer-group membership** (correlation and
    every `netops-router-*` lane) and the **alert-delivery heartbeat** —
    `ENGINE_CONSUMER_CHECK=0` disables that block. Pings healthchecks.io
