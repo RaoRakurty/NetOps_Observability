@@ -750,7 +750,11 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   the A4 dwell watch, and the aggregation plane's K1 identity
   (`aggregation.RECOVERY_CLEAR_BASE`, policy `p3.k3.v2`; one-to-one, so the forwarded
   set is unchanged). The RCA document's never-established reading also counts a BGP
-  clear for the peer as established (`rcaNeverEstablishedOnly`). `up` is a positional
+  clear for the peer as established (`rcaNeverEstablishedOnly`). The archive slice keeps
+  every loose clear in the object's bounds tenant-wide, so the RCA report's recovery stage
+  and the ticket emitter gate read a clear (or a `*_status` up) as recovery only when it is
+  on one of the incident's own anomalous entities (tracker 443,
+  `rca.RecoveryEvidenceForIncident`; read side, engine unchanged). `up` is a positional
   claim (380 PR 2): rows classify the state a transition goes TO, so `from FULL to
   EXSTART` is a down, not a recovery. Not clears, deliberately: STP forwarding (a
   topology change), FHRP roles, LLDP neighbour adds, wireless `*_up` kinds (tracker
