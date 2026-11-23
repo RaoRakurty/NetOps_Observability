@@ -726,7 +726,9 @@ def test_normalize_database_url_strips_verify_full_for_phase_a(tmp_path):
 # argv/stdin the real Stack builds, so the tests exercise the real command
 # construction (and can prove no credential ever reaches argv):
 #   * vmauth loads the REAL rendered data/secrets/vmauth/vmauth/auth.yml on
-#     SIGHUP (`docker compose kill -s HUP vmauth`), refuses a config with two
+#     SIGHUP delivered in-container (`docker compose exec -T vmauth kill -HUP 1`
+#     — never `docker compose kill`, which disarms unless-stopped), or on its
+#     own 10 s re-read when `polls_config` is set, refuses a config with two
 #     identical credentials (as v1.101.0 does), resets per-user counters on
 #     every load and exports them with the `cred` label — all as verified on
 #     the pinned image;
@@ -757,7 +759,7 @@ class FakeClock:
 class FakeVmauthStack:
     def __init__(self, root: Path, *, running=ALL_SERVICES, reload_breaks=False,
                  refuse_current=False, keep_accepting=False, stuck=(),
-                 restart_fails=()) -> None:
+                 restart_fails=(), exec_fails=False, polls_config=False) -> None:
         self.root = root
         self.running = set(running)
         self.reload_breaks = reload_breaks       # vmauth rejects the next config
@@ -765,6 +767,8 @@ class FakeVmauthStack:
         self.keep_accepting = keep_accepting     # vmauth ignores the block removal
         self.stuck = set(stuck)                  # aliases whose client never moves
         self.restart_fails = set(restart_fails)
+        self.exec_fails = exec_fails             # `compose exec` cannot run kill
+        self.polls_config = polls_config         # -configCheckInterval re-read
         self.calls: list[tuple[list[str], str]] = []
         self.users: dict[str, tuple[str, str, str]] = {}
         self.ghosts: set[tuple[str, str]] = set()
@@ -825,6 +829,8 @@ class FakeVmauthStack:
         return (self.root / "data" / "secrets" / "vmauth" / ident.alias / "password").read_text()
 
     def tick(self) -> None:
+        if self.polls_config:
+            self._load()
         for i in orot.IDENTITIES:
             if not set(i.services) & self.running:
                 continue
@@ -846,8 +852,12 @@ class FakeVmauthStack:
         self.calls.append((list(argv), stdin))
         if argv[:3] == ["docker", "compose", "ps"]:
             return sr.ExecResult(0, "0123456789ab\n" if argv[-1] in self.running else "")
-        if argv[:3] == ["docker", "compose", "kill"]:
-            assert argv[3:] == ["-s", "HUP", "vmauth"], argv
+        assert argv[:3] != ["docker", "compose", "kill"], \
+            "a Docker-API signal marks vmauth manually stopped: it will not come back after a reboot"
+        if argv[:3] == ["docker", "compose", "exec"]:
+            assert argv[3:] == ["-T", "vmauth", "kill", "-HUP", "1"], argv
+            if self.exec_fails:
+                return sr.ExecResult(126, "", "OCI runtime exec failed: kill: not found")
             self.hups += 1
             # Clients keep talking between the render and the reload: a client
             # handed the new value BEFORE vmauth holds it would 401 right here.
@@ -1032,6 +1042,55 @@ def test_reload_failure_rolls_back_and_touches_no_client(ovl, capsys):
     assert stack.restarts == [] and stack.unauthorized == []
 
 
+def test_no_signal_path_still_rotates_on_vmauths_own_config_reread(ovl, capsys):
+    # The in-container kill cannot run (a future image without busybox): the
+    # rotation must not fail on that alone — vmauth re-reads auth.yml every
+    # 10 s and the metrics proof is what decides.
+    stack, clock = ovl.make(exec_fails=True, polls_config=True)
+    code = ovl.rotate("vmauth-all", stack, clock)
+    out = capsys.readouterr()
+    assert code == orot.OK, out.err
+    assert stack.hups == 0
+    assert "could not signal vmauth" in out.out + out.err
+    assert stack.unauthorized == [], "a client saw a 401 — the rotation was not zero-downtime"
+
+
+def test_no_signal_and_no_reread_fails_on_the_proof_and_rolls_back(ovl, capsys):
+    stack, clock = ovl.make(exec_fails=True)
+    before_files = _secrets_snapshot(ovl.root)
+    code = ovl.rotate("vmauth-gnmic", stack, clock)
+    assert code == orot.FAILED
+    err = capsys.readouterr().err
+    assert "has not loaded the expected users" in err and "rolled back" in err.lower()
+    assert _secrets_snapshot(ovl.root) == before_files
+    assert stack.restarts == [] and stack.unauthorized == []
+
+
+def test_no_script_signals_a_long_running_service_through_the_docker_api():
+    """`docker (compose) kill -s <ANY signal>` sets Docker's manually-stopped
+    flag, so an `unless-stopped` service is not restarted after a reboot or a
+    crash (2026-11-23: vmauth stayed Exited after a reboot; every metrics query
+    502'd for 75 min). Reload signals go in-container (`compose exec … kill`)."""
+    allowed = {
+        # CI chaos: SIGKILLs a store ON PURPOSE in a throwaway CI stack.
+        "scripts/ci/chaos_install.py",
+    }
+    pat = re.compile(r"""(docker|compose)["',\s(\[]+kill\b""")
+    offenders = []
+    for path in list((ROOT / "scripts").rglob("*")) + list((ROOT / "deployment").rglob("*")):
+        if path.suffix not in (".py", ".sh") or not path.is_file():
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        if rel in allowed:
+            continue
+        for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if pat.search(line):
+                offenders.append(f"{rel}:{n}: {line.strip()}")
+    assert offenders == [], "\n".join(offenders)
+
+
 def test_new_credential_proof_failure_rolls_back(ovl, capsys):
     stack, clock = ovl.make(refuse_current=True)
     old = parse_env(ovl.env_path)
@@ -1136,7 +1195,7 @@ def test_dry_run_changes_nothing(ovl, capsys):
     assert ovl.env_path.read_text() == env_before
     assert _secrets_snapshot(ovl.root) == files_before
     assert not (ovl.env_path.parent / ".env.snapshot").exists()
-    mutating = [a for a, _ in stack.calls if a[:3] in (["docker", "compose", "kill"],
+    mutating = [a for a, _ in stack.calls if a[:3] in (["docker", "compose", "exec"],
                                                        ["docker", "compose", "restart"])]
     assert mutating == [] and stack.hups == 0
 
