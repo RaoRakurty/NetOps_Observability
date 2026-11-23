@@ -772,6 +772,16 @@ another tenant, a non-owner in the `global` tenant, a caller with no tenant and 
 or 404 — `TestProviderChangesReachOnlyThePlatformOwner`, and through the real router
 `TestProviderChangesOverTheRealRouter`. RLS and WITH CHECK on a real Postgres — `TestProviderChangesRLSPG`.
 
+**PROVEN by tests (operator-visibility restriction, 2026-11-10):** `/api/changes`, `/{id}`, `/{id}/diff`, the
+Iris NL change read and the NL application seeds apply `Tenant.OperatorRestricted` through one helper,
+`changeLedgerReadTenant` (`ai_troubleshoot_deps.go`), resolved by `operatorTelemetryRestriction`. The platform
+owner scoped into a restricted tenant (`as_tenant` or `X-Acting-Tenant`) gets an empty list and 404 by id, never
+403, and no seed from its ledger or its journeys. The Global view, with a tenant restricted, reads the Provider's
+ledger with nothing of that tenant. An unrestricted tenant still reads normally. A restricted tenant still reads
+its own ledger. All of this goes through the real router and auth middleware:
+`TestChangeReadsHonourTheOperatorVisibilityRestriction`. `TestNLQScopeMethodsCallTheirChokepoints` pins every path
+to the helper.
+
 **BUILT, NOT PROVEN:** nothing has run on the lab. Whether real traps from tenant-less devices now reach the
 Provider's ledger shows on `netops_change_ledger_writes_total{producer="device_trap"}` once deployed.
 
@@ -781,8 +791,7 @@ Provider's ledger shows on `netops_change_ledger_writes_total{producer="device_t
   platform owner has no Provider rows in the Changes page. It reads them through `/api/changes` and Iris.
 - `config_capture` still fails on a tenant-less device (the ledger refuses a blank tenant, counted `failed`),
   and `correlix_audit` still skips platform-scope actions. This decision changed neither.
-- `/api/changes` and the Iris NL change read do not apply the per-tenant operator-visibility restriction when
-  the platform owner scopes into a restricted tenant. The DEM routes do. This predates the decision and is open.
+
 ## 26. Tenant-owned discovery scopes (tracker 396, 2026-11-10)
 
 Owner decisions D1–D5, 2026-11-10: the platform owner points a scan at a customer's network on its

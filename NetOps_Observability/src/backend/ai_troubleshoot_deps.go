@@ -4237,7 +4237,7 @@ func nlqLedgerQuery(q plan.ChangeQuery, limit int) experience.ChangeQuery {
 }
 
 func (h *nlqScope) Changes(ctx context.Context, q plan.ChangeQuery) ([]plan.ChangeRow, bool, error) {
-	tenant := changeLedgerTenant(h.claims)
+	tenant := h.s.changeLedgerReadTenant(h.claims)
 	limit := q.Limit
 	if limit <= 0 || limit > nlqChangeFetch {
 		limit = nlqChangeFetch
@@ -4443,6 +4443,15 @@ func (h *nlqScope) appSeeds(ctx context.Context) ([]resolve.Named, error) {
 	if err != nil {
 		return nil, err
 	}
+	// No readable ledger means no seeds at all — not the ledger's applications
+	// and not the journeys' either. That is the caller with no tenant, the
+	// non-owner in the global tenant (whose journeys the DEM lane never stores)
+	// and the platform owner scoped into an operator-restricted tenant, whose
+	// journey names are that tenant's data as much as its change rows are.
+	ledger := h.s.changeLedgerReadTenant(h.claims)
+	if ledger == "" {
+		return nil, nil
+	}
 	tenant, _ := principalTenant(h.claims)
 	var values []string
 	journeys, err := h.s.experienceStore.ListJourneys(ctx, tenant)
@@ -4452,7 +4461,7 @@ func (h *nlqScope) appSeeds(ctx context.Context) ([]resolve.Named, error) {
 	for _, j := range journeys {
 		values = append(values, j.App)
 	}
-	evs, err := h.s.experienceStore.ListChanges(ctx, changeLedgerTenant(h.claims), experience.ChangeQuery{Since: time.Now().Add(-nlqAppSeedWindow), Limit: nlqAppSeedFetch})
+	evs, err := h.s.experienceStore.ListChanges(ctx, ledger, experience.ChangeQuery{Since: time.Now().Add(-nlqAppSeedWindow), Limit: nlqAppSeedFetch})
 	if err != nil {
 		return nil, err
 	}
@@ -4518,7 +4527,9 @@ func stringSet(xs []string) map[string]bool {
 
 // changeLedgerTenant is THE answer to "whose change ledger may this caller read",
 // for every read of the ledger outside the DEM routes (demAuthz refuses the
-// platform tenant outright, for everyone).
+// platform tenant outright, for everyone). It is reached ONLY through
+// changeLedgerReadTenant, which adds the operator-visibility restriction; no
+// read calls it directly (TestNLQScopeMethodsCallTheirChokepoints).
 //
 // A tenant reads its own. The Provider's rows (owner decision 2026-11-09) are
 // platform data, so they go to exactly the identity requirePlatformAdmin and
@@ -4535,8 +4546,49 @@ func changeLedgerTenant(claims jwtClaims) string {
 	return tenant
 }
 
+// changeLedgerReadTenant is THE ledger every change read outside the DEM routes
+// uses: /api/changes (list, /{id}, /{id}/diff), the Iris NL change read and the
+// NL application seeds. It is changeLedgerTenant with the per-tenant
+// operator-visibility restriction (Tenant.OperatorRestricted) applied, resolved
+// with the SAME primitive every other read uses (operatorTelemetryRestriction)
+// rather than a second copy of the rule. Its two answers:
+//
+//   - deny — the platform owner has scoped INTO a restricted tenant: "", no
+//     ledger. The store answers "" with nothing, so a list is empty and a change
+//     id is 404, the answer a foreign id gets. Never a refusal: a 403 would
+//     confirm the tenant has changes at all. demAuthz does the same for the DEM
+//     change routes.
+//
+//   - exclude — the owner is in the Global view while some tenant is restricted.
+//     The Global view reads the Provider's ledger alone, never a union (#168),
+//     and the Provider can never be restricted (tenant.Store refuses it), so
+//     nothing of a restricted tenant can be on it. The check below keeps that
+//     true by construction should the Global view's ledger ever change: a
+//     ledger that is itself on the hidden list is not read.
+//
+// A tenant's own users are never restricted (principalRestrictedIDs is empty for
+// them), so a restricted tenant still reads its own ledger. A live break-glass
+// session un-hides its tenant here exactly as it does everywhere else.
+func (s *server) changeLedgerReadTenant(claims jwtClaims) string {
+	ledger := changeLedgerTenant(claims)
+	if ledger == "" {
+		return ""
+	}
+	tenant, cross := principalTenant(claims)
+	exclude, deny := s.operatorTelemetryRestriction(claims, tenant, cross)
+	if deny {
+		return ""
+	}
+	for _, id := range exclude {
+		if strings.EqualFold(id, ledger) {
+			return ""
+		}
+	}
+	return ledger
+}
+
 // handleChanges serves /api/changes[/{id}[/diff]] over the change ledger
-// (internal/changeapi). Every read is the ledger changeLedgerTenant names, from
+// (internal/changeapi). Every read is the ledger changeLedgerReadTenant names, from
 // the token; the incident anchor and the configuration diff reuse the SAME scoped reads
 // the NL query path and the config-diff tool use.
 func (s *server) handleChanges(w http.ResponseWriter, r *http.Request) {
@@ -4565,7 +4617,7 @@ func (s *server) changeAPI() changeapi.Deps {
 				return changeapi.Caller{}, false
 			}
 			_, cross := principalTenant(claims)
-			return changeapi.Caller{Tenant: changeLedgerTenant(claims), Cross: cross}, true
+			return changeapi.Caller{Tenant: s.changeLedgerReadTenant(claims), Cross: cross}, true
 		},
 		Incident: func(ctx context.Context, r *http.Request, id string) (changeapi.IncidentScope, error) {
 			claims, _ := userFrom(r.Context()) // Authorize already required a principal
