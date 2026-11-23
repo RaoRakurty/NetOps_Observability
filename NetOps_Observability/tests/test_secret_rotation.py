@@ -1075,7 +1075,15 @@ def test_no_script_signals_a_long_running_service_through_the_docker_api():
         # CI chaos: SIGKILLs a store ON PURPOSE in a throwaway CI stack.
         "scripts/ci/chaos_install.py",
     }
-    pat = re.compile(r"""(docker|compose)["',\s(\[]+kill\b""")
+    # A real invocation, not prose that names the hazard: shell (command start,
+    # after `$(`, a pipe, `&&`, `;` or a backtick, optionally under sudo) or a
+    # Python argv list (["docker", "kill" …], ["compose", "kill" …],
+    # self._compose(["kill" …]).
+    pat = re.compile(
+        r"""(?:^|\$\(|[|;&`])\s*(?:sudo\s+)?docker\s+(?:compose\s+(?:-\S+\s+\S+\s+)*)?kill\b"""
+        r"""|["']docker["']\s*,\s*(?:["']compose["']\s*,\s*)?["']kill["']"""
+        r"""|["']compose["']\s*,\s*["']kill["']"""
+        r"""|_compose\(\s*\[\s*["']kill["']""")
     offenders = []
     for path in list((ROOT / "scripts").rglob("*")) + list((ROOT / "deployment").rglob("*")):
         if path.suffix not in (".py", ".sh") or not path.is_file():
@@ -1089,6 +1097,11 @@ def test_no_script_signals_a_long_running_service_through_the_docker_api():
             if pat.search(line):
                 offenders.append(f"{rel}:{n}: {line.strip()}")
     assert offenders == [], "\n".join(offenders)
+    for bad in ('docker kill -s HUP x', 'out=$(docker compose kill -s HUP vmauth)', 'x && sudo docker kill y',
+                '["docker", "compose", "kill", "-s", "HUP", "vmauth"]', 'self._compose(["kill", "-s", "HUP"])'):
+        assert pat.search(bad), bad
+    for ok in ('problems+=("set by docker stop / docker kill -s <signal>")', '["exec", "-T", "vmauth", "kill", "-HUP", "1"]'):
+        assert not pat.search(ok), ok
 
 
 def test_new_credential_proof_failure_rolls_back(ovl, capsys):
