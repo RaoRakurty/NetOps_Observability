@@ -69,6 +69,13 @@ ESCALATION_CALLS = {"fail", "die", "abort", "refuse", "exit"}  # + attr .exit (s
 AllowKey = tuple[str, str, str] | tuple[str, int]
 
 ALLOWLIST: dict[AllowKey, str] = {
+    # 2026-11-23 — scripts/demo_fill.py, tracker 475 (signed path sets):
+    ("demo_fill.py", "read_prober_key", "ef18a1b7"):
+        "demo-data tool reading the prober-control key to sign its traceroute "
+        "set: an unreadable key returns (None, reason naming the path and "
+        "strerror, never the key); the caller prints that reason to stderr "
+        "and skips ONLY the traceroute lane (the api would refuse an "
+        "unsigned set anyway) — it never writes or reports a set as sent.",
     # ===================================================================
     # 2026-09-07 — scripts/install.py, fresh-install acceptance fixes
     # (docs/audit/FRESH_INSTALL_ACCEPTANCE_2026-09-06.md). Four reviewed
