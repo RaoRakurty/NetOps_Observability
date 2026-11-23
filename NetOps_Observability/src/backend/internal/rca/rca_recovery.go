@@ -256,3 +256,42 @@ func BuildIncidentPhases(firstObs time.Time, ra RecoveryAssessment, monitoringUn
 	}
 	return phases
 }
+
+// ---- recovery scope (tracker 443) ----------------------------------------------
+
+// rcaRecoveryEntityKey is the identity a recovery must share with the incident.
+// A clear binds to the fault's own entity (tracker 380: same entity, tokens,
+// native_id; vManage `<kind>_clear` likewise), so type + id is the whole key,
+// for every vendor and lane. An empty or missing id names nothing.
+func rcaRecoveryEntityKey(sig map[string]any) (string, bool) {
+	id := asString(sig["entity_id"])
+	if id == "" {
+		return "", false
+	}
+	return asString(sig["entity_type"]) + "\x00" + id, true
+}
+
+// RecoveryEvidenceForIncident keeps only the recoveries about one of the
+// incident's own anomalous entities. The archive slice carries every loose
+// clear inside the object's time bounds tenant-wide (engine stage [8]
+// `_archive_slice`: clears are not nodes, so the slice is replay-exact without
+// an entity test), and a different port's link-up must never read as this
+// incident's recovery. The kind is deliberately not compared: any recovery on
+// the faulted entity (its link-up, its counter episode clearing) speaks for it.
+// Fail-closed: an entity the incident's own evidence does not name is not its
+// recovery, so an unrecognised spelling reads "not observed", never "recovered".
+func RecoveryEvidenceForIncident(anomalous, recoveries []map[string]any) []map[string]any {
+	own := make(map[string]bool, len(anomalous))
+	for _, sig := range anomalous {
+		if k, ok := rcaRecoveryEntityKey(sig); ok {
+			own[k] = true
+		}
+	}
+	var out []map[string]any
+	for _, sig := range recoveries {
+		if k, ok := rcaRecoveryEntityKey(sig); ok && own[k] {
+			out = append(out, sig)
+		}
+	}
+	return out
+}

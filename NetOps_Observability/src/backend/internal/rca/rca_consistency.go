@@ -415,32 +415,24 @@ func TicketFactConsistencyIssues(state string, sigRows []map[string]any) []strin
 	var (
 		firstAnomaly, lastAnomaly time.Time
 		lastRecovery              time.Time
-		stateUpTimes              []time.Time
-		anomalous                 int
+		attachedRows, clearRows   []map[string]any
+		stateUpRows               []map[string]any
 	)
 	for _, sig := range sigRows {
 		kind := fmt.Sprintf("%v", sig["kind"])
 		ts, tsOK := parseChTS(fmt.Sprintf("%v", sig["ts"]))
 		if rcaIsRecoveryStateSignal(sig) {
-			if tsOK {
-				stateUpTimes = append(stateUpTimes, ts)
-			}
+			stateUpRows = append(stateUpRows, sig)
 			continue
 		}
 		if strings.HasSuffix(kind, "_clear") {
-			ct, ok := parseChTS(fmt.Sprintf("%v", sig["clear_ts"]))
-			if !ok {
-				ct, ok = ts, tsOK
-			}
-			if ok && ct.After(lastRecovery) {
-				lastRecovery = ct
-			}
+			clearRows = append(clearRows, sig)
 			continue
 		}
 		if attached, _ := sig["attached"].(bool); !attached {
 			continue
 		}
-		anomalous++
+		attachedRows = append(attachedRows, sig)
 		if tsOK {
 			if firstAnomaly.IsZero() || ts.Before(firstAnomaly) {
 				firstAnomaly = ts
@@ -450,10 +442,23 @@ func TicketFactConsistencyIssues(state string, sigRows []map[string]any) []strin
 			}
 		}
 	}
+	// Tracker 443: recovery evidence is about the incident's own entities only
+	// — the same scope the report builder applies. Another port's clear in the
+	// slice neither recovers this incident nor contradicts its closure.
+	for _, sig := range RecoveryEvidenceForIncident(attachedRows, clearRows) {
+		ct, ok := parseChTS(fmt.Sprintf("%v", sig["clear_ts"]))
+		if !ok {
+			ct, ok = parseChTS(fmt.Sprintf("%v", sig["ts"]))
+		}
+		if ok && ct.After(lastRecovery) {
+			lastRecovery = ct
+		}
+	}
 	// a semantic up-state is recovery evidence only AFTER the first anomaly —
 	// the same rule the report builder applies (§17).
-	for _, t := range stateUpTimes {
-		if !firstAnomaly.IsZero() && t.After(firstAnomaly) && t.After(lastRecovery) {
+	for _, sig := range RecoveryEvidenceForIncident(attachedRows, stateUpRows) {
+		t, ok := parseChTS(fmt.Sprintf("%v", sig["ts"]))
+		if ok && !firstAnomaly.IsZero() && t.After(firstAnomaly) && t.After(lastRecovery) {
 			lastRecovery = t
 		}
 	}
