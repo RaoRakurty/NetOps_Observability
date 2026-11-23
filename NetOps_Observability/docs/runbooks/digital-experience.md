@@ -25,9 +25,23 @@ docker compose exec victoria wget -qO- \
 docker compose --profile prober ps
 docker compose --profile prober logs --tail=50 prober | grep -i dem
 
-# What did the api publish as the work queue?
+# What did the api publish as the work queue? (a signed envelope since
+# tracker 475: {"v":1,"payload":"…","sig":"…"}; plain JSON here means an
+# api older than the prober, and the prober measures nothing from it)
 docker compose exec redis redis-cli --no-auth-warning GET netops:dem:targets | head -c 400
+
+# Is the api refusing the prober's run batches? (anything but "verified"
+# rising means runs are not reaching any grade — the reason says why)
+docker compose exec victoria wget -qO- \
+  'http://localhost:8428/api/v1/query?query=sum%20by%20(reason)%20(increase(netops_prober_results_total%7Bkind%3D%22dem-runs%22%7D%5B15m%5D))'
 ```
+
+A prober status of `the experience work queue could not be read: dem targets:
+the work queue was refused (<reason>)` means the prober saw a queue it could
+not prove: `no_key` (its `PROBER_CONTROL_KEY_FILE` is missing or unreadable),
+`unsigned` (an api older than the prober, or something else wrote the key),
+`bad_signature` (another key — re-run `install.py --rotate-app-secrets` so both
+sides hold the same one), `stale` (the api stopped publishing).
 
 Three distinct answers, three different faults:
 

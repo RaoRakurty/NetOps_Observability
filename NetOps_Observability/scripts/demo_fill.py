@@ -17,7 +17,9 @@ shows the actual path working, not just rows in a store:
   * interface counters w/ real ifName, error/CRC counters, BGP peer-state
     gauges, STAMP rtt/loss/pdv -> VictoriaMetrics
       (fills Interface Performance, BGP panels, Path SLA / STAMP)
-  * traceroute path JSON -> Redis  (fills Network Path -> Flow Trace)
+  * traceroute path JSON -> Redis  (fills Network Path -> Flow Trace), signed
+    with the prober-control key like a real prober's (tracker 475); skipped,
+    with the reason, when that key is not readable (see --unsigned-paths)
 
 Everything is reached the same way seed_demo_data does it: host UDP for the
 published syslog port, and `docker compose exec` for the stack-internal
@@ -34,7 +36,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
+import hmac
 import json
+import os
 import socket
 import sys
 import time
@@ -71,9 +77,68 @@ def bus_post(url: str, obj: dict) -> bool:
     return r.returncode == 0
 
 
-def redis_set(key: str, val: str) -> bool:
-    r = base.compose("exec", "-T", "redis", "redis-cli", "SET", key, val, capture=True)
+def redis_set(key: str, val: str, ttl_s: int = 0) -> bool:
+    args = ["exec", "-T", "redis", "redis-cli", "SET", key, val]
+    if ttl_s > 0:
+        args += ["EX", str(ttl_s)]
+    r = base.compose(*args, capture=True)
+    if r.returncode != 0:
+        # §16.1: say why, never swallow (stderr carries no secret: the value
+        # is the signed envelope or plain demo JSON).
+        err = (r.stderr or r.stdout or "").strip().splitlines()
+        print(f"  ! redis SET {key} failed (exit {r.returncode}): {err[-1] if err else 'no output'}",
+              file=sys.stderr)
     return r.returncode == 0
+
+
+# ── signed path sets (tracker 475) ────────────────────────────────────────────
+#
+# The api believes a prober path set only when it is signed with the
+# prober-control key (internal/probercontrol: a v1 envelope, kind "probe-paths",
+# around a ResultRecord {schema, vantage, issued_at, body}). An unsigned set is
+# refused — and counted, and logged — unless the platform administrator has
+# turned on the console-only "Accept unsigned path traces" switch. So the demo
+# signs its set when the operator running it can read the rendered key, and
+# otherwise skips the traceroute pipeline with a message saying exactly why.
+# The key is read into memory only: never printed, logged or passed on a
+# command line.
+
+PATH_SET_KIND = "probe-paths"
+PATH_SET_TTL_S = 300  # the api believes a set for 300 s (ProbePathsMaxAge)
+DEMO_VANTAGE = "demo-fill"
+MIN_KEY_BYTES = 32  # probercontrol.minKeyBytes
+
+
+def prober_key_path() -> str:
+    """The api's rendered prober-control key (data/secrets/probercontrol/api)."""
+    override = os.environ.get("PROBER_CONTROL_KEY_FILE", "").strip()
+    if override:
+        return override
+    return os.path.normpath(os.path.join(base.COMPOSE_DIR, "..", "..", "data", "secrets",
+                                         "probercontrol", "api", "password"))
+
+
+def read_prober_key() -> tuple[bytes | None, str]:
+    """(key, why-not). The reason names the path and the error, never the key."""
+    path = prober_key_path()
+    try:
+        with open(path, "rb") as fh:
+            key = fh.read().strip()
+    except OSError as exc:
+        return None, f"the prober-control key at {path} is not readable ({exc.strerror or exc})"
+    if len(key) < MIN_KEY_BYTES:
+        return None, f"the prober-control key at {path} is shorter than {MIN_KEY_BYTES} bytes"
+    return key, ""
+
+
+def seal_path_set(key: bytes, paths: list[dict], vantage: str = DEMO_VANTAGE) -> str:
+    """Sign paths exactly as collectors.NewPathSealer does (SealResult + Seal)."""
+    issued = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    payload = json.dumps({"schema": 1, "vantage": vantage, "issued_at": issued, "body": paths},
+                         separators=(",", ":"))
+    m = hmac.new(key, f"correlix-prober-control/{PATH_SET_KIND}\n".encode(), hashlib.sha256)
+    m.update(payload.encode())
+    return json.dumps({"v": 1, "payload": payload, "sig": m.hexdigest()}, separators=(",", ":"))
 
 
 # ── syslog: BGP adjacency + link state (RFC5424 → host :5514) ──────────────────
@@ -236,7 +301,32 @@ def emit_traceroute() -> int:
                       "signature": f"sig-icmp-{tgt}", "reached": True})
         paths.append({"dst": tgt, "method": "tcp", "hops": tcp_hops,
                       "signature": f"sig-tcp-{tgt}", "reached": True})
-    return 1 if redis_set("netops:probe:paths", json.dumps(paths)) else 0
+    return publish_path_set(paths)
+
+
+# Set by main(): write the unsigned form (only for an install where the
+# administrator has turned on "Accept unsigned path traces").
+UNSIGNED_PATHS = False
+_PATH_SKIP_SAID = False
+
+
+def publish_path_set(paths: list[dict]) -> int:
+    """Write the demo path set to the legacy key, signed. 1 written, 0 not."""
+    global _PATH_SKIP_SAID
+    if UNSIGNED_PATHS:
+        # Refused by the api unless the console switch is on; the operator
+        # asked for it explicitly.
+        return 1 if redis_set("netops:probe:paths", json.dumps(paths), PATH_SET_TTL_S) else 0
+    key, why = read_prober_key()
+    if key is None:
+        if not _PATH_SKIP_SAID:
+            print("  ! traceroute skipped: the api refuses unsigned path sets (tracker 475) and "
+                  f"{why}. Run as a user who can read it, set PROBER_CONTROL_KEY_FILE, or turn on "
+                  "'Accept unsigned path traces' (Platform → Configuration → Features) and pass "
+                  "--unsigned-paths.", file=sys.stderr)
+            _PATH_SKIP_SAID = True
+        return 0
+    return 1 if redis_set("netops:probe:paths", seal_path_set(key, paths), PATH_SET_TTL_S) else 0
 
 
 # ── orchestration ─────────────────────────────────────────────────────────────
@@ -280,7 +370,13 @@ def main() -> None:
     ap.add_argument("--only", default="", help="comma list subset of: " + ",".join(sorted(ALL)))
     ap.add_argument("--degrade", action="store_true",
                     help="emit a degraded incident (loss/flap) instead of healthy steady-state")
+    ap.add_argument("--unsigned-paths", action="store_true",
+                    help="write the traceroute set unsigned; the api refuses it unless "
+                         "'Accept unsigned path traces' is on (default: sign with the "
+                         "prober-control key, or skip if it is not readable)")
     args = ap.parse_args()
+    global UNSIGNED_PATHS
+    UNSIGNED_PATHS = args.unsigned_paths
 
     sel = set(args.only.split(",")) & ALL if args.only else set(ALL)
     print(f"demo-fill: pipelines={sorted(sel)} (compose dir: {base.COMPOSE_DIR})")

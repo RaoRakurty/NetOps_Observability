@@ -311,11 +311,14 @@ func surfacePublishFailure(channel, key string, err error) {
 // channel's own TTL. A set older than that is a prober that stopped.
 const ProbePathsMaxAge = probePathsTTL * time.Second
 
-// PathOpener verifies one slot's raw record (slot "" = a slot that names no
-// vantage). *probercontrol.ResultVerifier satisfies it.
-type PathOpener interface {
+// ResultOpener verifies one slot's raw prober result record (slot "" = a slot
+// that names no vantage). *probercontrol.ResultVerifier satisfies it.
+type ResultOpener interface {
 	Open(slot, raw string) (probercontrol.Opened, probercontrol.Reason, bool)
 }
+
+// PathOpener is the ResultOpener of the path sets (kind probe-paths).
+type PathOpener = ResultOpener
 
 // NewPathSealer is the prober's signer for its path sets.
 func NewPathSealer(ring *probercontrol.Keyring) PathSealer {
@@ -826,25 +829,52 @@ func FetchWANCircuits(ctx context.Context) ([]EchoTarget, error) {
 // rather than to "stops measuring instantly".
 const demTargetsKey = "netops:dem:targets"
 
-// PublishDEMTargets writes the experience work queue for the dem collector.
-// No-op when the key-value channel isn't configured (the collector then has no
-// targets and reports 0 — never a stale list from an unknown source).
-func PublishDEMTargets(ctx context.Context, targets []dem.WireTarget, ttlSec int) error {
+// PublishDEMTargets writes the experience work queue for the dem collector,
+// SIGNED with ring (tracker 475: kind dem-targets, carrying its issued-at and
+// ttlSec). No-op when the key-value channel isn't configured (the collector
+// then has no targets and reports 0 — never a stale list from an unknown
+// source). With no key loaded nothing is written and the error says so: the
+// prober refuses an unsigned queue anyway, and the projector reports the
+// failure loudly.
+func PublishDEMTargets(ctx context.Context, ring *probercontrol.Keyring, targets []dem.WireTarget, ttlSec int) error {
 	if RedisAddr() == "" {
 		return nil
+	}
+	if targets == nil {
+		targets = []dem.WireTarget{} // an empty queue is "[]", never "null"
 	}
 	body, err := json.Marshal(targets)
 	if err != nil {
 		return err
 	}
-	return redisSetEX(ctx, demTargetsKey, string(body), ttlSec)
+	sealed, err := probercontrol.SealDEMTargets(ring, body, ttlSec, time.Now())
+	if err != nil {
+		return fmt.Errorf("dem targets: the work queue is not published: %w", err)
+	}
+	return redisSetEX(ctx, demTargetsKey, sealed, ttlSec)
 }
 
-// FetchDEMTargets reads the work queue published by the api. An ABSENT key is an
-// empty queue and not an error (the api may not have published yet); a MALFORMED
-// payload IS an error — measuring a list we could not parse, or silently
-// measuring nothing because a decode failed, are both worse than saying so.
-func FetchDEMTargets(ctx context.Context) ([]dem.WireTarget, error) {
+// DEMTargetsOpener verifies the raw work-queue record on the prober.
+// *probercontrol.DEMTargetsReader satisfies it.
+type DEMTargetsOpener interface {
+	Open(raw string) ([]byte, probercontrol.Reason)
+}
+
+// ErrDEMTargetsRefused wraps every refusal of the work-queue record.
+var ErrDEMTargetsRefused = errors.New("dem targets: the work queue was refused")
+
+// FetchDEMTargets reads and VERIFIES the work queue published by the api
+// (tracker 475). An ABSENT key is an empty queue and not an error (the api may
+// not have published yet). A record op refuses — unsigned, badly signed, no
+// key on this side, stale, replayed — is an error wrapping
+// ErrDEMTargetsRefused and names the reason: the runner measures NOTHING from
+// it and says so, rather than dialing hosts nobody proved the api chose. A
+// MALFORMED queue inside a verified record is an error too. A nil op reads
+// nothing at all.
+func FetchDEMTargets(ctx context.Context, op DEMTargetsOpener) ([]dem.WireTarget, error) {
+	if op == nil {
+		return nil, fmt.Errorf("%w: no verifier is wired", ErrDEMTargetsRefused)
+	}
 	c, err := redisDial(ctx)
 	if err != nil {
 		return nil, err
@@ -854,11 +884,16 @@ func FetchDEMTargets(ctx context.Context) ([]dem.WireTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	if raw == "" {
+	body, why := op.Open(raw)
+	switch why {
+	case probercontrol.ReasonNotPublished:
 		return nil, nil
+	case probercontrol.ReasonPublished:
+	default:
+		return nil, fmt.Errorf("%w (%s): nothing is measured until a signed queue arrives", ErrDEMTargetsRefused, why)
 	}
 	var out []dem.WireTarget
-	if jerr := json.Unmarshal([]byte(raw), &out); jerr != nil {
+	if jerr := json.Unmarshal(body, &out); jerr != nil {
 		return nil, jerr
 	}
 	return out, nil
@@ -891,21 +926,46 @@ func demRunsKeyFor(vantage string) string {
 	return demRunsPrefix + vantage
 }
 
-// PublishDEMRuns writes this prober's recent run records. No-op when the
-// key-value channel isn't configured — the api then grades nothing and SAYS so,
-// which is the honest state, rather than reading runs from an unknown source.
-func PublishDEMRuns(ctx context.Context, runs []dem.WireRun) error {
+// DEMRunsMaxAge is the oldest signed run batch the api believes: the channel's
+// own TTL. A batch older than that is a prober that stopped, or a kept copy.
+const DEMRunsMaxAge = demRunsTTL * time.Second
+
+// DEMRunSealer signs one vantage's run batch (JSON) into a result envelope.
+type DEMRunSealer func(vantage string, body []byte) (string, error)
+
+// NewDEMRunSealer is the prober's signer for its run batches (tracker 475,
+// kind dem-runs).
+func NewDEMRunSealer(ring *probercontrol.Keyring) DEMRunSealer {
+	return func(vantage string, body []byte) (string, error) {
+		return probercontrol.SealResult(ring, probercontrol.KindDEMRuns, vantage, body, time.Now())
+	}
+}
+
+// PublishDEMRuns writes this prober's recent run records, SIGNED by seal
+// (tracker 475). No-op when the key-value channel isn't configured — the api
+// then grades nothing and SAYS so, which is the honest state, rather than
+// reading runs from an unknown source. A batch that cannot be signed is not
+// written (the api refuses an unsigned one) and the error says why.
+func PublishDEMRuns(ctx context.Context, seal DEMRunSealer, runs []dem.WireRun) error {
 	if RedisAddr() == "" {
 		return nil
+	}
+	if seal == nil {
+		return errors.New("dem runs: no signing key is wired, so no run batch is published")
 	}
 	body, err := json.Marshal(runs)
 	if err != nil {
 		return err
 	}
-	if err := redisSetEX(ctx, demRunsKeyFor(ProberID()), string(body), demRunsTTL); err != nil {
+	vantage := ProberID()
+	sealed, err := seal(vantage, body)
+	if err != nil {
+		return fmt.Errorf("dem runs: the run batch is not published: %w", err)
+	}
+	if err := redisSetEX(ctx, demRunsKeyFor(vantage), sealed, demRunsTTL); err != nil {
 		return err
 	}
-	return redisRegisterDEMRunVantage(ctx, ProberID())
+	return redisRegisterDEMRunVantage(ctx, vantage)
 }
 
 // redisRegisterDEMRunVantage records that this prober publishes runs, so the api
@@ -940,7 +1000,17 @@ func redisRegisterDEMRunVantage(ctx context.Context, vantage string) error {
 //     and every check on a vantage nobody reached graded `unknown`. The
 //     connection-wide deadline redisDial sets makes that the ordinary outcome
 //     of a slow drain, not an exotic one (review 2026-09-08, 3.2-18).
-func FetchDEMRuns(ctx context.Context) ([]dem.WireRun, error) {
+//
+// Every vantage's batch is verified by op (tracker 475, kind dem-runs): a
+// batch that is unsigned, badly signed, signed for another vantage's slot,
+// stale, future-stamped or older than one already accepted from that vantage
+// contributes NO run — op counts it (netops_prober_results_total) and reports
+// it. A signed batch's runs are all attributed to the signed vantage. A nil op
+// reads nothing at all: a forged run must never reach a tenant's grade.
+func FetchDEMRuns(ctx context.Context, op ResultOpener) ([]dem.WireRun, error) {
+	if op == nil {
+		return nil, errors.New("dem runs: no verifier is wired, so no run batch can be believed")
+	}
 	c, err := redisDial(ctx)
 	if err != nil {
 		return nil, err
@@ -971,10 +1041,21 @@ func FetchDEMRuns(ctx context.Context) ([]dem.WireRun, error) {
 		case raw == "":
 			continue // an expired vantage key is not an error
 		}
+		o, _, ok := op.Open(v, raw)
+		if !ok {
+			continue // refused: counted and reported by op, contributes nothing
+		}
 		var batch []dem.WireRun
-		if jerr := json.Unmarshal([]byte(raw), &batch); jerr != nil {
+		if jerr := json.Unmarshal(o.Body, &batch); jerr != nil {
 			bad = append(bad, v)
 			continue
+		}
+		if o.Signed {
+			// The signature proves who ran the checks; a run naming another
+			// vantage inside it is the signer's word, not the named one's.
+			for i := range batch {
+				batch[i].Vantage = o.Vantage
+			}
 		}
 		out = append(out, batch...)
 		if len(out) >= dem.MaxRunsPerIntake {

@@ -109,7 +109,7 @@ func TestASlowDrainIsNotGuillotinedByOneConnectionWideDeadline(t *testing.T) {
 		oneRunBatch(t, "van-a"),     // GET van-a, answered after a stall
 		oneRunBatch(t, "van-b"),     // GET van-b, answered after another
 	)
-	runs, err := FetchDEMRuns(context.Background())
+	runs, err := FetchDEMRuns(context.Background(), testDEMRunVerifier(false))
 	if err != nil {
 		t.Fatalf("a drain whose TOTAL outlived one connection-wide window failed, "+
 			"though no single exchange came close to the budget: %v", err)

@@ -64,6 +64,19 @@ Correlix take paths from a prober older than this release, which does not sign
 them. Their owner and hops cannot be proven, so turn it on only while an old
 prober is being upgraded, and off again afterwards.
 
+Digital Experience checks use the same key both ways. The prober runs only
+the check list Correlix has signed, and stops measuring if the list is
+unsigned, signed with another key or out of date. Correlix counts a check
+result towards a workspace's experience scores only when the prober signed
+it, it came from that prober, it is less than two minutes old, and it is not
+older than one already received.
+
+**Accept unsigned experience results** (set on this page only, off by default)
+lets Correlix take check results from a prober older than this release. Their
+workspace and outcome cannot be proven, so turn it on only while an old prober
+is being upgraded, and off again afterwards. It is separate from the path
+switch: turning one on never accepts the other.
+
 ### The Iris AI switches
 
 | Switch | What it allows | Needs |

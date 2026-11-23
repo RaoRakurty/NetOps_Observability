@@ -90,6 +90,11 @@ func PlatformSpecs() []Spec {
 		// downgrade is never an .env line) and off by default.
 		{Env: "PROBE_PATHS_ACCEPT_UNSIGNED", Label: "Accept unsigned path traces", Group: measure, Apply: live, Risky: true, ConsoleOnly: true,
 			Help: "Accept path traces from a prober older than this release, which does not sign them. Their owner and hops cannot be proven, so any service that can write to the internal store could add a path. Turn off once every prober is upgraded."},
+		// Tracker 475: the Digital Experience run records are signed too; a
+		// separate switch, so accepting unproven paths never also accepts
+		// unproven runs (which move a tenant's experience grade).
+		{Env: "DEM_RUNS_ACCEPT_UNSIGNED", Label: "Accept unsigned experience results", Group: measure, Apply: live, Risky: true, ConsoleOnly: true,
+			Help: "Accept Digital Experience check results from a prober older than this release, which does not sign them. Their workspace and outcome cannot be proven, so any service that can write to the internal store could change a workspace's experience scores. Turn off once every prober is upgraded."},
 		// Tracker 337 N-H6 PR 2: the hourly roll-up behind Iris's seasonal
 		// baselines (internal/seriesroll). Off, Iris still compares with the
 		// last four weeks the metric store keeps.
