@@ -64,9 +64,11 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 		"MetricInstant": {"h.s.metricsScopeFiltersFor(h.claims)"},
 		"Incidents":     {"h.s.chTenantScopeFor(h.claims)", "h.s.tenantIDExcludeCondFor(h.claims"},
 		"Incident":      {"h.s.chTenantScopeFor(h.claims)", "h.s.tenantIDExcludeCondFor(h.claims"},
-		// changeLedgerTenant is principalTenant plus the platform-owner check
-		// for Provider rows; pinned below to keep calling principalTenant.
-		"Changes":  {"changeLedgerTenant(h.claims)"},
+		// changeLedgerReadTenant is changeLedgerTenant (principalTenant plus
+		// the platform-owner check for Provider rows) with the operator-
+		// visibility restriction applied; both are pinned below.
+		"Changes":  {"h.s.changeLedgerReadTenant(h.claims)"},
+		"appSeeds": {"h.s.changeLedgerReadTenant(h.claims)", "ListChanges(ctx, ledger,"},
 		"Circuits": {"h.s.deviceVisibilityFor(h.claims)"},
 		// "which devices are down": the liveness read carries the caller's
 		// metric scope filter, exactly like the inventory page's.
@@ -96,6 +98,30 @@ func TestNLQScopeMethodsCallTheirChokepoints(t *testing.T) {
 	}
 	if b := methodBody(full, "func changeLedgerTenant("); !strings.Contains(b, "principalTenant(claims)") || !strings.Contains(b, "isPlatformOwner(claims)") {
 		t.Error("changeLedgerTenant must derive the tenant from principalTenant and gate Provider rows on isPlatformOwner")
+	}
+	// The ONE decision every change read outside the DEM routes takes: the
+	// ledger above, minus what the operator-visibility restriction hides.
+	if b := methodBody(full, "func (s *server) changeLedgerReadTenant("); !strings.Contains(b, "changeLedgerTenant(claims)") ||
+		!strings.Contains(b, "s.operatorTelemetryRestriction(claims, tenant, cross)") {
+		t.Error("changeLedgerReadTenant must be changeLedgerTenant with operatorTelemetryRestriction applied")
+	}
+	// /api/changes (list, /{id}, /{id}/diff) takes its ledger from Authorize.
+	if b := methodBody(full, "func (s *server) changeAPI("); !strings.Contains(b, "changeapi.Caller{Tenant: s.changeLedgerReadTenant(claims)") {
+		t.Error("/api/changes must read the ledger changeLedgerReadTenant names")
+	}
+	// No read anywhere in the package bypasses the restriction by calling
+	// changeLedgerTenant directly: its declaration and changeLedgerReadTenant's
+	// call are the only two code occurrences (comment lines are skipped).
+	n := 0
+	for _, lines := range packageGoSources(t) {
+		for _, l := range lines {
+			if !strings.HasPrefix(strings.TrimSpace(l), "//") {
+				n += strings.Count(l, "changeLedgerTenant(")
+			}
+		}
+	}
+	if n != 2 {
+		t.Errorf("changeLedgerTenant( appears %d times in code, want 2 (declaration + changeLedgerReadTenant): every change read must go through changeLedgerReadTenant", n)
 	}
 	if b := methodBody(full, "func (h *nlqScope) visibleDevices("); !strings.Contains(b, "h.s.visibleDevicesFor(h.claims)") {
 		t.Error("device resolution must come from the caller's visible devices")
