@@ -256,6 +256,10 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		// The document names devices by hostname, never the internal id — in its
+		// TEXT only; links/attributes keep the id. Before hashing, so the
+		// registered revision is the document served.
+		html = s.callerDeviceNames(claims, rep.OwnerTenant()).HTML(html)
 		integ.ContentHash = rca.HashContent(html)
 		// The register's whole point is that a served document IS registered —
 		// a refused/unpersisted row must fail the request, never serve an
@@ -274,6 +278,7 @@ func (s *server) serveRcaReport(w http.ResponseWriter, r *http.Request, id strin
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		html = s.callerDeviceNames(claims, rep.OwnerTenant()).HTML(html) // hostnames, as for html
 		pdf, err := s.rcaReportPDF(r.Context(), rep, html)
 		if err != nil {
 			// Honest degradation: the caller falls back to the HTML view; we never
