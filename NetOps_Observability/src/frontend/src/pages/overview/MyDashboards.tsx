@@ -20,7 +20,7 @@
 // which dashboard is the team default to everyone; only administrators get the
 // buttons (the server refuses everyone else anyway).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type SavedObject } from "../../services/api";
 import { Modal } from "../../components/ui";
 import { fmtDateTime } from "../../lib/time";
@@ -300,12 +300,20 @@ function DashboardList() {
     }
   };
 
+  // Latest read wins. Two reads can be in flight at once (the mount read twice
+  // under StrictMode, or two quick deletes each re-reading the list), and the
+  // network does not keep their order: an older answer landing last used to
+  // bring a just-deleted dashboard back.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const list = await api.listSaved("dashboard");
+      if (seq !== loadSeq.current) return;
       setBoards(list ?? []);
       setLoadErr(null);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setLoadErr(operatorError(e, "Your dashboards could not be loaded."));
     }
   }, []);
