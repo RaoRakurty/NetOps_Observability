@@ -635,7 +635,7 @@ function Safe({ children }: { children: ReactNode }) {
 /** `platformAdmin`: only the platform admin sees (and polls) the platform's own
  *  health panels — a tenant user used to read a permanently "degraded" panel
  *  and poll a 403 (fixed 2026-11-22, kept when this page came back). */
-export default function FrontPage({ platformAdmin = false }: { platformAdmin?: boolean }) {
+export default function FrontPage({ platformAdmin = false, picker }: { platformAdmin?: boolean; picker?: ReactNode }) {
   // Theme is now app-wide (the global picker in the top bar / icon rail sets
   // data-theme on <html>); the Operations Overview just reads the tokens.
   return (
@@ -646,6 +646,7 @@ export default function FrontPage({ platformAdmin = false }: { platformAdmin?: b
         <div className="fp-mast-meta">
           <span className="fp-live"><span className="fp-live-dot" /> Live</span>
           <span>Auto-refresh 20s</span>
+          {picker}
         </div>
       </div>
       {/* Dense top: operational KPIs above the fold + the headline sentence

@@ -230,6 +230,16 @@ describe("Overview — the Operations Overview is the default again (owner, 2026
     expect(screen.queryByText("Nothing needs attention right now.")).toBeNull();
   });
 
+  it("keeps the Dashboard picker, so the team's own dashboards are one click away", async () => {
+    api.listSaved.mockResolvedValue([{ id: "d1", type: "dashboard", name: "NOC wall" }]);
+    render(<OverviewPage />);
+    await screen.findByRole("heading", { name: "Operations Overview" });
+    const picker = screen.getByTestId("dashboard-picker") as HTMLSelectElement;
+    expect(picker.value).toBe("__default");
+    expect(await screen.findByRole("option", { name: "NOC wall" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Standard layout" })).toBeTruthy();
+  });
+
   it("shows real per-site health, not the old 'not available' stub", async () => {
     api.geomap.mockResolvedValue({ geo_enabled: true, sites: [] });
     render(<OverviewPage />);

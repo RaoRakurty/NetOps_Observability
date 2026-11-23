@@ -135,10 +135,11 @@ export default function OverviewPage() {
     <div data-testid="operations-overview">
       {team.state === "unavailable" && (
         <div className="ccw-hint ov-note" role="status" data-testid="team-default-unavailable">
-          Your team's default dashboard is no longer available, so this is the Operations Overview.
+          Team default dashboard unavailable — showing the Operations Overview.
         </div>
       )}
-      <FrontPage platformAdmin={platformAdmin} />
+      <FrontPage platformAdmin={platformAdmin}
+        picker={<DashboardPicker current={team.state === "board" ? "builtin" : "default"} teamDefault={team.state === "board"} />} />
     </div>
   );
 }
