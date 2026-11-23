@@ -59,9 +59,10 @@ func TestRouterFansAPageOutToEveryTarget(t *testing.T) {
 	r.post(t, alertJSON("CorrelationConsumerDead", "critical", "platform", "page", "firing", "s"), bearer)
 	a.await(t, 1)
 	b.await(t, 1)
-	if !strings.Contains(metricsOf(r), `netops_alert_webhook_pushed_total{route="host_monitoring",tier="page"} 2`) {
-		t.Fatalf("each destination is one push:\n%s", metricsOf(r))
-	}
+	// The fake records a push INSIDE Push(); the counter moves only after Push()
+	// returns (deliverHost), so wait for the counter itself, not for the fakes —
+	// reading it at once lost the race under -race on CI (2026-11-23, #392).
+	waitForMetric(t, r.mx, `netops_alert_webhook_pushed_total{route="host_monitoring",tier="page"} 2`)
 }
 
 // The configuration is read per push: a router that gains a target after the
@@ -99,9 +100,8 @@ func TestRouterLocalBudgetRefusalIsNotRetried(t *testing.T) {
 	if len(r.naps.waits()) != 0 {
 		t.Fatal("a local budget refusal must not be retried")
 	}
-	if !strings.Contains(metricsOf(r), `reason="budget_exhausted"} 1`) {
-		t.Fatalf("budget refusal not counted:\n%s", metricsOf(r))
-	}
+	// Counted after Push() returns: wait for it (same race as the fan-out test).
+	waitForMetric(t, r.mx, `reason="budget_exhausted"} 1`)
 }
 
 // A Twilio 5xx is retried exactly like an ntfy 5xx, and a Twilio 4xx is not.
