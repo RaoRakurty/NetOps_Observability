@@ -1200,14 +1200,19 @@ func BuildReport(in ReportInput) Report {
 	// recovery + residual degradation, never incident recovery.
 	// An undated standing finding has no lifecycle — it never opens, holds or
 	// closes a recovery scope (owner review 2026-11-11, gap 5).
-	ra := ReconcileRecovery(rcaDatedAnomalies(anomalous), clears)
+	// Tracker 443: only a recovery about one of those dated anomalies' own
+	// entities is this incident's — the slice carries every clear in the
+	// object's time bounds tenant-wide, so another port's link-up is in it.
+	dated := rcaDatedAnomalies(anomalous)
+	recoveries := RecoveryEvidenceForIncident(dated, clears)
+	ra := ReconcileRecovery(dated, recoveries)
 	recovered := ra.At // zero unless the incident-level gate passed
 	recoveryState, recoveryBasis := "not_observed", "No recovery evidence was captured."
 	switch {
 	case ra.Confirmed:
 		recoveryState = "explicitly_confirmed"
 		recoveryBasis = fmt.Sprintf("%s; last recovery evidence observed %s, at/after the final qualifying anomaly in every participating scope.",
-			CountNoun(len(clears), "recovery observation"), FmtUTC(ra.At))
+			CountNoun(len(recoveries), "recovery observation"), FmtUTC(ra.At))
 	case ra.Service.State == "failed_validation":
 		recoveryState = "failed_validation"
 		recoveryBasis = ra.Service.Basis
