@@ -254,7 +254,13 @@ class Stack:
         return bool(self.container_id(service))
 
     def hup_vmauth(self) -> sr.ExecResult:
-        return self._compose(["kill", "-s", "HUP", VMAUTH_SERVICE], 30)
+        # The signal is delivered INSIDE the container (busybox kill to PID 1),
+        # never through the Docker API. `docker (compose) kill -s <sig>` marks
+        # the container manually stopped, for ANY signal, so `unless-stopped`
+        # no longer applies: after the next reboot (or a crash) Docker leaves it
+        # Exited. That is how vmauth stayed down after the 2026-11-23 reboot and
+        # every metrics query 502'd (reproduced on Docker 29.5.2).
+        return self._compose(["exec", "-T", VMAUTH_SERVICE, "kill", "-HUP", "1"], 30)
 
     def restart(self, service: str) -> sr.ExecResult:
         return self._compose(["restart", "-t", "30", service], 180)
@@ -455,7 +461,13 @@ class Run:
         Returns "" on success, else the reason."""
         r = self.stack.hup_vmauth()
         if r.returncode != 0:
-            return "could not signal vmauth: " + sr.redact(r.stderr or r.stdout, [])
+            # Not fatal: vmauth also re-reads auth.yml every 10 s on its own
+            # (-configCheckInterval=10s, docker-compose.yml), well inside
+            # RELOAD_TIMEOUT_S. The proof below is what decides, not the signal.
+            why_sig = sr.redact(r.stderr or r.stdout, []).strip() or f"exit {r.returncode}"
+            self.say("warn", f"could not signal vmauth ({why_sig}); waiting for its "
+                             "10 s config re-read instead")
+            self.note("reload: signal failed, relied on -configCheckInterval")
         deadline = self.clock() + RELOAD_TIMEOUT_S
         why = "no metrics read"
         while True:

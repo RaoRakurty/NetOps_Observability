@@ -61,16 +61,29 @@ FAKE_DOCKER = r'''#!/bin/sh
 #   FAKE_SNAP_OLD   newest OpenSearch snapshot is ~111h old (advisory problem)
 #   FAKE_OS_EMPTY   every OpenSearch fetch returns nothing (H17 blindness)
 #   OS_CFG_LOG      append each curl --config stdin here (probe forensics)
+#   FAKE_PROJECT_ROWS  rows "name policy status service" the project-wide
+#                   stranded-service inspect returns (unset = no containers)
+#   FAKE_INSPECT_STDERR / FAKE_INSPECT_RC  stderr + exit of that inspect
 case "$1" in
   ps)
     svc=$(printf '%s\n' "$@" | sed -n 's/.*service=//p' | head -1)
-    [ -n "$svc" ] || exit 0
+    if [ -z "$svc" ]; then
+      # project-wide `ps -aq` (the stranded-service check)
+      [ -n "${FAKE_PROJECT_ROWS:-}" ] && echo "pid-a pid-b"
+      exit 0
+    fi
     if [ -n "${FAKE_DOWN_SVC:-}" ] && [ "$svc" = "$FAKE_DOWN_SVC" ]; then exit 0; fi
     echo "cid-$svc"
     ;;
   inspect)
     fmt="$3"
     case "$2" in -f) fmt="$3";; *) fmt="$2";; esac
+    case "$fmt" in
+      *RestartPolicy*)
+        [ -n "${FAKE_PROJECT_ROWS:-}" ] && printf '%b\n' "$FAKE_PROJECT_ROWS"
+        [ -n "${FAKE_INSPECT_STDERR:-}" ] && printf '%s\n' "$FAKE_INSPECT_STDERR" >&2
+        exit "${FAKE_INSPECT_RC:-0}" ;;
+    esac
     case "$fmt" in
       *StartedAt*)     echo "${FAKE_API_STARTED:-}" ;;
       *RestartCount*)  echo "0 false 0" ;;
@@ -776,3 +789,112 @@ def test_watchdog_parses():
 def test_watchdog_shellcheck_clean():
     r = subprocess.run(["shellcheck", "-x", str(WATCHDOG)], capture_output=True, text=True)
     assert r.returncode == 0, f"shellcheck stack-watchdog.sh:\n{r.stdout}{r.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-23 — STRANDED_SERVICE: a container whose restart policy says it
+# should run, but which is not running, whether or not the fixed list names it.
+#
+# After the 2026-11-23 reboot, vmauth (profile-optional, so not in
+# EXPECTED_SERVICES) stayed Exited: an earlier `docker compose kill -s HUP`
+# had set Docker's manual-stop flag, and Docker skips such an unless-stopped
+# container at boot. Every metrics query returned 502 for 1h15m while this
+# watchdog stayed green.
+# ---------------------------------------------------------------------------
+
+_INIT_EXITED = "/netops-opensearch-init-1 no exited opensearch-init"
+_API_RUNNING = "/netops-api-1 unless-stopped running api"
+_VMAUTH_EXITED = "/netops-vmauth-1 unless-stopped exited vmauth"
+
+
+def _rows(*rows: str) -> str:
+    # The fake docker expands \n with printf %b.
+    return "\\n".join(rows)
+
+
+def _stranded_line(text: str) -> str:
+    return next((l for l in text.splitlines() if "STRANDED_" in l), "")
+
+
+def test_stranded_unless_stopped_service_outside_the_list_pages(tmp_path):
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    rows = _rows(_API_RUNNING, _VMAUTH_EXITED, _INIT_EXITED)
+    r, pushes = _run(tmp_path, etc, "stranded", FAKE_PROJECT_ROWS=rows)
+    assert r.returncode == 1, r.stderr
+    line = _stranded_line(r.stderr)
+    assert "STRANDED_SERVICE: netops-vmauth-1 (exited)" in line, r.stderr
+    assert "docker start" in line and "survives reboots" in line, line
+    assert "opensearch-init" not in line, "a restart=no one-shot is never stranded"
+    assert "netops-api-1" not in line, "a running container is not stranded"
+    assert "NetOps stack DOWN" in pushes and "netops-vmauth-1" in pushes, (
+        f"a stranded service is an outage-class page: {pushes}")
+
+    # Sustained: no re-push. Healed: one recovery push.
+    _, p2 = _run(tmp_path, etc, "stranded-2", FAKE_PROJECT_ROWS=rows)
+    assert "NetOps stack DOWN" not in p2
+    healed = _rows(_API_RUNNING, _VMAUTH_EXITED.replace("exited", "running"), _INIT_EXITED)
+    r3, p3 = _run(tmp_path, etc, "stranded-healed", FAKE_PROJECT_ROWS=healed)
+    assert r3.returncode == 0, r3.stderr
+    assert "RECOVERED" in p3
+
+
+def test_exited_one_shot_and_all_running_are_healthy(tmp_path):
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    rows = _rows(_API_RUNNING, _INIT_EXITED, "/netops-vmauth-1 always running vmauth")
+    r, pushes = _run(tmp_path, etc, "one-shot", FAKE_PROJECT_ROWS=rows)
+    assert r.returncode == 0, f"{r.stderr}\n{pushes}"
+    assert "STRANDED" not in r.stderr
+
+
+def test_dead_and_created_always_containers_are_stranded(tmp_path):
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    # Neither is in the packaged install's fixed list (install-watchdog.sh).
+    rows = _rows("/netops-cadvisor-1 always dead cadvisor",
+                 "/netops-vmauth-1 unless-stopped created vmauth")
+    r, _ = _run(tmp_path, etc, "dead-created", FAKE_PROJECT_ROWS=rows)
+    line = _stranded_line(r.stderr)
+    assert "netops-cadvisor-1 (dead)" in line and "netops-vmauth-1 (created)" in line, r.stderr
+
+
+def test_a_service_the_fixed_list_already_reports_is_not_repeated(tmp_path):
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    r, _ = _run(tmp_path, etc, "no-dup",
+                FAKE_PROJECT_ROWS="/netops-api-1 unless-stopped exited api")
+    assert "STRANDED_SERVICE" not in r.stderr, r.stderr
+
+
+def test_docker_inspect_failure_is_loud_never_healthy(tmp_path):
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    r, pushes = _run(tmp_path, etc, "inspect-fail", FAKE_PROJECT_ROWS=_API_RUNNING,
+                     FAKE_INSPECT_STDERR="Cannot connect to the Docker daemon",
+                     FAKE_INSPECT_RC="1")
+    assert r.returncode == 1, r.stderr
+    line = _stranded_line(r.stderr)
+    assert "STRANDED_CHECK_FAILED" in line and "Cannot connect" in line, r.stderr
+    assert "NetOps stack DOWN" in pushes
+
+
+def test_a_container_removed_mid_check_is_not_a_failure(tmp_path):
+    # A deploy recreating a container between `ps -a` and `inspect`.
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    r, _ = _run(tmp_path, etc, "race", FAKE_PROJECT_ROWS=_API_RUNNING,
+                FAKE_INSPECT_STDERR="Error: No such object: pid-b",
+                FAKE_INSPECT_RC="1")
+    assert r.returncode == 0, r.stderr
+    assert "STRANDED" not in r.stderr
+
+
+def test_stranded_check_can_be_disabled(tmp_path):
+    _, etc, _, _, _ = _installed_layout(tmp_path)
+    r, _ = _run(tmp_path, etc, "disabled", FAKE_PROJECT_ROWS=_VMAUTH_EXITED,
+                STRANDED_CHECK="0")
+    assert r.returncode == 0, r.stderr
+    assert "STRANDED" not in r.stderr
+
+
+def test_stranded_check_never_starts_a_container():
+    s = WATCHDOG.read_text()
+    block = s[s.index("check_stranded_services() {"):
+              s.index('if [ "${STRANDED_CHECK:-1}" = "1" ]')]
+    assert not re.search(r"\bdkr(_slow)?\s+(start|restart|compose)\b", block), (
+        "detect only: an operator's deliberate stop must never be overridden")
