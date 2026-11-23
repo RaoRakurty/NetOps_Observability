@@ -238,7 +238,12 @@ version: 1
 # evidence. Entity, tokens, native_id and attrs are unchanged, so the signal_id is the one
 # the up line always had. Down lines are byte-identical.
 #
-parser_rev: 2026-11-22-recovery-clears
+# 2026-11-23-ospf-trap-twoway (tracker 444): trap.ospf.adjacency_change reads ospfNbrState
+# twoWay(4) / bare 4 / a `two-way` or `2-way` label as unknown — the syslog row's `to 2WAY`
+# reading — instead of a down; the bare exchangeStart label is a down. Every other value
+# reads as before. A DROTHER demotion no longer reaches the engine as a `high` loss.
+#
+parser_rev: 2026-11-23-ospf-trap-twoway
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #
@@ -2775,8 +2780,12 @@ rules:
           - {vb: ['1.3.6.1.2.1.14.10.1.3']}   # ospfNbrRtrId
           - {vbname: [nbripaddr, nbrrtrid, nbraddress]}
       # ospfNbrState renders as `full(8)` when the MIB enum is loaded and as the
-      # bare `8` when it is not, so BOTH spellings are classified. Order is the
-      # table's own down-beats-up rule: every pre-Full state is a loss.
+      # bare `8` when it is not, so BOTH spellings are classified. Every pre-Full
+      # state is a loss EXCEPT twoWay(4) (tracker 444): 2-Way is the steady state
+      # between two DROTHERs and the state a DR/BDR change demotes an adjacency
+      # to (RFC 2328 §10.1), so it claims neither loss nor recovery — the syslog
+      # row reads `to 2WAY` as unknown too. It is tested FIRST so the `2` of a
+      # `2-way` spelling never reads as attempt(2).
       nbr_state:
         alt:
           - {vb: ['1.3.6.1.2.1.14.10.1.6']}   # ospfNbrState
@@ -2784,7 +2793,9 @@ rules:
         lower: true
       state:
         case:
-          - when: {re: ['$nbr_state', '\b(?:down|attempt|init|exstart|exchange|loading|twoway|1|2|3|4|5|6|7)\b', 'i']}
+          - when: {re: ['$nbr_state', '\b(?:(?:two|2)[-_ ]?way|4)\b', 'i']}
+            value: unknown
+          - when: {re: ['$nbr_state', '\b(?:down|attempt|init|exstart|exchange[-_ ]?start|exchange|loading|1|2|3|5|6|7)\b', 'i']}
             value: down
           - {when: {re: ['$nbr_state', '\b(?:full|8)\b', 'i']}, value: up}
           - {when: {always: true}, value: unknown}

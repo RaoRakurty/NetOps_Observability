@@ -494,10 +494,12 @@ def test_the_parser_is_untouched():
     before; only an impossible third value is unknown instead of up.
     Re-pinned for tracker 380 PR 3 (recovery clears): the link rows' up is reported as
     `link_state_change_clear` at info; every down — what this file protects — is
-    byte-identical."""
-    assert parser_rules.PARSER_REV == "2026-11-22-recovery-clears"
+    byte-identical.
+    Re-pinned for tracker 444 (OSPF trap twoWay): one OSPF trap row's state reading;
+    no link row moved."""
+    assert parser_rules.PARSER_REV == "2026-11-23-ospf-trap-twoway"
     assert parser_rules.BAKED_RULES_HASH == (
-        "90f3505fe7152e2667b73abebb6f67b4ae596be64ec1b6f31e9bbe1f0be890a4")
+        "d661c88b8c08fd6e92a0c5090e996170c4dc2e0e5d59a5fdf84bb2e74058c7a0")
     assert parser_rules.RULES_HASH == parser_rules.BAKED_RULES_HASH
     assert len(parser_rules.RULES) == PINNED_RULE_COUNT
     link_rules = [r for r in parser_rules.RULES if r.kind == "link_state_change" and r.emit]

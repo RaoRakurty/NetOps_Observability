@@ -756,7 +756,10 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   on one of the incident's own anomalous entities (tracker 443,
   `rca.RecoveryEvidenceForIncident`; read side, engine unchanged). `up` is a positional
   claim (380 PR 2): rows classify the state a transition goes TO, so `from FULL to
-  EXSTART` is a down, not a recovery. Not clears, deliberately: STP forwarding (a
+  EXSTART` is a down, not a recovery. 2-Way is neither on BOTH OSPF lanes: the
+  syslog row's `to 2WAY` and the trap row's `twoWay(4)` / bare `4` read `unknown`
+  (tracker 444; before it the trap read every DROTHER demotion as a `high` loss).
+  Not clears, deliberately: STP forwarding (a
   topology change), FHRP roles, LLDP neighbour adds. **Wireless too (tracker 442,
   2026-11-23):** an AP rejoin / radio back up is `wireless_ap_down_clear` /
   `wireless_radio_down_clear` (nms/wireless_events.go); before it the `wireless_*_up`
