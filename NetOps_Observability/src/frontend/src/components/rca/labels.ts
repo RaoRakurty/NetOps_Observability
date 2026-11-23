@@ -437,6 +437,10 @@ const REASON_TOKEN_LABEL: Record<string, string> = {
   device_telemetry: "device health", passive_flow: "traffic flow",
   internal_self_probe: "an internal self-check", customer_path: "a customer-path probe",
   synthetic_lab_probe: "a lab probe",
+  // The two verdict planes never reach an operator as raw tokens (mirrors the
+  // Go reasonTokenLabel in internal/rca/rca_reason_language.go).
+  management_plane: "the controller's own statement", security: "a security rule",
+  active_verification: "a read-only device check",
 };
 export function nocVerdictReason(r: string): string {
   let m = r.match(/single modality class \((\w+)\)/i);
@@ -455,10 +459,20 @@ export function nocVerdictReason(r: string): string {
     const who = REASON_TOKEN_LABEL[m[1]] ?? m[1].replace(/_/g, " ");
     return `Only low-trust ${who} saw this — not enough on their own to confirm.`;
   }
+  // A support plane (the controller's statement, a security rule) agreed with
+  // one measurement: it backs the case up but can never be the second witness.
+  m = r.match(/support plane \(([^)]+)\) supports but never anchors.*?\(have (\d+): ([^)]*)\)/i);
+  if (m) {
+    const planeList = m[1].split(/,\s*/).map((t) => REASON_TOKEN_LABEL[t] ?? t.replace(/_/g, " "));
+    const planes = planeList.join(" and ");
+    const have = m[3].split(/,\s*/).filter((t) => t && t !== "none").map((t) => REASON_TOKEN_LABEL[t] ?? t.replace(/_/g, " "));
+    return `${planes.charAt(0).toUpperCase()}${planes.slice(1)} ${planeList.length > 1 ? "back" : "backs"} this up but cannot confirm it. Confirming needs two independent measurements; ${have.length ? (have.length === 1 ? `there is one (${have[0]})` : `there are ${have.length} (${have.join(", ")})`) : "there are none yet"}.`;
+  }
   m = r.match(/required modality missing[^:]*:\s*(\w+)/i);
   if (m) {
+    if (m[1] === "control_plane") return "No router reported the routing/link change itself in this window.";
     const who = REASON_TOKEN_LABEL[m[1]] ?? m[1].replace(/_/g, " ");
-    return `No trusted ${who} evidence in this window.`;
+    return `No ${who} from a trusted source in this window.`;
   }
   if (/cannot confirm without an independent trusted modality/i.test(r))
     return "A second independent source is needed to confirm.";
