@@ -297,7 +297,7 @@ func (s *server) handleDeviceSSH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := ws.Upgrade(w, r, wsOriginAllowed)
+	conn, err := ws.Upgrade(w, r, s.wsOriginAllowed)
 	if err != nil {
 		return // wsUpgrade already wrote the error if it could
 	}

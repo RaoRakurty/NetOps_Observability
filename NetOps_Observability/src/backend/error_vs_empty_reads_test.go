@@ -208,14 +208,14 @@ func TestWSOriginRejectsBothWaysExplicitly(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "http://api.local/api/events", nil)
 		r.Host = "api.local"
 		r.Header.Set("Origin", origin)
-		if wsOriginAllowed(r) {
+		if wsOriginAllowedWith(r, func(string) bool { return false }) {
 			t.Fatalf("origin %q must be refused", origin)
 		}
 	}
 	r := httptest.NewRequest(http.MethodGet, "http://api.local/api/events", nil)
 	r.Host = "api.local"
 	r.Header.Set("Origin", "http://api.local")
-	if !wsOriginAllowed(r) {
+	if !wsOriginAllowedWith(r, func(string) bool { return false }) {
 		t.Fatal("a same-origin handshake must be allowed")
 	}
 }

@@ -297,9 +297,12 @@ func (h *Hub) atCapacity() bool {
 // CORS, so a malicious page could open a socket to our event feed using a token
 // it observed. Browsers always send Origin on a WS handshake, so: a present
 // Origin MUST be same-origin (matches the request Host) or explicitly
-// allowlisted (CORS_ALLOWED_ORIGINS). A missing Origin is a non-browser client
-// (CLI/agent) which can't be a CSWSH victim and still needs a valid token.
-func wsOriginAllowed(r *http.Request) bool {
+// allowlisted (the cross-origin allowlist, read live — internal/corsallow). A
+// missing Origin is a non-browser client (CLI/agent) which can't be a CSWSH
+// victim and still needs a valid token.
+func (s *server) wsOriginAllowed(r *http.Request) bool { return wsOriginAllowedWith(r, s.corsAllowed) }
+
+func wsOriginAllowedWith(r *http.Request, allowed func(origin string) bool) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
@@ -314,7 +317,7 @@ func wsOriginAllowed(r *http.Request) bool {
 	if strings.EqualFold(u.Host, r.Host) {
 		return true
 	}
-	return corsAllowedOrigins()[origin]
+	return allowed(origin)
 }
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -322,7 +325,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "websocket upgrade required", http.StatusBadRequest)
 		return
 	}
-	if !wsOriginAllowed(r) {
+	if !s.wsOriginAllowed(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}

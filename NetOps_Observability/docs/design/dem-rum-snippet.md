@@ -107,13 +107,14 @@ directly.
         defer></script>
 ```
 
-**Cross-origin.** Your app and Correlix are usually different origins, so add
-your app's origin to `CORS_ALLOWED_ORIGINS`. Correlix reflects only explicitly
-allowlisted origins — never a wildcard — so a missing entry fails loudly in the
-browser console rather than half-working. That allowlist is set at install
-time today; customers never edit the environment, so a Platform setting for it
-is tracker row 439 and the setup page says "your Correlix administrator must
-allow each app's web address" rather than naming the variable.
+**Cross-origin.** Your app and Correlix are usually different origins, so the
+platform administrator adds your app's origin under **Platform → Configuration
+→ Cross-origin access** (tracker 439, `internal/corsallow`; a saved list wins
+over the install seed `CORS_ALLOWED_ORIGINS` and is read live by the CORS
+middleware — no restart). Correlix reflects only explicitly allowlisted
+origins — never a wildcard; https only, except localhost — so a missing entry
+fails loudly in the browser console rather than half-working. The setup page
+links to the setting rather than naming the variable.
 
 ### 5a. One tag for hundreds of apps (2026-11-22)
 

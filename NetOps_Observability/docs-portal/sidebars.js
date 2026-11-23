@@ -301,6 +301,7 @@ const sidebars = {
             'administration/pipeline-debugger',
             'administration/graphql-explorer',
             'administration/data-protection',
+            'administration/cross-origin-access',
           ],
         },
       ],

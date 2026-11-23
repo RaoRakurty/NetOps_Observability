@@ -162,6 +162,7 @@ var navPageDocs = map[string]navPage{
 	"platform/data-protection":   {Label: "Platform → Security → Data Protection", Docs: []pageDoc{wholePage("administration/data-protection"), wholePage("deploy/back-up-and-restore")}},
 	"platform/features":          {Label: "Platform → Configuration → Features", Docs: []pageDoc{wholePage("administration/features")}},
 	"platform/platform-alerts":   {Label: "Platform → Configuration → Platform alerts", Docs: []pageDoc{wholePage("monitoring/host-monitoring")}},
+	"platform/cors-origins":      {Label: "Platform → Configuration → Cross-origin access", Docs: []pageDoc{wholePage("administration/cross-origin-access")}},
 	"platform/health":            {Label: "Platform → Tools → Stack Health", Docs: []pageDoc{wholePage("administration/stack-health")}},
 	"platform/grafana":           {Label: "Platform → Tools → Self-Monitoring", Docs: []pageDoc{wholePage("administration/self-monitoring")}},
 	"platform/opensearch":        {Label: "Platform → Tools → Search Dashboards", Docs: []pageDoc{wholePage("administration/search-dashboards")}},

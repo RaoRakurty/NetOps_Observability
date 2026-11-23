@@ -98,6 +98,7 @@ export const ROUTE_CHUNKS: Record<string, () => Promise<unknown>> = {
   Quarantine: () => import("./pages/platform/Quarantine"),
   Features: () => import("./pages/platform/Features"),
   PlatformAlerts: () => import("./pages/platform/PlatformAlerts"),
+  CorsOrigins: () => import("./pages/platform/CorsOrigins"),
 };
 
 const DemoShowcase = lazy(ROUTE_CHUNKS["DemoShowcase"] as () => Promise<{ default: React.ComponentType<any> }>);
@@ -181,6 +182,7 @@ const IrisAdmin = lazy(ROUTE_CHUNKS["IrisAdmin"] as () => Promise<{ default: Rea
 const Quarantine = lazy(ROUTE_CHUNKS["Quarantine"] as () => Promise<{ default: React.ComponentType<any> }>);
 const Features = lazy(ROUTE_CHUNKS["Features"] as () => Promise<{ default: React.ComponentType<any> }>);
 const PlatformAlerts = lazy(ROUTE_CHUNKS["PlatformAlerts"] as () => Promise<{ default: React.ComponentType<any> }>);
+const CorsOrigins = lazy(ROUTE_CHUNKS["CorsOrigins"] as () => Promise<{ default: React.ComponentType<any> }>);
 
 // A leaf is one rendered view. Sections with multiple leaves get a SubNav.
 export type NavLeaf = {
@@ -615,6 +617,10 @@ export const NAV: NavSection[] = [
       //                   (where Correlix's OWN alerts go; owner 2026-11-11:
       //                   GUI, not env)
       { id: "platform-alerts", label: "Platform alerts", group: "Configuration", render: () => <PlatformAlerts /> },
+      // cors-origins → internal/corsallow via corsAPI, requirePlatformAdmin on
+      //                GET/PUT (tracker 439: the real-user tag's cross-origin
+      //                allowlist; a saved list wins over CORS_ALLOWED_ORIGINS)
+      { id: "cors-origins", label: "Cross-origin access", group: "Configuration", render: () => <CorsOrigins /> },
       // Tools — the provider's operational instruments and the raw-backend
       // escape hatches.
       // health     → stack_health.go, requireCrossTenant

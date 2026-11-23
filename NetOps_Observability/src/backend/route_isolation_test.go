@@ -895,8 +895,12 @@ var routeIsolationLedger = map[string]string{
 	// send; tenant/org admins refused (platform_alert_route_test.go).
 	"/api/platform/alerting/host-route":      "platform",
 	"/api/platform/alerting/host-route/test": "platform",
-	"/api/copilot/config":                    "platform",
-	"/api/copilot/config/test":               "platform", // requirePlatformAdmin: tests the platform provider key (C3)
+	// Cross-origin access (tracker 439): ONE platform-global allowlist,
+	// requirePlatformAdmin on GET/PUT; tenant/org admins refused
+	// (cors_origins_route_test.go).
+	"/api/platform/cors-origins": "platform",
+	"/api/copilot/config":        "platform",
+	"/api/copilot/config/test":   "platform", // requirePlatformAdmin: tests the platform provider key (C3)
 	// Per-tenant ingestion service surface (Wave 1 #2): the cloud-ingest poller's
 	// platform credential (ingest:cloud API key in the global realm). It fans one
 	// poller across EVERY tenant's connectors, so it is platform plumbing by

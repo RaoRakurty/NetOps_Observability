@@ -48,6 +48,7 @@ import (
 	"netops/backend/internal/changeledger"
 	"netops/backend/internal/changesignals"
 	"netops/backend/internal/chatops"
+	"netops/backend/internal/corsallow"
 	"netops/backend/internal/credfp"
 	"netops/backend/internal/credscrub"
 	"netops/backend/internal/flownames"
@@ -800,6 +801,10 @@ type server struct {
 	platformAlertRouter     *platformalert.Router
 	platformAlertIgnoredEnv []string
 	// VMALERT-WEBHOOK-END
+	// corsAllow is the cross-origin allowlist (internal/corsallow, tracker
+	// 439): the platform admin's saved list, seeded by CORS_ALLOWED_ORIGINS,
+	// read LIVE by withCORS and the WebSocket origin check.
+	corsAllow *corsallow.Allowlist
 	// igpAPI serves the read-only OSPF/IS-IS monitoring subtree
 	// /api/protocols/{ospf|isis}/{adjacencies,summary,health} (internal/igpmon).
 	// It is always on — it collects nothing and reads only telemetry the
@@ -2015,6 +2020,7 @@ func newServer() *server {
 	// "never the platform route's topic" refusal can consult it, and after
 	// the vault so its secrets open under the platform DEK.
 	srv.platformAlerts, srv.platformAlertRouter, srv.platformAlertIgnoredEnv = srv.buildPlatformAlertRoute()
+	srv.corsAllow = buildCORSAllowlist()
 	srv.notifyCfg = newNotifyConfigStore(envOr("NOTIFY_CONFIG_FILE", "/data/notify_config.json"), srv)
 	// VMALERT-WEBHOOK-BEGIN — the vmalert delivery path. Must come after the
 	// notifier is on srv (it is the fan-out target).
@@ -3386,7 +3392,7 @@ func Run() {
 	mux := http.NewServeMux()
 	srv.routes(mux)
 
-	handler := withCORS(withLogging(withBodyLimit(maxRequestBodyBytes(), srv.withAuth(srv.withAudit(mux)))))
+	handler := withCORS(srv.corsAllowed, withLogging(withBodyLimit(maxRequestBodyBytes(), srv.withAuth(srv.withAudit(mux)))))
 
 	// Internal CA bootstrap (#18 phase 2). When TLS_INTERNAL_CA=true, self-issue
 	// the API server + nginx client SVIDs and the CA bundle (CA key sealed by the
@@ -3674,6 +3680,12 @@ func (s *server) routes(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("/api/platform/alerting/host-route/test", s.elevatedOnlyMutations(func(w http.ResponseWriter, r *http.Request) {
 		s.platformAlertAPI().HandleTest(w, r)
+	}))
+	// Cross-origin access (tracker 439): which of a customer's app web
+	// addresses may call the API from a browser (the real-user tag).
+	// Platform-global, requirePlatformAdmin; a change steps up like Features.
+	mux.HandleFunc("/api/platform/cors-origins", s.elevatedOnlyMutations(func(w http.ResponseWriter, r *http.Request) {
+		s.corsAPI().Handle(w, r)
 	}))
 	// Security Policy engine (#24): catalog, effective-policy/simulator, per-scope
 	// override editing. Admin-gated; system-scope writes are platform-owner only.
@@ -5775,31 +5787,60 @@ func affectedDevices(v any) []string {
 	return nil
 }
 
-// corsAllowedOrigins is the explicit cross-origin allowlist (SR-005). The SPA is
-// served same-origin behind nginx on :8000, so by DEFAULT no CORS headers are
-// emitted (the previous wildcard `*` let any site read API JSON if it held a
-// token, and broadcast the full method surface). Set CORS_ALLOWED_ORIGINS to a
-// comma-separated list only if the API must be reached from another origin.
-func corsAllowedOrigins() map[string]bool {
-	raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS"))
-	if raw == "" {
-		return nil
+// The cross-origin allowlist (SR-005, tracker 439). The SPA is served
+// same-origin behind nginx on :8000, so by DEFAULT no CORS headers are emitted
+// (the previous wildcard `*` let any site read API JSON if it held a token, and
+// broadcast the full method surface). Only the origins on the list — the
+// platform administrator's saved list (Platform → Configuration → Cross-origin
+// access), else the install value CORS_ALLOWED_ORIGINS — may call the API from
+// a browser; the real-user tag on a customer's pages is the reason it exists.
+
+// buildCORSAllowlist loads the saved list over the install value. A store that
+// cannot be read keeps the install value in force — loudly (§10).
+func buildCORSAllowlist() *corsallow.Allowlist {
+	a := corsallow.New(corsallow.KVStore{Key: corsallow.DefaultKey, LoadFn: platformdb.Load, SaveFn: platformdb.Save},
+		os.Getenv("CORS_ALLOWED_ORIGINS"))
+	for _, d := range a.EnvDropped() {
+		logWarn("cors", "CORS_ALLOWED_ORIGINS entry refused — it is not a browser origin, so it allows nothing", map[string]any{"why": d})
 	}
-	out := map[string]bool{}
-	for _, o := range strings.Split(raw, ",") {
-		if o = strings.TrimSpace(o); o != "" {
-			out[o] = true
-		}
+	if err := a.Load(); err != nil {
+		logError("cors", "the saved cross-origin allowlist could not be used — the install value (CORS_ALLOWED_ORIGINS) is in force until it can", errf(err))
 	}
-	return out
+	return a
 }
 
-func withCORS(next http.Handler) http.Handler {
-	allowed := corsAllowedOrigins()
+// corsAllowed reports whether a browser Origin is on the list in force.
+func (s *server) corsAllowed(origin string) bool { return s.corsAllow.Allowed(origin) } // nil-safe
+
+// corsAPI binds the Cross-origin access setting (internal/corsallow):
+// requirePlatformAdmin (platform-GLOBAL plumbing, CLAUDE.md §3a rule 3 — never
+// requireAdmin, which a tenant admin passes), the strict audit trail first.
+func (s *server) corsAPI() *corsallow.API {
+	return corsallow.NewAPI(s.corsAllow, corsallow.Deps{
+		Authz: func(w http.ResponseWriter, r *http.Request) (corsallow.Caller, bool) {
+			claims, ok := s.requirePlatformAdmin(w, r)
+			return corsallow.Caller{Subject: claims.Sub, APIKey: strings.HasPrefix(claims.Sub, "apikey:")}, ok
+		},
+		AuditStrict: func(e corsallow.AuditEntry) error { return s.audit.RecordStrict(corsAudit(e)) },
+		Audit:       func(e corsallow.AuditEntry) { s.audit.Record(corsAudit(e)) },
+		WriteJSON:   writeJSON,
+		WriteErr:    writeError,
+		LogInfo:     func(msg string, f map[string]any) { logInfo("cors", msg, f) },
+		Now:         time.Now,
+	})
+}
+
+func corsAudit(e corsallow.AuditEntry) AuditEvent {
+	return AuditEvent{Actor: e.Subject, Cross: true, Method: e.Method, Path: e.Path, Status: e.Status, Decision: e.Outcome, Detail: e.Detail}
+}
+
+// withCORS reflects an allowlisted Origin. `allowed` is consulted on EVERY
+// request, so a change saved on the settings page applies at once — no restart.
+func withCORS(allowed func(origin string) bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		// Reflect ONLY an explicitly-allowlisted origin — never a wildcard.
-		if origin != "" && allowed[origin] {
+		if origin != "" && allowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

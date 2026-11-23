@@ -315,9 +315,11 @@ adds it once, in front of all your apps; Correlix never changes your systems.
 3. **Add it once.** A copy-paste rule for the layer in front of your apps:
    NGINX, F5 BIG-IP, Citrix NetScaler, Envoy or Istio, Cloudflare, Akamai, or
    Google Tag Manager. Apps with a strict content security policy need the two
-   extra lines shown. Your Correlix administrator must also allow each app's
-   web address to send data; until then browsers block it. Test the rule in
-   staging first.
+   extra lines shown. Each app's web address must also be allowed under
+   **Platform → Configuration → Cross-origin access** (the platform
+   administrator does this — see
+   [Allow your apps to send data from a browser](/administration/cross-origin-access));
+   until then browsers block the data. Test the rule in staging first.
 4. **Is it working?** Which apps sent real-user data in the last 24 hours, and
    which went quiet after sending some in the last week.
 

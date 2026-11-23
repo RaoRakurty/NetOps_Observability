@@ -118,9 +118,10 @@ export default function RumSetup() {
               need these two lines:
             </p>
             <Code text={cspLines(origin).join(";\n") + ";"} label="Content security policy additions" />
-            <p>
-              Your Correlix administrator must also allow each app's web address to send data (the
-              cross-origin allowlist). Until it does, browsers block the data.
+            <p data-testid="rum-cors-step">
+              Each app's web address must also be allowed under{" "}
+              <a href="#/platform/cors-origins">Platform → Configuration → Cross-origin access</a> (the platform
+              administrator does this). Until it is, browsers block the data.
             </p>
           </li>
 
