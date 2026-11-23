@@ -238,7 +238,12 @@ version: 1
 # evidence. Entity, tokens, native_id and attrs are unchanged, so the signal_id is the one
 # the up line always had. Down lines are byte-identical.
 #
-parser_rev: 2026-11-22-recovery-clears
+# 2026-11-23-ospf-trap-twoway (tracker 444): trap.ospf.adjacency_change reads ospfNbrState
+# twoWay(4) / bare 4 / a `two-way` or `2-way` label as unknown — the syslog row's `to 2WAY`
+# reading — instead of a down; the bare exchangeStart label is a down. Every other value
+# reads as before. A DROTHER demotion no longer reaches the engine as a `high` loss.
+#
+parser_rev: 2026-11-23-ospf-trap-twoway
 
 # ══ SCHEMA: a `rules:` row ═══════════════════════════════════════════════════
 #

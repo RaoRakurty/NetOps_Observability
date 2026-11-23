@@ -689,7 +689,11 @@ RULES_HASH_POSITIONAL_STATE = "5923e8c68405e06755ce6d6df6b8397198221384f1fb04903
 #: Tracker 380 PR 3 (2026-11-22): 32 device-lane link/adjacency rows gain
 #: `emit.clear_when` — an up is reported as `<kind>_clear` at info.
 RULES_HASH_RECOVERY_CLEARS = "90f3505fe7152e2667b73abebb6f67b4ae596be64ec1b6f31e9bbe1f0be890a4"
-RULES_HASH_A3 = RULES_HASH_RECOVERY_CLEARS
+#:
+#: Tracker 444 (2026-11-23): trap.ospf.adjacency_change reads twoWay(4) as unknown (the
+#: syslog row's `to 2WAY` reading) and the bare exchangeStart label as a down.
+RULES_HASH_OSPF_TRAP_TWOWAY = "d661c88b8c08fd6e92a0c5090e996170c4dc2e0e5d59a5fdf84bb2e74058c7a0"
+RULES_HASH_A3 = RULES_HASH_OSPF_TRAP_TWOWAY
 
 
 def _guard_patterns(node) -> list[str]:

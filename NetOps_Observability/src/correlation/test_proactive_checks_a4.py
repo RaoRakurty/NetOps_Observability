@@ -531,7 +531,9 @@ def test_the_module_cannot_reclassify_a_v1_noise_line():
     # 2026-11-22-recovery-clears: tracker 380 reports a device-lane up as `<kind>_clear`.
     # A V1 noise line is never classified at all, so a rename of what classified lines
     # emit cannot reclassify one.
-    assert parser_rules.PARSER_REV == "2026-11-22-recovery-clears", (
+    # 2026-11-23-ospf-trap-twoway: tracker 444 changes one TRAP row's state reading; the
+    # V1 pool is syslog noise, so no V1 line can move.
+    assert parser_rules.PARSER_REV == "2026-11-23-ospf-trap-twoway", (
         "the parser revision moved — an A4 change must not touch the parser")
     assert not any(r.rule_id.startswith("proactive") for r in RULES)
 
