@@ -5896,6 +5896,21 @@ export interface PlatformAlertTiers {
   warning: boolean;
 }
 
+/** GET /api/platform/cors-origins — the cross-origin allowlist (tracker 439). */
+export interface CorsOriginsView {
+  /** The list in force. */
+  origins: string[];
+  /** saved = the platform admin's list; env = the install value; none = neither. */
+  source: "saved" | "env" | "none";
+  /** The install value (CORS_ALLOWED_ORIGINS), what "reset" returns to. */
+  env_origins: string[];
+  /** Install entries refused, each with the reason. */
+  env_dropped: string[];
+  updated_by?: string;
+  updated_at?: string;
+  max_origins: number;
+}
+
 /** GET /api/platform/alerting/host-route — secrets appear only as *_set. */
 export interface PlatformAlertRoute {
   /** topic is empty for an API-key caller (the topic is a credential); topic_set always says whether one exists. */
@@ -6626,6 +6641,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ channel }),
     }),
+
+  // Cross-origin access (tracker 439) — which app web addresses may call the
+  // API from a browser. Platform-owner only (requirePlatformAdmin).
+  corsOrigins: () => request<CorsOriginsView>("/api/platform/cors-origins"),
+  saveCorsOrigins: (origins: string[]) =>
+    request<CorsOriginsView>("/api/platform/cors-origins", { method: "PUT", body: JSON.stringify({ origins }) }),
+  resetCorsOrigins: () =>
+    request<CorsOriginsView>("/api/platform/cors-origins", { method: "PUT", body: JSON.stringify({ reset: true }) }),
 
   // Token policy (access/refresh lifetimes) — admin-gated, clamped server-side.
   tokenPolicy: () => request<TokenPolicy>("/api/auth/token-policy"),

@@ -102,8 +102,8 @@ type Row struct {
 	// `port-type`; it is the strongest per-interface WAN fact there is.
 	Role string `json:"role,omitempty"`
 	// Kind is the interface's type as the controller reports it (KindEthernet,
-	// KindLoopback, KindTunnel, KindOther; "" = not reported). cEdge reports the
-	// IANA ifType as `interface-type`.
+	// KindLoopback, KindTunnel, KindWANMedia, KindOther; "" = not reported).
+	// cEdge reports the IANA ifType as `interface-type` (iftype.go).
 	Kind string `json:"kind,omitempty"`
 }
 
@@ -152,8 +152,11 @@ func CleanKind(s string) string {
 		return KindTunnel
 	case k == KindOther:
 		return KindOther
+	case k == KindWANMedia:
+		return KindWANMedia
 	}
-	return ""
+	// The IANA names of the WAN-media and tunnel types (tracker 436 (c)).
+	return ianaKindByName(k)
 }
 
 // DeviceRows is one inventory device's interfaces from one controller poll.

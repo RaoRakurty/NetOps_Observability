@@ -437,7 +437,7 @@ func TestRoleAndKindAreAClosedSet(t *testing.T) {
 		"iana-iftype-ethernet-csmacd": KindEthernet, "ethernetCsmacd": KindEthernet,
 		"iana-iftype-sw-loopback": KindLoopback, "softwareLoopback": KindLoopback,
 		"iana-iftype-tunnel": KindTunnel, "tunnel": KindTunnel, "iana-iftype-other": KindOther,
-		"": "", "iana-iftype-ppp": "", "x" + strings.Repeat("y", 300): "",
+		"": "", "iana-iftype-ppp": KindWANMedia, "iana-iftype-l2vlan": "", "x" + strings.Repeat("y", 300): "",
 	} {
 		if got := CleanKind(in); got != want {
 			t.Errorf("CleanKind(%q) = %q, want %q", in, got, want)

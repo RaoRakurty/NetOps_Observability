@@ -1603,6 +1603,18 @@
       "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Platform alerts"
     },
     {
+      "id": "docs-152",
+      "category": "docs",
+      "question": "How do I allow my app's web address so the real-user tag can send data to Correlix from a browser?",
+      "expect": {
+        "slugs": [
+          "administration/cross-origin-access"
+        ]
+      },
+      "nav": "platform/cors-origins",
+      "notes": "nav-leaf coverage (N-G1): Platform \u2192 Configuration \u2192 Cross-origin access (tracker 439)"
+    },
+    {
       "id": "intent-001",
       "category": "intent",
       "question": "show me the top talkers",

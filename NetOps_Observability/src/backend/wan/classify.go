@@ -22,8 +22,10 @@ import (
 // is not WAN. The device-name pattern only makes a device a candidate.
 //
 // Pure: no IO. The api assembles Facts from the interface bridge (controller
-// rows: VPN, port role, interface kind), the SD-WAN overlay facts (TLOC
-// interfaces), the policy and the operator's marks.
+// rows: VPN, port role, interface kind; the device's own IF-MIB ifType), the
+// SD-WAN overlay facts (TLOC interfaces), the device's BGP4-MIB sessions, the
+// policy and the operator's marks (tracker 436: the last two MIB facts are what
+// a plain router states without a controller).
 
 // Confidence of a WAN verdict.
 const (
@@ -41,6 +43,8 @@ const (
 	BasisSDWANTLOC           Basis = "sdwan_tloc"           // the device's SD-WAN TLOC table names it
 	BasisSDWANTunnelSource   Basis = "sdwan_tunnel_source"  // VPN 0, an SD-WAN tunnel rides its address
 	BasisDeclaredNextHop     Basis = "declared_next_hop"    // the policy names an ISP next-hop for this port
+	BasisWANMedia            Basis = "wan_media_type"       // IF-MIB ifType: a medium that only carries WAN circuits
+	BasisExternalBGP         Basis = "external_bgp_peer"    // BGP4-MIB: eBGP to a peer outside the inventory from its address
 	BasisTransportNoTunnel   Basis = "transport_vpn_no_tunnel"
 	BasisDescribedAsWAN      Basis = "described_as_wan"
 	BasisPublicAddress       Basis = "public_address"
@@ -66,9 +70,15 @@ type IfFacts struct {
 	Addrs []string // canonical IP text
 	// VRF is the controller's VPN/VRF ("" = not reported).
 	VRF string
-	// Role and Kind are the bridge's closed-set port role and interface kind.
+	// Role and Kind are the bridge's closed-set port role and interface kind
+	// (Kind from the controller, else from the device's IF-MIB ifType).
 	Role, Kind string
-	Alias      string
+	// IfType names the IF-MIB ifType behind a "wan_media" Kind, for evidence.
+	IfType string
+	// ExternalBGP is an eBGP session to a peer outside the inventory that runs
+	// from one of this interface's addresses (nil = none).
+	ExternalBGP *ExternalPeer
+	Alias       string
 	// InTLOC: the device's SD-WAN TLOC table names this interface, or one of its
 	// addresses is a local TLOC (BFD source) address.
 	InTLOC bool
@@ -149,12 +159,17 @@ func ev(source, detail string) Evidence { return Evidence{Source: source, Detail
 //  1. Operator mark: "not WAN" hides it, "WAN" confirms it. Then a management
 //     port (by name, or SD-WAN VPN 512) is not WAN, whatever else is said.
 //  2. Confirmed evidence: SD-WAN transport port; SD-WAN TLOC; SD-WAN tunnel
-//     source; a next-hop declared for exactly this port. Positive evidence beats
-//     the exclusions below (a TLOC bound to a loopback is still WAN).
+//     source; a next-hop declared for exactly this port; a WAN medium (IF-MIB
+//     ifType: serial, PPP, DSL, cellular…); on a WAN-candidate device, an eBGP
+//     session to a peer outside the inventory from the port's address (never
+//     a loopback or tunnel). Positive evidence beats the exclusions below (a
+//     TLOC bound to a loopback is still WAN, a PPPoE dialer is ppp(23)).
 //  3. Not WAN: management; loopback / system / null / NVI; tunnel virtual
 //     interfaces (their port is the WAN interface); SD-WAN service, management
 //     and internal VPNs; a port the controller calls service.
-//  4. Possible: VPN 0 with no tunnel; a WAN word in the description; a public
+//  4. Possible: an eBGP session to a peer outside the inventory on a device
+//     that does not look like a WAN router; VPN 0 with no tunnel; a WAN word in
+//     the description; a public
 //     address on a candidate device; directly connected to a candidate device;
 //     else, on a candidate device with nothing confirmed, every remaining
 //     addressed port.
@@ -189,6 +204,27 @@ func Classify(d DeviceFacts) []Verdict {
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Interface < out[b].Interface })
 	return out
+}
+
+// KindWANMedia is the bridge's kind for a medium that only carries WAN
+// circuits (ifbridge.KindWANMedia; the closed set's spelling, not imported, so
+// this package stays free of the bridge).
+const KindWANMedia = "wan_media"
+
+// mediaText is the ifType as evidence reads it ("ppp(23)"), or a plain phrase
+// when the controller stated the kind without a number.
+func mediaText(f IfFacts) string {
+	if f.IfType != "" {
+		return f.IfType
+	}
+	return "a WAN medium"
+}
+
+// externalBGPPort: an eBGP session to an external peer runs from this port, and
+// the port is one that can own a WAN hand-off — never a loopback (a multihop
+// session's source) or a tunnel (its underlay is the WAN port).
+func externalBGPPort(f IfFacts) bool {
+	return f.ExternalBGP != nil && !isLoopbackLike(f) && !IsTunnelInterface(f.Name, f.Kind)
 }
 
 // excluded marks a verdict decided as NOT WAN by an exclusion (rule 3), so the
@@ -238,6 +274,15 @@ func classifyOne(d DeviceFacts, f IfFacts) Verdict {
 		v.Confidence, v.Basis = Confirmed, BasisDeclaredNextHop
 		v.Reason = "An ISP next-hop (" + f.NextHop + ") is configured for this port."
 		v.Evidence = []Evidence{ev("policy", "next-hop "+f.NextHop+" configured for this port")}
+	case f.Kind == KindWANMedia:
+		v.Confidence, v.Basis = Confirmed, BasisWANMedia
+		v.Reason = "Its medium only carries WAN circuits, as the device reports it (" + mediaText(f) + ")."
+		v.Evidence = []Evidence{ev("snmp", "IF-MIB ifType "+mediaText(f))}
+	case d.Candidate && externalBGPPort(f):
+		p := *f.ExternalBGP
+		v.Confidence, v.Basis = Confirmed, BasisExternalBGP
+		v.Reason = "An eBGP session to " + peerText(p) + ", which is not in the inventory, runs from this port."
+		v.Evidence = []Evidence{ev("bgp", "eBGP peer "+peerText(p)+" from this port's address; this router is AS "+strconv.FormatInt(p.LocalAS, 10))}
 	}
 	if v.Confidence == Confirmed {
 		if f.Alias != "" && wanWordPattern.MatchString(f.Alias) {
@@ -260,6 +305,11 @@ func classifyOne(d DeviceFacts, f IfFacts) Verdict {
 
 	// 4. Possible.
 	switch {
+	case externalBGPPort(f):
+		p := *f.ExternalBGP
+		v.Confidence, v.Basis = Possible, BasisExternalBGP
+		v.Reason = "An eBGP session to " + peerText(p) + ", which is not in the inventory, runs from this port — on a device that does not look like a WAN router, so it is not measured until marked."
+		v.Evidence = []Evidence{ev("bgp", "eBGP peer "+peerText(p)+" from this port's address; this router is AS "+strconv.FormatInt(p.LocalAS, 10))}
 	case d.SDWAN && transportVPN && len(f.Addrs) > 0:
 		v.Confidence, v.Basis = Possible, BasisTransportNoTunnel
 		v.Reason = "In the SD-WAN transport VPN, but no tunnel runs over it."

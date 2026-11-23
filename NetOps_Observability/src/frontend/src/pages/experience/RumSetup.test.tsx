@@ -71,4 +71,13 @@ describe("RumSetup", () => {
     await screen.findByTestId("rum-summary");
     expect(container.textContent).not.toMatch(/CORS_ALLOWED_ORIGINS|\.env\b/);
   });
+
+  it("links the allow step to the Cross-origin access setting (tracker 439)", async () => {
+    vi.spyOn(api, "demRumSources").mockResolvedValue(OK);
+    render(<RumSetup />);
+    const step = screen.getByTestId("rum-cors-step");
+    const link = step.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("#/platform/cors-origins");
+    expect(step.textContent).toMatch(/Cross-origin access/);
+  });
 });

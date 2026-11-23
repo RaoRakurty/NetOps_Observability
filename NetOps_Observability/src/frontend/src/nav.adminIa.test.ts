@@ -45,6 +45,7 @@ const GATES: Record<string, { scope: "platform" | "tenant"; gate: string }> = {
   "pipeline-debugger": { scope: "platform", gate: "internal/pipedebug/http.go via debugAuthz → requirePlatformAdmin, on all five /api/debug/* routes" },
   features: { scope: "platform", gate: "feature_flags.go handlePlatformFeatures / handlePlatformRestart → requirePlatformAdmin" },
   "platform-alerts": { scope: "platform", gate: "internal/platformalert via main.go platformAlertAPI → requirePlatformAdmin, on GET/PUT and the test send" },
+  "cors-origins": { scope: "platform", gate: "internal/corsallow via main.go corsAPI → requirePlatformAdmin, on GET/PUT (tracker 439)" },
   quarantine: { scope: "platform", gate: "pipeline_processors.go handleQuarantineList → requirePlatformAdmin (the index holds events attributable to NO tenant)" },
   // ── Administration ─────────────────────────────────────────────────────────
   access: { scope: "tenant", gate: "access_explain.go handleAccessExplain → requireAdmin" },
@@ -111,10 +112,10 @@ describe("Platform is ONE provider-only section", () => {
     expect(platform.label).toBe("Platform");
   });
 
-  it("carries the Security and Tools groups the owner asked for, plus Configuration (Features, tracker 348; Platform alerts, 2026-11-11)", () => {
+  it("carries the Security and Tools groups the owner asked for, plus Configuration (Features, tracker 348; Platform alerts, 2026-11-11; Cross-origin access, tracker 439)", () => {
     const groups = [...new Set((platform.children ?? []).map((l) => l.group).filter(Boolean))];
     expect(groups).toEqual(["Security", "Configuration", "Tools"]);
-    expect(groupIds(platform, "Configuration")).toEqual(["features", "platform-alerts"]);
+    expect(groupIds(platform, "Configuration")).toEqual(["features", "platform-alerts", "cors-origins"]);
   });
 
   it("Security holds the provider-level security plumbing", () => {
