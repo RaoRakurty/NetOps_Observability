@@ -61,9 +61,14 @@ beforeEach(() => {
   api.listSaved.mockResolvedValue([]);
   api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: "", dashboard: null, unavailable: false });
 });
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); location.hash = ""; });
+
+// The merged layout's own tests open it at its address; the default address is
+// the Operations Overview again (owner, 2026-11-23).
+const openStandard = () => { location.hash = "#/overview/operations/standard"; };
 
 describe("Overview — one read per source", () => {
+  beforeEach(openStandard);
   it("reads correlations, health and stats ONCE for every panel that shares them", async () => {
     render(<OverviewPage />);
     await screen.findByText("Nothing needs attention right now.");
@@ -74,6 +79,7 @@ describe("Overview — one read per source", () => {
 });
 
 describe("Overview — honest attention line", () => {
+  beforeEach(openStandard);
   it("says nothing needs attention only when there is no case AND health is healthy", async () => {
     render(<OverviewPage />);
     expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
@@ -102,6 +108,7 @@ describe("Overview — honest attention line", () => {
 });
 
 describe("Overview — platform panels", () => {
+  beforeEach(openStandard);
   it("never shows the platform's own health to a tenant user (and never reads it)", async () => {
     render(<OverviewPage />);
     await screen.findByText("Nothing needs attention right now.");
@@ -119,6 +126,7 @@ describe("Overview — platform panels", () => {
 });
 
 describe("Overview — health by site", () => {
+  beforeEach(openStandard);
   it("names the next step when no site is declared", async () => {
     render(<OverviewPage />);
     expect(await screen.findByText("No sites declared yet.")).toBeTruthy();
@@ -145,6 +153,7 @@ describe("Overview — health by site", () => {
 });
 
 describe("Overview — collapsed groups poll nothing", () => {
+  beforeEach(openStandard);
   it("does not mount the closed 'Traffic and resources' panels until opened", async () => {
     render(<OverviewPage />);
     await screen.findByText("Nothing needs attention right now.");
@@ -176,29 +185,69 @@ describe("Overview — the team default", () => {
     expect(screen.queryByText("Open problems")).toBeNull();
     // The picker names the team default and still reaches the built-in page.
     expect(screen.getByRole("option", { name: "Overview (team default)" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: "Built-in Overview" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Operations Overview" })).toBeTruthy();
   });
 
-  it("shows the built-in page at its own address even when a team default exists", async () => {
+  it("opens the Operations Overview at the built-in address even when a team default exists", async () => {
     location.hash = "#/overview/operations/builtin";
+    api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: teamBoard.id, dashboard: teamBoard, unavailable: false });
+    render(<OverviewPage />);
+    expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
+    expect(screen.queryByTestId("team-default-board")).toBeNull();
+  });
+
+  it("keeps the merged layout at its own address, with the picker on it", async () => {
+    location.hash = "#/overview/operations/standard";
     api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: teamBoard.id, dashboard: teamBoard, unavailable: false });
     render(<OverviewPage />);
     expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
     expect(screen.queryByTestId("team-default-board")).toBeNull();
-    expect((screen.getByTestId("dashboard-picker") as HTMLSelectElement).value).toBe("__builtin");
+    expect((screen.getByTestId("dashboard-picker") as HTMLSelectElement).value).toBe("__standard");
+    expect(screen.getByRole("option", { name: "Operations Overview" })).toBeTruthy();
   });
 
-  it("falls back to the built-in page with a quiet note when the default is gone", async () => {
+  it("falls back to the Operations Overview with a quiet note when the default is gone", async () => {
     api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: teamBoard.id, dashboard: null, unavailable: true });
     render(<OverviewPage />);
     expect(await screen.findByTestId("team-default-unavailable")).toBeTruthy();
-    expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
   });
 
-  it("shows the built-in page when the team default cannot be read", async () => {
+  it("shows the Operations Overview when the team default cannot be read", async () => {
     api.getOverviewDefault.mockRejectedValue(new Error("502"));
     render(<OverviewPage />);
-    expect(await screen.findByText("Nothing needs attention right now.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
     expect(screen.queryByTestId("team-default-unavailable")).toBeNull();
+  });
+});
+
+describe("Overview — the Operations Overview is the default again (owner, 2026-11-23)", () => {
+  it("opens the Operations Overview at #/overview/operations with no team default", async () => {
+    render(<OverviewPage />);
+    expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
+    expect(screen.getByTestId("operations-overview")).toBeTruthy();
+    // The merged layout is not mounted underneath it.
+    expect(screen.queryByText("Nothing needs attention right now.")).toBeNull();
+  });
+
+  it("shows real per-site health, not the old 'not available' stub", async () => {
+    api.geomap.mockResolvedValue({ geo_enabled: true, sites: [] });
+    render(<OverviewPage />);
+    expect(await screen.findByText("No sites declared yet.")).toBeTruthy();
+    expect(screen.queryByText("Per-site health not available yet.")).toBeNull();
+  });
+
+  it("never shows (or polls) the platform's own health for a tenant user", async () => {
+    render(<OverviewPage />);
+    await screen.findByRole("heading", { name: "Operations Overview" });
+    await waitFor(() => expect(api.me).toHaveBeenCalled());
+    expect(screen.queryByText("Platform health (internal)")).toBeNull();
+    expect(api.stackHealth).not.toHaveBeenCalled();
+  });
+
+  it("shows the platform's own health to the platform admin", async () => {
+    api.me.mockResolvedValue({ platform_admin: true });
+    render(<OverviewPage />);
+    expect(await screen.findByText("Platform health (internal)")).toBeTruthy();
   });
 });
