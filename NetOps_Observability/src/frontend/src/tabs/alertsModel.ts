@@ -13,6 +13,7 @@
 
 import type { AlertEpisode } from "../services/api";
 import { severityGroupOf, SEVERITY_GROUPS, type SeverityGroup } from "../lib/logFilters";
+import { nameDeviceIn } from "../lib/deviceNames";
 
 export type AlertsTab = "active" | "cleared" | "closed" | "all";
 
@@ -38,15 +39,21 @@ export function deviceLabel(e: AlertEpisode, names: ReadonlyMap<string, string> 
   return names?.get(e.resource) ?? e.resource;
 }
 
+/** The rule's summary with the device named as an operator reads it: a summary
+ *  rendered before the engine named devices carries the internal id. */
+export function alertSummary(e: Pick<AlertEpisode, "summary" | "resource">, device: string): string {
+  return nameDeviceIn((e.summary || "").trim(), e.resource, device);
+}
+
 export type AlertView = {
   id: string;
   /** "HighCPU on leaf-1" — what fired, where. */
   title: string;
   /** The rule's own summary when it has one, else the count and span. */
   detail: string;
+  /** The device by its inventory name. The internal id is never shown (owner,
+   *  2026-11-23); it stays on the episode for links and search. */
   device: string;
-  /** The raw id under the name, only when the two differ. */
-  deviceId: string;
   group: SeverityGroup;
   episode: AlertEpisode;
 };
@@ -57,9 +64,8 @@ export function toAlertView(e: AlertEpisode, names: ReadonlyMap<string, string> 
   return {
     id: e.id,
     title: e.resource ? `${e.signal} on ${device}` : e.signal,
-    detail: e.summary?.trim() ? `${e.summary.trim()} · ${count}` : count,
+    detail: e.summary?.trim() ? `${alertSummary(e, device)} · ${count}` : count,
     device,
-    deviceId: e.resource && device !== e.resource ? e.resource : "",
     group: severityGroupOf(e.state),
     episode: e,
   };
@@ -110,7 +116,7 @@ export function filterAlerts(views: readonly AlertView[], f: AlertFilters, now: 
     if (f.flapping && !e.flapping) return false;
     if (f.paused && !isSuppressed(e, now)) return false;
     if (f.unassigned && e.assigned_to) return false;
-    if (needle && !`${v.title} ${v.detail} ${v.deviceId} ${e.assigned_to ?? ""}`.toLowerCase().includes(needle)) return false;
+    if (needle && !`${v.title} ${v.detail} ${e.resource ?? ""} ${e.assigned_to ?? ""}`.toLowerCase().includes(needle)) return false;
     return true;
   });
 }

@@ -66,11 +66,36 @@ export function deviceDisplayName(id: string | undefined, names: DeviceNames | n
   return names?.get(id) ?? id;
 }
 
+const ID_RUNE = /[A-Za-z0-9._-]/;
+
+/** Swap every WHOLE-TOKEN occurrence of a device id in operator text (an alert
+ *  summary, an incident title stored before the engine named devices) for the
+ *  name. Only the exact id the record carries is swapped, and only for a name
+ *  inventory gave — never a suffix stripped by pattern (a real hostname can end
+ *  in hex). "pe1-0a0b if3 down" → "pe1 if3 down"; "pe1-0a0bc" is left alone.
+ *  Owner, 2026-11-23: the internal id stays internal. */
+export function nameDeviceIn(text: string, id: string | undefined, name: string | undefined): string {
+  if (!text || !id || !name || name === id || !text.includes(id)) return text;
+  let out = "";
+  let rest = text;
+  for (;;) {
+    const i = rest.indexOf(id);
+    if (i < 0) return out + rest;
+    const end = i + id.length;
+    const before = i === 0 || !ID_RUNE.test(rest[i - 1]);
+    const after = end === rest.length || !ID_RUNE.test(rest[end]);
+    out += rest.slice(0, i) + (before && after ? name : id);
+    rest = rest.slice(end);
+  }
+}
+
 /** One shared, short-lived read of the caller's inventory. A failed read is not
  *  cached, so the next caller tries again. */
 export function loadDeviceNames(now: number = Date.now()): Promise<DeviceNames> {
   if (cached && now - cached.at < TTL_MS) return cached.names;
-  const names = api.devices().then((d) => buildDeviceNames(d ?? []));
+  // Started inside a promise: any failure, even a synchronous one, leaves the
+  // raw ids on screen and never breaks the page that asked.
+  const names = Promise.resolve().then(() => api.devices()).then((d) => buildDeviceNames(d ?? []));
   cached = { at: now, names };
   names.catch(() => { cached = null; });
   return names;

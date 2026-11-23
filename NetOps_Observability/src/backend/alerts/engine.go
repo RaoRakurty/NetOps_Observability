@@ -113,6 +113,16 @@ type Engine struct {
 	// (tenant ""), which is the correct default for a stack with no inventory.
 	// It is never derived from the alert's own labels (§3a rule 2).
 	TenantOf func(models.Alert) string
+	// DeviceNames, when set, is read ONCE per evaluation tick: device id → the
+	// name an operator reads (the device's hostname; the server tells two
+	// same-name devices of one tenant apart by address). A summary renders
+	// `$labels.device` through it, so an alert reads "cEDGE-40 CPU 91%", never
+	// the internal id "cedge-40-fdf7b64f CPU 91%" — the id would otherwise
+	// propagate into every incident, ticket and notification built from the
+	// summary (owner, 2026-11-23). Labels and DeviceID keep the id: they are
+	// machine fields (dedup, tenant, links). nil, an id it does not know or an
+	// empty name renders the id exactly as before.
+	DeviceNames func() map[string]string
 	// notifyState is the DURABLE half of `dispatched`. Without it a restart
 	// forgot every notification ever sent and re-paged every still-firing alert
 	// on the next tick — observed live 2026-09-03 across two deploys in an
@@ -403,6 +413,10 @@ func (e *Engine) loop(ctx context.Context) {
 func (e *Engine) evaluateAll() {
 	rules := e.Rules()
 	now := e.now().UTC()
+	var names map[string]string
+	if e.DeviceNames != nil {
+		names = e.DeviceNames()
+	}
 
 	e.mu.RLock()
 	prev := e.active
@@ -472,7 +486,7 @@ func (e *Engine) evaluateAll() {
 				ID:       id,
 				Rule:     r.Name,
 				Severity: sev,
-				Summary:  renderSummary(r.Annotations["summary"], s.Labels, s.Value),
+				Summary:  renderSummary(r.Annotations["summary"], displayLabels(s.Labels, names), s.Value),
 				Labels:   labels,
 				DeviceID: s.Labels["device"],
 				FiredAt:  firedAt,
@@ -692,6 +706,27 @@ var (
 // renderSummary expands a Prometheus-style annotation template against a firing
 // series' labels and value, so the UI shows "High CPU on leaf1 (arista): 92%"
 // instead of raw {{ $labels.device }} placeholders.
+// displayLabels is the label set a summary is RENDERED from: the sample's own
+// labels with `device` swapped for the name an operator reads, when names has
+// one. The sample's labels are never modified (they stay the alert's machine
+// labels); a copy is made only when there is something to swap.
+func displayLabels(labels, names map[string]string) map[string]string {
+	id := labels["device"]
+	if id == "" || names == nil {
+		return labels
+	}
+	name := strings.TrimSpace(names[id])
+	if name == "" || name == id {
+		return labels
+	}
+	out := make(map[string]string, len(labels))
+	for k, v := range labels {
+		out[k] = v
+	}
+	out["device"] = name
+	return out
+}
+
 func renderSummary(tmpl string, labels map[string]string, value float64) string {
 	if tmpl == "" {
 		return tmpl

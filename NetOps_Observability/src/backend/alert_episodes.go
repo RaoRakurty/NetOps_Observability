@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"netops/backend/alerts"
+	"netops/backend/internal/devname"
 	"netops/backend/internal/platformdb"
 	"netops/backend/maintenance"
 	"netops/backend/models"
@@ -96,6 +97,24 @@ const nmsRulePrefix = "NMS"
 // owned by one tenant while its alert is shown to another, or hidden from it.
 func (s *server) alertTenant(a models.Alert) string {
 	return s.alertOwner(a)
+}
+
+// alertDeviceNames is the alert engine's per-tick device id → display name
+// snapshot (alerts.Engine.DeviceNames): summaries name a device by its hostname,
+// never by the internal `<sysName>-<address hash>` id (owner, 2026-11-23). The
+// rule is internal/devname — same-name devices of one tenant are told apart by
+// address, counted per tenant (§3a). The name is the alerted device's OWN
+// record, so it is shown only where that device's alert is shown.
+func (s *server) alertDeviceNames() map[string]string {
+	if s.discovery == nil {
+		return nil
+	}
+	devs := s.discovery.Devices()
+	in := make([]devname.Entry, 0, len(devs))
+	for _, d := range devs {
+		in = append(in, devname.Entry{ID: d.ID, Name: d.Name, Address: d.Address, Tenant: deviceTenant(d)})
+	}
+	return devname.Names(in)
 }
 
 // alertOwner is the ONE owner derivation for an alert. "" means platform-owned

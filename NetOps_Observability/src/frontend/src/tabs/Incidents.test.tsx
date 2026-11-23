@@ -62,9 +62,22 @@ describe("Operations → Incidents", () => {
     const where = await within(g).findByText("edge-dfw");
     const cell = where.closest("[data-testid='incident-where']") as HTMLElement;
     expect(cell.textContent).toContain("Dallas DC");
-    expect(cell.textContent).toContain("edge-dfw-1a2b"); // the id beside a name that differs
+    // Owner, 2026-11-23: the internal id is never shown beside the name.
+    expect(cell.textContent).not.toContain("1a2b");
     const rowB = dataRows(g).find((r) => r.textContent?.includes("User reports slow CRM")) as HTMLElement;
     expect(within(rowB).getByTitle("This incident names no device")).toBeTruthy();
+  });
+
+  it("a title minted with the internal device id reads with the device's name, in the row and the panel", async () => {
+    listIncidentsPage.mockResolvedValue({ incidents: [{ ...A, title: "edge-dfw-1a2b if9 inbound traffic anomaly (z>3)" }, B], total: 2, offset: 0, complete: true });
+    render(<Incidents />);
+    const g = await grid();
+    expect(await within(g).findByText("edge-dfw if9 inbound traffic anomaly (z>3)")).toBeTruthy();
+    expect(g.textContent).not.toContain("1a2b");
+    fireEvent.click(within(g).getByText("edge-dfw if9 inbound traffic anomaly (z>3)"));
+    const panel = await screen.findByTestId("incident-panel");
+    await waitFor(() => expect(panel.textContent).toContain("edge-dfw if9 inbound traffic anomaly (z>3)"));
+    expect(panel.textContent).not.toContain("1a2b");
   });
 
   it("search finds an incident by its device name and its site", async () => {

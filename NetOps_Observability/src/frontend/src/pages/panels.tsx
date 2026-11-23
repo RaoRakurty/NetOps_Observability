@@ -20,6 +20,7 @@ import { useShell } from "../context/shell";
 import { setDrill } from "../theme/drill";
 import TopologyCanvas from "../features/topology/renderers/react-flow/TopologyCanvas";
 import { asOfText, oldestQualityAsOf } from "../tabs/tunnels.model";
+import { deviceDisplayName, useDeviceNames, type DeviceNames } from "../lib/deviceNames";
 
 // pressable — shared keyboard-activation props for click-to-navigate tiles that
 // are not <button>s (stat grids, KPI tiles, mini-rows). Gives every role="button"
@@ -157,10 +158,13 @@ function Loading() {
 // seriesLabel picks the most identifying label off a metric's label set, in the
 // order that reads best for an operator: interface (device·ifName) → device
 // (device·index) → synthetic-probe target (dst) → generic. Shared by every
-// per-series panel so labelling is consistent across the board.
-export function seriesLabel(m: Record<string, string>): string {
-  if (m.ifName) return m.device ? `${m.device}·${m.ifName}` : m.ifName;
-  if (m.device) return m.index ? `${m.device}·${m.index}` : m.device;
+// per-series panel so labelling is consistent across the board. The `device`
+// label is the internal device id; `names` (useDeviceNames) turns it into the
+// hostname an operator reads — the id shows only until inventory has loaded.
+export function seriesLabel(m: Record<string, string>, names: DeviceNames | null = null): string {
+  const dev = m.device ? deviceDisplayName(m.device, names) : "";
+  if (m.ifName) return dev ? `${dev}·${m.ifName}` : m.ifName;
+  if (dev) return m.index ? `${dev}·${m.index}` : dev;
   return m.dst || m.instance || m.mount || m.peer || "series";
 }
 
@@ -285,6 +289,7 @@ function MetricArea({
   step?: number;
 }) {
   usePrefs(); // re-render on theme flip (chart chrome resolves from tokens)
+  const names = useDeviceNames();
   const { data: res, err } = usePolled(() => {
     const [s, e, st] = nowWindow(windowSec, step);
     return api.metricsQueryRange(query, s, e, st);
@@ -302,7 +307,7 @@ function MetricArea({
       const data = (s.values ?? []).map((v) => [v[0] * 1000, Number(v[1])] as [number, number]);
       let last = 0;
       for (let i = data.length - 1; i >= 0; i--) if (Number.isFinite(data[i][1])) { last = data[i][1]; break; }
-      return { name: seriesLabel(s.metric), data, last };
+      return { name: seriesLabel(s.metric, names), data, last };
     })
     .sort((a, b) => b.last - a.last);
 
@@ -380,9 +385,10 @@ function TopNBar({
   goodHigh?: boolean;
 }) {
   usePrefs();
+  const devNames = useDeviceNames();
   const { data: res, err } = usePolled(() => api.metricsQuery(query), 15000);
   const rows = (res?.data?.result ?? [])
-    .map((x) => ({ name: seriesLabel(x.metric), v: Number(x.value?.[1]) }))
+    .map((x) => ({ name: seriesLabel(x.metric, devNames), v: Number(x.value?.[1]) }))
     .filter((r) => Number.isFinite(r.v) && r.v > 0)
     .sort((a, b) => b.v - a.v)
     .slice(0, n);
@@ -439,9 +445,10 @@ function StatusGrid({
   okLabel?: string;
 }) {
   usePrefs();
+  const names = useDeviceNames();
   const { data: res, err } = usePolled(() => api.metricsQuery(query), 15000);
   const cells = (res?.data?.result ?? [])
-    .map((x) => ({ name: seriesLabel(x.metric), st: classify(Number(x.value?.[1])) }))
+    .map((x) => ({ name: seriesLabel(x.metric, names), st: classify(Number(x.value?.[1])) }))
     .sort((a, b) => (a.st === b.st ? a.name.localeCompare(b.name) : a.st === "bad" ? -1 : b.st === "bad" ? 1 : a.st === "warn" ? -1 : 1));
   // Never render "0 / 0 down" out of a failed read — the control plane's state
   // is UNKNOWN, which is not the same as converged.
@@ -602,6 +609,7 @@ const WAN_PATTERN_KEY = "netops.overview.wanPattern";
 function WanInterfaces() {
   const [pattern, setPattern] = useState<string>(() => localStorage.getItem(WAN_PATTERN_KEY) || "wan|edge|dmz|gw");
   const [draft, setDraft] = useState(pattern);
+  const names = useDeviceNames();
   const sel = `{device=~"(?i).*(${pattern}).*"}`;
 
   // No per-query .catch: swallowing them rendered a WAN outage as "no interfaces
@@ -634,7 +642,7 @@ function WanInterfaces() {
     const speedBps = (spd[k] || 0) * 1e6; // device_if_speed is ifHighSpeed (Mbps)
     const maxBps = Math.max(inB[k] || 0, outB[k] || 0);
     return {
-      k, device: x.metric.device, ifx: x.metric.ifName || `if${x.metric.index}`,
+      k, device: deviceDisplayName(x.metric.device, names), ifx: x.metric.ifName || `if${x.metric.index}`,
       inb: inB[k] || 0, outb: outB[k] || 0,
       util: speedBps > 0 ? (maxBps / speedBps) * 100 : 0,
       errs: erR[k] || 0,

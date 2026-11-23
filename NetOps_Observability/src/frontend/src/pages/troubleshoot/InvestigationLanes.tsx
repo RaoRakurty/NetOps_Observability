@@ -37,6 +37,7 @@ import { api, type FeedItem, type PathHealthItem, type ProbePath, type PromInsta
 import { operatorError } from "../../lib/errors";
 import { fmtDateTime } from "../../lib/time";
 import { fmtBytes } from "../../components/board/panels";
+import { deviceDisplayName, useDeviceNames } from "../../lib/deviceNames";
 import {
   LANE_OPEN,
   LANE_SOURCE,
@@ -245,6 +246,7 @@ const HEALTH_METRICS = ["device_if_oper_status", "device_sysuptime", "device_res
 export function HealthLane({ scope, report }: {
   scope: LaneScope; report?: LaneStateReport;
 }) {
+  const devNames = useDeviceNames();
   const res = useLane<PromInstantSeries>(
     "health",
     async () => {
@@ -265,7 +267,7 @@ export function HealthLane({ scope, report }: {
         {res.rows.slice(0, 8).map((s, i) => (
           <li key={`${s.metric.device}-${s.metric.ifName ?? s.metric.index ?? ""}-${i}`} className="tsl-row">
             <span className="tsl-dot bad" aria-hidden="true" />
-            <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
+            <span className="tsl-k">{s.metric.device ? deviceDisplayName(s.metric.device, devNames) : "unknown device"}</span>
             <span className="tsl-v">{s.metric.ifName ?? s.metric.interface ?? s.metric.index ?? "interface"}</span>
             <span className="fact-line">operationally down</span>
           </li>
@@ -306,6 +308,7 @@ export function PathLane({ scope, report }: { scope: LaneScope; report?: LaneSta
 const ROUTING_METRICS = ["device_bgp_peer_state", "device_ospf_nbr_state", "device_isis_adj_state"];
 
 export function RoutingLane({ scope, report }: { scope: LaneScope; report?: LaneStateReport }) {
+  const devNames = useDeviceNames();
   const res = useLane<PromInstantSeries>(
     "routing",
     async () => {
@@ -326,7 +329,7 @@ export function RoutingLane({ scope, report }: { scope: LaneScope; report?: Lane
         {res.rows.slice(0, 8).map((s, i) => (
           <li key={`${s.metric.device}-${s.metric.peer ?? s.metric.neighbor ?? ""}-${i}`} className="tsl-row">
             <span className="tsl-dot bad" aria-hidden="true" />
-            <span className="tsl-k">{s.metric.device ?? "unknown device"}</span>
+            <span className="tsl-k">{s.metric.device ? deviceDisplayName(s.metric.device, devNames) : "unknown device"}</span>
             <span className="tsl-v">{s.metric.peer ?? s.metric.neighbor ?? s.metric.isis_neighbor ?? "neighbor"}</span>
             <span className="fact-line">not in the established state</span>
           </li>

@@ -19,7 +19,7 @@ import { useDevicePlaces } from "../lib/deviceNames";
 import {
   INCIDENT_SOURCE_TABS, INCIDENT_STATUS_TILES, type IncidentSourceTab, type IncidentFilters,
   inSourceTab, filterIncidents, statusCounts, countsNote, pageNote, statusText, ownerText, isActiveIncident,
-  activeIncidentFilterCount, incidentWhere, whereText, type IncidentWhere,
+  activeIncidentFilterCount, incidentWhere, incidentTitle, whereText, type IncidentWhere,
 } from "./incidentsModel";
 
 // Incidents — the actionable system-of-record view. Lists incidents (minted by a
@@ -39,14 +39,14 @@ type Action = "ack" | "resolve" | "investigate" | "close" | "reopen" | "note" | 
 
 const fmt = (s?: string) => (s ? fmtDateTime(s) : "—");
 
-/** WHERE (tracker 438): the device by name over its site; the raw id beside a
- *  name only when they differ. No device → an honest "—". */
+/** WHERE (tracker 438): the device by name over its site. The internal device id
+ *  is never shown (owner, 2026-11-23). No device → an honest "—". */
 function WhereCell({ w }: { w: IncidentWhere }) {
   if (!w.device) return <span className="al-detail" title="This incident names no device">—</span>;
-  const second = [w.site, w.device !== w.id ? w.id : ""].filter(Boolean).join(" · ");
+  const second = w.site;
   return (
     <div className="lv-two" data-testid="incident-where">
-      <span className="al-device" title={w.id}>{w.device}</span>
+      <span className="al-device">{w.device}</span>
       {second && <span className="lv-line lv-detail-line al-detail">{second}</span>}
     </div>
   );
@@ -153,7 +153,7 @@ export default function Incidents() {
     const sevCell = (i: Incident) => <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span>;
     const whatCell = (i: Incident) => (
       <div className="lv-two">
-        <span className="al-title" title={i.title}>{i.title}</span>
+        <span className="al-title" title={incidentTitle(i, places)}>{incidentTitle(i, places)}</span>
         <span className="lv-line lv-detail-line al-detail">
           <span style={{ fontFamily: "var(--font-mono)" }} title={i.id}>{friendlyIncidentId(i.id)}</span>
           {" · "}{statusText(i.status)}{" · "}{Number(i.occurrences) > 1 ? `${i.occurrences} occurrences` : "1 occurrence"}
@@ -179,7 +179,7 @@ export default function Incidents() {
     return [
       { key: "severity", header: "Severity", width: 104, sortable: true,
         text: (i) => i.severity, sortValue: (i) => severityRank(i.severity), render: sevCell },
-      { key: "what", header: "Incident", sortable: true, text: (i) => `${i.title} ${friendlyIncidentId(i.id)}`, render: whatCell },
+      { key: "what", header: "Incident", sortable: true, text: (i) => `${incidentTitle(i, places)} ${friendlyIncidentId(i.id)}`, render: whatCell },
       { key: "where", header: "Where", width: 190, sortable: true,
         text: (i) => whereText(incidentWhere(i, places)),
         sortValue: (i) => whereText(incidentWhere(i, places)).toLowerCase(),
@@ -318,7 +318,7 @@ export default function Incidents() {
       {selected && (
         <SidePanel
           narrow
-          title={selected.title}
+          title={incidentTitle(selected, places)}
           subtitle={`${friendlyIncidentId(selected.id)} · ${selected.severity} · ${statusText(selected.status)}`}
           onClose={() => setSel(null)}
           testId="incident-panel"
@@ -397,14 +397,16 @@ export function IncidentDetailBody({ incident, onChanged, onAsked, inPanel = fal
 
   const open = inc.status !== "resolved" && inc.status !== "closed";
   const ent = useAIEntitlements();
-  const where = incidentWhere(inc, useDevicePlaces());
+  const places = useDevicePlaces();
+  const where = incidentWhere(inc, places);
+  const title = incidentTitle(inc, places);
 
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
         {!inPanel && (
           <h2 style={{ margin: 0 }}>
-            <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {inc.title}
+            <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {title}
           </h2>
         )}
         {/* N-E4 entry point: an incident row carries no RCA case id, so the
@@ -412,7 +414,7 @@ export function IncidentDetailBody({ incident, onChanged, onAsked, inPanel = fal
             as text and answers from the caller's own data. */}
         {ent.has("ai.chat") && (
           <button type="button" className="chip-btn" data-testid="ask-iris-incident"
-            onClick={() => { askIrisAbout(incidentQuestion(inc)); onAsked?.(); }}>
+            onClick={() => { askIrisAbout(incidentQuestion({ ...inc, title })); onAsked?.(); }}>
             Ask Iris about this incident
           </button>
         )}
@@ -424,8 +426,7 @@ export function IncidentDetailBody({ incident, onChanged, onAsked, inPanel = fal
       <p style={{ fontSize: 14, margin: "6px 0 0" }} data-testid="incident-panel-where">
         <span style={{ color: "var(--muted)" }}>Where: </span>
         {where.device
-          ? <><strong>{where.device}</strong>{where.site && <> · {where.site}</>}
-              {where.device !== where.id && <span style={{ fontFamily: "var(--font-mono)", color: "var(--muted)" }}> · {where.id}</span>}</>
+          ? <><strong>{where.device}</strong>{where.site && <> · {where.site}</>}</>
           : <span style={{ color: "var(--muted)" }}>no device named</span>}
       </p>
       {inc.description && <p style={{ color: "var(--muted)", fontSize: 14 }}>{inc.description}</p>}
