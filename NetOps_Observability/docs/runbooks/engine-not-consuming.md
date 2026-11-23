@@ -97,8 +97,14 @@ for pages. Past the cap the SMS is refused locally
 carries the page.
 
 Platform alerts still reach the product dispatcher as well, unchanged; the host
-route is an **additional** destination, sharing the same cool-down, so nothing
-buzzes twice.
+route is an **additional** destination with the same cool-down, so nothing
+buzzes twice. One exception (tracker 314, 2026-11-23): a page or resolution
+push that reached **no** host channel — every target failed its retry ladder,
+was refused by its push budget, or found the queue full — releases its own
+cool-down, so the next vmalert resend after 2 minutes retries the host route
+(`netops_alert_webhook_host_released_total`,
+`netops_alert_webhook_host_redelivered_total`). Product channels are not
+re-sent, and one channel reaching the operator keeps the full cool-down.
 
 **Both routes share ONE push budget, keyed by the push SERVER (2026-09-03).**
 ntfy.sh rate-limits per **source IP**, not per topic, so the product channel and
