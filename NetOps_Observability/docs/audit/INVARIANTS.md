@@ -1071,3 +1071,12 @@ engine). `internal/devidentity` now decides its rows; `telemetry_enrichment.go` 
 cut-over, so none is controller-only. **NOT COVERED:** tenant-owned controller-only syslog and flows stay
 unattributed by design until tracker 372.
 
+## 35. WAN interfaces from the router's own MIBs — BUILT, not proven on the rig (tracker 436 (b)/(c), 2026-11-23)
+
+**A plain router with no SD-WAN controller gets confirmed WAN interfaces from what it states over standard MIBs.**
+
+- IF-MIB ifType (every vendor's agent) rides the interface bridge as a closed kind (`ifbridge.IfTypeKind`): only media that carry nothing but WAN or access circuits (serial/HDLC/PPP, Frame Relay, ATM, T1/E1/T3, SONET, ISDN, the DSL family, DOCSIS, cellular) confirm a port (`wan_media_type`); Ethernet states nothing; tunnel(131)/mplsTunnel(150)/softwareLoopback(24) exclude a port whatever its name. An unknown number states nothing. A controller's kind wins over the agent's; the agent's only fills a gap, and only on an interface the bridge already knows (never invents one).
+- BGP4-MIB `bgpPeerLocalAddr` is walked only on a device that listed peers. An eBGP session (remote AS ≠ local AS; a router whose own AS is unknown or AS_TRANS states nothing) to a peer outside the CALLER's inventory, from a non-loopback, non-tunnel port's address, confirms that port (`external_bgp_peer`) on a WAN-candidate device and offers it as possible elsewhere (a partly-onboarded data centre's leaf uplinks are never probed as circuits).
+- §3a: sessions are keyed by device; "outside the inventory" reads only the caller's visible devices (`TestWanBGPEvidenceIsTenantScoped`). An unread sessions source is reported and confirms nothing (`TestWanBGPUnreadConfirmsNothingAndStillServes`).
+- Tests: `wan/evidence_436_test.go` (five vendor spellings end to end), `internal/ifbridge/iftype_test.go`, `collectors/bgp_sessions_test.go`, `wan_mib_evidence_test.go`. Not yet seen on the rig: the lab estate is SD-WAN; no plain router with serial/PPP/eBGP to an ISP has been polled.
+

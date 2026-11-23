@@ -37,6 +37,9 @@ type SNMP struct {
 	Addr  map[string]map[string]string // device → interface IP → ifName
 	Index map[string]map[string]string // device → ifIndex → ifName
 	Alias map[string]map[string]string // device → ifIndex → ifAlias
+	// Type is device → ifIndex → IF-MIB ifType, decimal (tracker 436 (c)).
+	// Untrusted agent output: read through ParseIfType.
+	Type map[string]map[string]string
 	// AddrAt / IndexAt are each device's unix-ms walk time for that map. An
 	// absent device is a walk of unknown age, older than any NMS reading.
 	AddrAt, IndexAt map[string]int64
@@ -56,6 +59,12 @@ type Merged struct {
 	// AddrVRF is the VRF of each NMS-reported (device, address) that stands;
 	// SNMP's ipAddrTable states none.
 	AddrVRF map[string]map[string]string
+	// Kind is device → ifIndex → the closed-set kind the device's own IF-MIB
+	// ifType states (IfTypeKind; absent = it states nothing), and IfType the
+	// validated number behind it (absent = not reported or not a number).
+	// Keyed like Index, so a consumer names the port through Index.
+	Kind   map[string]map[string]string
+	IfType map[string]map[string]int
 	// Stats counts address and ifIndex rows by source and outcome.
 	Stats map[StatKey]int
 	// NMS is each device's controller-reported rows as stored, VRF, role and
@@ -170,6 +179,32 @@ func betterAddrPort(a, b Row, snmpName string, same SamePort) bool {
 	return a.VRF < b.VRF
 }
 
+// withSNMPKind fills the kind of a controller row that states none from the
+// device's own IF-MIB ifType for the same port, matched by NAME (a controller's
+// ifIndex need not be the agent's). Used only to choose among the rows sharing
+// one address (tracker 437): a port the device itself calls tunnel(131) never
+// owns the address. The rows are copies; the stored rows keep what the
+// controller said.
+func withSNMPKind(rows []Row, names, kinds map[string]string, same SamePort) []Row {
+	if len(kinds) == 0 {
+		return rows
+	}
+	out := make([]Row, len(rows))
+	copy(out, rows)
+	for i := range out {
+		if out[i].Kind != "" {
+			continue
+		}
+		for idx, k := range kinds {
+			if n := names[idx]; n != "" && same(n, out[i].IfName) {
+				out[i].Kind = k
+				break
+			}
+		}
+	}
+	return out
+}
+
 // ifIndexOrder reads a validated ifIndex for ordering; ok=false when absent.
 func ifIndexOrder(s string) (uint64, bool) {
 	n, err := strconv.ParseUint(s, 10, 32)
@@ -204,6 +239,7 @@ func Merge(snmp SNMP, nms State, same SamePort, owners map[string]string) Merged
 		Addr: map[string]map[string]string{}, Index: map[string]map[string]string{},
 		Alias: map[string]map[string]string{}, IndexSource: map[string]map[string]string{},
 		AddrSource: map[string]map[string]string{}, AddrVRF: map[string]map[string]string{},
+		Kind: map[string]map[string]string{}, IfType: map[string]map[string]int{},
 		Stats: map[StatKey]int{}, NMS: map[string]DeviceRows{},
 	}
 	count := func(src, outcome string) { out.Stats[StatKey{src, outcome}]++ }
@@ -224,6 +260,21 @@ func Merge(snmp SNMP, nms State, same SamePort, owners map[string]string) Merged
 		for idx, a := range rows {
 			if a != "" {
 				put(out.Alias, dev, idx, a)
+			}
+		}
+	}
+	for dev, rows := range snmp.Type {
+		for idx, v := range rows {
+			n := ParseIfType(v)
+			if n == 0 {
+				continue
+			}
+			if out.IfType[dev] == nil {
+				out.IfType[dev] = map[string]int{}
+			}
+			out.IfType[dev][idx] = n
+			if k := IfTypeKind(n); k != "" {
+				put(out.Kind, dev, idx, k)
 			}
 		}
 	}
@@ -248,6 +299,9 @@ func Merge(snmp SNMP, nms State, same SamePort, owners map[string]string) Merged
 			}
 		}
 		for a, rows := range holders {
+			if len(rows) > 1 {
+				rows = withSNMPKind(rows, out.Index[dev], out.Kind[dev], same)
+			}
 			r, multi := pickAddrPort(rows, snmp.Addr[dev][a], same)
 			if multi {
 				count(SourceNMS, MergeMultiPort)

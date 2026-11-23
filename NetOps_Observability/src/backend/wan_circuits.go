@@ -229,6 +229,19 @@ func (s *server) wanProjectAll(ctx context.Context, vis deviceVisibility) (wanPr
 		map[string]any{"tenant": tenant, "cross": cross, "devices": len(visible)})
 	ifaddr := ev.Addr
 
+	// The device's own BGP4-MIB sessions (tracker 436 (b)). Unread → reported,
+	// and read as none: the eBGP rule then states nothing, which can only leave
+	// a port possible or not WAN, never confirm one.
+	sessions, bgpErr := s.wanBGPSessions(ctx)
+	if bgpErr != nil {
+		logWarn("wan", "BGP sessions unread — no eBGP session decides a WAN interface this request", map[string]any{
+			"tenant": tenant, "cross": cross, "error": bgpErr.Error()})
+	}
+	// Every address of every device THIS caller may see (§3a): an eBGP peer
+	// outside it is external. Another tenant's router never decides what a
+	// caller's port is — and to a tenant it is an external party.
+	inventory := wanInventoryAddrs(visible, ifaddr, ev.NMS)
+
 	// ifName → ip, per device (inverse of ifaddr) — for peer-IP resolution.
 	ipByDevIf := map[string]map[string]string{}
 	for dev, m := range ifaddr {
@@ -292,6 +305,11 @@ func (s *server) wanProjectAll(ctx context.Context, vis deviceVisibility) (wanPr
 		}
 		for _, r := range rows {
 			in.Rows = append(in.Rows, wan.IfRow{Name: r.IfName, VRF: r.VRF, Role: r.Role, Kind: r.Kind, Alias: r.Alias, Addrs: r.Addrs})
+		}
+		// The device's own IF-MIB ifType and BGP4-MIB sessions (tracker 436).
+		in.SNMP = wanSNMPFacts(ev, id)
+		if bs, ok := sessions[id]; ok {
+			in.ExternalBGP = wan.ExternalBGPPeers(wanSessionList(bs), bs.LocalAS, inventory)
 		}
 		if f, ok := overlay[id]; ok {
 			for _, t := range f.TLOCs {
@@ -404,6 +422,93 @@ func (c *wanEvidenceCache) get(ctx context.Context, now time.Time, fetch func(co
 	}
 	c.val, c.at = m, now
 	return m, nil
+}
+
+// wanBGPCache memoizes the default BGP sessions read, like wanEvidenceCache:
+// same TTL, a failure is never cached.
+type wanBGPCache struct {
+	mu  sync.Mutex
+	at  time.Time
+	val map[string]collectors.BGPSessions
+}
+
+func (c *wanBGPCache) get(ctx context.Context, now time.Time, fetch func(context.Context) (map[string]collectors.BGPSessions, error)) (map[string]collectors.BGPSessions, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.at.IsZero() && now.Sub(c.at) >= 0 && now.Sub(c.at) < wanEvidenceTTL {
+		return c.val, nil
+	}
+	m, err := fetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.val, c.at = m, now
+	return m, nil
+}
+
+// wanBGPSessions is the BGP4-MIB sessions source: the wanBGP seam, else the
+// cached published sessions. Callers must not mutate what it returns.
+func (s *server) wanBGPSessions(ctx context.Context) (map[string]collectors.BGPSessions, error) {
+	if s.wanBGP != nil {
+		return s.wanBGP(ctx)
+	}
+	return s.wanBGPCache.get(ctx, time.Now(), collectors.FetchBGPSessions)
+}
+
+// wanSessionList flattens one device's sessions for wan.ExternalBGPPeers.
+func wanSessionList(bs collectors.BGPSessions) []wan.BGPSession {
+	out := make([]wan.BGPSession, 0, len(bs.Peers))
+	for peer, sess := range bs.Peers {
+		out = append(out, wan.BGPSession{Peer: peer, Local: sess.Local, RemoteAS: sess.RemoteAS})
+	}
+	return out
+}
+
+// wanInventoryAddrs is every address of the visible devices: management
+// address, SD-WAN system IP, and every interface address the bridge names for
+// them (SNMP and controller rows alike).
+func wanInventoryAddrs(visible map[string]models.Device, ifaddr map[string]map[string]string, nmsRows map[string]ifbridge.DeviceRows) map[string]bool {
+	out := map[string]bool{}
+	add := func(s string) {
+		if ip := net.ParseIP(strings.TrimSpace(s)); ip != nil {
+			out[ip.String()] = true
+		}
+	}
+	for id, d := range visible {
+		add(d.Address)
+		add(d.Labels["system_ip"])
+		for ip := range ifaddr[id] {
+			add(ip)
+		}
+		for _, r := range nmsRows[id].Rows {
+			for _, ip := range r.Addrs {
+				add(ip)
+			}
+		}
+	}
+	return out
+}
+
+// wanSNMPFacts is one device's IF-MIB ifType per port, named through the merged
+// bridge's ifIndex map (tracker 436 (c)).
+func wanSNMPFacts(ev ifbridge.Merged, id string) map[string]wan.SNMPIf {
+	kinds := ev.Kind[id]
+	if len(kinds) == 0 {
+		return nil
+	}
+	out := make(map[string]wan.SNMPIf, len(kinds))
+	for idx, k := range kinds {
+		name := ev.Index[id][idx]
+		if name == "" {
+			continue
+		}
+		si := wan.SNMPIf{Kind: k}
+		if n := ev.IfType[id][idx]; n > 0 {
+			si.Type = ifbridge.IfTypeName(n) + "(" + strconv.Itoa(n) + ")"
+		}
+		out[name] = si
+	}
+	return out
 }
 
 // wanEvidence is the projection's evidence bundle: the wanIfEvidence seam, else

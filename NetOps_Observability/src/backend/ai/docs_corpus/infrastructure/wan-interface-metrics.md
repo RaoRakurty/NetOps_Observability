@@ -9,7 +9,7 @@ sidebar_position: 7
 
 **Investigate → Paths → WAN circuits** puts one row on screen for every interface the platform has evidence is a WAN link, and says what the evidence is. The page heading reads **WAN circuits**. Each row carries live utilization and status from the interface itself, and a latency, jitter, loss, QoE and availability SLA measured to a target the platform derived for that interface. An SLA cell with no measurement behind it reads as a dash, never as a number. Below the table the page carries the derived paths and endpoints, the interfaces that might be WAN, and a link to the measurement policy, which lives under Administration.
 
-An interface counts as WAN only on evidence about that interface: the SD-WAN controller reports it as a transport port, the device lists it as a transport locator, an SD-WAN tunnel runs over its address, an ISP next-hop is declared for it, or an operator marked it. A device's name never makes all of its ports WAN, so a branch router's LAN, loopback and management ports do not appear.
+An interface counts as WAN only on evidence about that interface: the SD-WAN controller reports it as a transport port, the device lists it as a transport locator, an SD-WAN tunnel runs over its address, an ISP next-hop is declared for it, the device reports a medium that only carries WAN circuits (serial, PPP, DSL, cellular), an eBGP session to a peer outside your inventory runs from its address on a router that looks like a WAN router, or an operator marked it. The last two need no SD-WAN controller: any router that answers SNMP states them. A device's name never makes all of its ports WAN, so a branch router's LAN, loopback and management ports do not appear.
 
 ## Before you begin
 
@@ -31,7 +31,7 @@ With no rows, peak utilization reads as a dash rather than as zero per cent.
 | Column | What it shows |
 |---|---|
 | **Router** and **Interface** | The device and its interface. |
-| **Why WAN** | The evidence that makes it a WAN interface: **SD-WAN transport**, **Transport locator**, **Tunnel runs over it**, **Next-hop declared** or **Marked by an operator**. Hover for the full sentence. |
+| **Why WAN** | The evidence that makes it a WAN interface: **SD-WAN transport**, **Transport locator**, **Tunnel runs over it**, **Next-hop declared**, **WAN medium**, **External BGP peer** or **Marked by an operator**. Hover for the full sentence. |
 | **Utilization**, **In**, **Out** | Live load as a bar plus a percentage, and the two throughput directions. All three read as a dash where no interface counters arrived. |
 | **Live** | An inline sparkline of recent throughput, redrawn each poll. |
 | **Measured to** | The derived target and how it was derived: **Peer** for a directly connected peer learned over LLDP, **Next-hop** for an ISP next hop, or **Anchor** for a public-DNS reachability anchor. |

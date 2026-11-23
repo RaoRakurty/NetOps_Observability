@@ -25,10 +25,14 @@ const (
 	// nmsIfRowsKey holds the NMS rows (ifbridge.State), written by the api every
 	// minute. Its TTL outlives ifbridge.MaxAge by a day, like ifRowStateKey: the
 	// api ages rows out itself, and a dead api must still let them self-expire.
-	nmsIfRowsKey      = "netops:topology:ifrows_nms"
-	nmsIfRowsTTLSec   = ifRowStateTTLSec
-	ifAliasKey        = "netops:topology:ifalias"
-	ifAliasTTLSec     = ifRowPublishTTLSec
+	nmsIfRowsKey    = "netops:topology:ifrows_nms"
+	nmsIfRowsTTLSec = ifRowStateTTLSec
+	ifAliasKey      = "netops:topology:ifalias"
+	ifAliasTTLSec   = ifRowPublishTTLSec
+	// ifTypeKey holds deviceID → ifIndex → IF-MIB ifType (decimal), the same
+	// shape and TTL as the ifAlias map (tracker 436 (c)).
+	ifTypeKey         = "netops:topology:iftype"
+	ifTypeTTLSec      = ifRowPublishTTLSec
 	maxIfAliasDevices = 20000
 )
 
@@ -119,23 +123,36 @@ func FetchIfAliasMap(ctx context.Context) (map[string]map[string]string, error) 
 // set loses them.
 type ifAliasRows map[string]map[string]string
 
-// update folds one cycle into the rows and returns what to publish.
+// update folds one cycle's ifAlias tables into the rows and returns what to
+// publish.
 func (a ifAliasRows) update(targets []Target, results []deviceOutcome) map[string]map[string]string {
+	return a.updateWith(targets, results, outcomeIfAlias)
+}
+
+// outcomeIfAlias / outcomeIfType select one ifIndex-keyed table of a device's
+// poll, and whether its walk finished.
+func outcomeIfAlias(r deviceOutcome) (map[string]string, bool) { return r.ifalias, r.ifaliasRead }
+func outcomeIfType(r deviceOutcome) (map[string]string, bool)  { return r.iftype, r.iftypeRead }
+
+// updateWith folds the table pick selects into the rows and returns what to
+// publish: the same retention for every ifIndex-keyed table.
+func (a ifAliasRows) updateWith(targets []Target, results []deviceOutcome, pick func(deviceOutcome) (map[string]string, bool)) map[string]map[string]string {
 	in := make(map[string]bool, len(targets))
 	for i, tg := range targets {
 		in[tg.ID] = true
 		r := results[i]
-		if r.id == "" || !r.ifaliasRead {
+		rows, read := pick(r)
+		if r.id == "" || !read {
 			continue
 		}
-		if len(r.ifalias) == 0 {
+		if len(rows) == 0 {
 			delete(a, tg.ID)
 			continue
 		}
 		if _, ok := a[tg.ID]; !ok && len(a) >= maxIfAliasDevices {
 			continue
 		}
-		a[tg.ID] = r.ifalias
+		a[tg.ID] = rows
 	}
 	for id := range a {
 		if !in[id] {
@@ -149,9 +166,22 @@ func (a ifAliasRows) update(targets []Target, results []deviceOutcome) map[strin
 	return out
 }
 
+// FetchIfTypeMap reads the SNMP ifType map (deviceID → ifIndex → decimal
+// IANAifType). Absent → empty map, nil error; unread or undecodable → an error.
+func FetchIfTypeMap(ctx context.Context) (map[string]map[string]string, error) {
+	out := map[string]map[string]string{}
+	if err := redisGetJSON(ctx, "ifType map", ifTypeKey, &out); err != nil {
+		if errors.Is(err, ErrNotConfigured) {
+			return map[string]map[string]string{}, nil
+		}
+		return map[string]map[string]string{}, err
+	}
+	return out, nil
+}
+
 // ReadSNMPIfBridge reads the SNMP half of the interface bridge in one go: the
-// address and ifIndex maps, the ifAlias map and each device's walk times. Any
-// part unread is an error (tracker 307).
+// address and ifIndex maps, the ifAlias and ifType maps and each device's walk
+// times. Any part unread is an error (tracker 307).
 func ReadSNMPIfBridge(ctx context.Context) (ifbridge.SNMP, error) {
 	addr, err := FetchIfAddrMap(ctx)
 	if err != nil {
@@ -165,11 +195,15 @@ func ReadSNMPIfBridge(ctx context.Context) (ifbridge.SNMP, error) {
 	if err != nil {
 		return ifbridge.SNMP{}, err
 	}
+	types, err := FetchIfTypeMap(ctx)
+	if err != nil {
+		return ifbridge.SNMP{}, err
+	}
 	ages, err := FetchSNMPIfRowAges(ctx)
 	if err != nil {
 		return ifbridge.SNMP{}, err
 	}
-	return ifbridge.SNMP{Addr: addr, Index: idx, Alias: alias, AddrAt: ages.Addr, IndexAt: ages.Index}, nil
+	return ifbridge.SNMP{Addr: addr, Index: idx, Alias: alias, Type: types, AddrAt: ages.Addr, IndexAt: ages.Index}, nil
 }
 
 // LiveIfBridgeIO is the interface bridge's production IO.

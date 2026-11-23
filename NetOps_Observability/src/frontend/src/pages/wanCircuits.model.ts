@@ -417,6 +417,8 @@ const WAN_BASIS_LABEL: Record<string, string> = {
   sdwan_tloc: "Transport locator",
   sdwan_tunnel_source: "Tunnel runs over it",
   declared_next_hop: "Next-hop declared",
+  wan_media_type: "WAN medium",
+  external_bgp_peer: "External BGP peer",
   transport_vpn_no_tunnel: "Transport VPN, no tunnel",
   described_as_wan: "Description says WAN",
   public_address: "Public address",
