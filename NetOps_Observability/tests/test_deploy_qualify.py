@@ -1018,3 +1018,69 @@ def test_vm_body_never_retries_past_the_global_budget(tmp_path) -> None:
 def test_fd3_is_opened_before_any_helper_can_use_it() -> None:
     s = _script()
     assert s.index("exec 3>&2") < s.index("vm_body() {")
+
+
+# --- one-shot recreate debris (2026-11-23) ----------------------------------
+# A `compose up --force-recreate` killed mid-way leaves `<12-hex>_<name>` behind
+# and every later recreate of that service fails. run_oneshot sweeps it first.
+
+def _sweep_fn() -> str:
+    s = _script()
+    return s[s.index("oneshot_sweep_recreate_debris() {"):s.index("# Run a `restart: \"no\"` one-shot")]
+
+
+def _run_sweep(tmp_path, rows: str, list_rc: int = 0):
+    import subprocess
+    harness = r'''
+set -euo pipefail
+PROJECT=netops
+warn() { printf 'WARN %s\n' "$*"; }
+oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-"${2:-220}"; }
+dkr() {
+  if [ "$1" = ps ]; then
+    [ "$LIST_RC" = 0 ] || { echo "Cannot connect to the Docker daemon" >&2; return 1; }
+    printf '%s' "$ROWS"; return 0
+  fi
+  if [ "$1" = rm ]; then echo "$3" >> "$RMLOG"; return 0; fi
+  return 99
+}
+'''
+    return subprocess.run(
+        ["bash", "-c", harness + _sweep_fn() + '\noneshot_sweep_recreate_debris B3 opensearch-init\n'],
+        capture_output=True, text=True, timeout=30, check=False,
+        env={"PATH": "/usr/bin:/bin", "ROWS": rows, "LIST_RC": str(list_rc),
+             "RMLOG": str(tmp_path / "rm.log")})
+
+
+def _removed(tmp_path) -> list[str]:
+    p = tmp_path / "rm.log"
+    return p.read_text().split() if p.exists() else []
+
+
+def test_recreate_debris_is_removed_and_said(tmp_path) -> None:
+    rows = ("f63c3d19bb11 f63c3d19bb11_netops-opensearch-init-1 created\n"
+            "aaaa11112222 netops-opensearch-init-1 exited\n")
+    res = _run_sweep(tmp_path, rows)
+    assert res.returncode == 0, res
+    assert _removed(tmp_path) == ["f63c3d19bb11"], "only the renamed debris goes"
+    assert "killed mid-way" in res.stdout and "f63c3d19bb11_netops-opensearch-init-1" in res.stdout
+
+
+def test_the_real_one_shot_and_a_running_container_are_left_alone(tmp_path) -> None:
+    rows = ("aaaa11112222 netops-opensearch-init-1 exited\n"
+            "0123456789ab 0123456789ab_netops-opensearch-init-1 running\n")
+    res = _run_sweep(tmp_path, rows)
+    assert res.returncode == 0 and _removed(tmp_path) == [], res
+
+
+def test_a_failed_listing_is_said_not_swallowed(tmp_path) -> None:
+    res = _run_sweep(tmp_path, "", list_rc=1)
+    assert res.returncode == 0
+    assert "could not list opensearch-init containers" in res.stdout and "Docker daemon" in res.stdout
+    assert _removed(tmp_path) == []
+
+
+def test_run_oneshot_sweeps_before_it_recreates() -> None:
+    s = _script()
+    body = s[s.index("run_oneshot() {"):]
+    assert body.index("oneshot_sweep_recreate_debris") < body.index("up -d --no-deps --force-recreate")
