@@ -225,7 +225,9 @@ list (ifindex, addresses, VPN, description) reaches `interface_ips` and `ifindex
 api's interface bridge (`if_bridge.go`, `internal/ifbridge`), keyed by the inventory device
 the controller's key resolves to OWNER-STRICTLY (never by address). VPN ≥ 65528 and
 loopback/link-local addresses are skipped at the source; SNMP and NMS rows for one device
-merge (same port canonically → the SNMP spelling; disagreement → the newer reading); NMS rows
+merge (same port canonically → the SNMP spelling; disagreement → the newer reading; one
+address on several ports of one device → the walk's port, else the non-tunnel one, tracker
+437 — a cEdge's `Tunnel1` never names `GigabitEthernet1`'s address); NMS rows
 outlive their polls for the same 7 days. The wire format is unchanged, so stage [1] reads
 them like SNMP rows. Gauge: `netops_nms_iface_bridge_rows{source,outcome}`.
 

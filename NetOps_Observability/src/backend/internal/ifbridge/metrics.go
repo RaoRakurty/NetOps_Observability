@@ -15,7 +15,8 @@ import (
 // netops_nms_iface_bridge_rows{source,outcome} is a GAUGE over the last cycle:
 // rows standing in the merged bridge (bridged), how the two sources compared
 // (agreed, conflict_won, conflict_lost), addresses two devices of one owner
-// share, and — for the NMS source — the records of each integration's last
+// share, addresses a controller listed on several ports of one device
+// (multi_port_address: the bridge named the owning port, never a tunnel), and — for the NMS source — the records of each integration's last
 // poll that reached no row (device_unresolved, device_ambiguous, internal_vpn,
 // unidentifying_address, truncated) and devices aged out (stale). No tenant,
 // device or integration label: the series is platform plumbing.
@@ -27,7 +28,7 @@ func metricPairs() []StatKey {
 		pairs = append(pairs, StatKey{SourceSNMP, o})
 	}
 	for _, o := range []string{
-		MergeBridged, MergeAgreed, MergeConflictWon, MergeConflictLost, MergeSharedAddr,
+		MergeBridged, MergeAgreed, MergeConflictWon, MergeConflictLost, MergeSharedAddr, MergeMultiPort,
 		OutcomeDeviceUnresolved, OutcomeDeviceAmbiguous, OutcomeInternalVPN, OutcomeUnidentifying,
 		OutcomeTruncated, OutcomeStale,
 	} {

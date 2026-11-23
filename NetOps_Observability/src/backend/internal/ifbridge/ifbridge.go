@@ -33,7 +33,9 @@
 //     (canonically: "Gi3" and "GigabitEthernet3") they agree and the SNMP
 //     spelling stays, because it is the one the device_if_* series carry.
 //     Where they disagree the newer reading wins, and the merge records both
-//     sources.
+//     sources. An address the controller lists on several ports of ONE device
+//     names the port the SNMP walk names, else the non-tunnel port, else the
+//     lowest ifIndex — never the row order (pickAddrPort, tracker 437).
 //  6. A device's NMS rows outlive its polls for MaxAge (seven days, the same
 //     bound as the SNMP rows #167 retains), and go at once when the device
 //     leaves the inventory or changes owner.
