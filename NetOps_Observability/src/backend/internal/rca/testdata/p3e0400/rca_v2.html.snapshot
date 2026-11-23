@@ -174,12 +174,12 @@
   <div class="kv">
     <span class="k">Possible cause (unconfirmed)</span><span class="v">A local access link is faulty or flapping.</span>
     <span class="k">Evidence in hand</span><span class="v" style="font-weight:400">Interface metric anomaly (4 observations)</span>
-    <span class="k">Evidence still missing</span><span class="v" style="font-weight:400">Link up/down; Only device telemetry saw this — a second independent source is needed to confirm.; Only one source (cedge-60-07ae8615) reported this — a second, independent source is needed to confirm.; No trusted routing evidence in this window.</span>
+    <span class="k">Evidence still missing</span><span class="v" style="font-weight:400">Link up/down; Only device telemetry saw this — a second independent source is needed to confirm.; Only one source (cedge-60-07ae8615) reported this — a second, independent source is needed to confirm.; No router reported the routing/link change itself in this window.</span>
   </div>
   
   
   <h2>Why it is not firmer</h2>
-  <ol class="actions"><li>Only device telemetry saw this — a second independent source is needed to confirm.</li><li>Only one source (cedge-60-07ae8615) reported this — a second, independent source is needed to confirm.</li><li>No trusted routing evidence in this window.</li></ol>
+  <ol class="actions"><li>Only device telemetry saw this — a second independent source is needed to confirm.</li><li>Only one source (cedge-60-07ae8615) reported this — a second, independent source is needed to confirm.</li><li>No router reported the routing/link change itself in this window.</li></ol>
   
   
   <h2>What would confirm it</h2>

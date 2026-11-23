@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Correlix
 
+import { confirmAdvice, confirmProtocol } from "./confirmAdvice";
 import { CorrTimeline, CorrObject, CorrSignal, Seam, VerificationRun } from "../../services/api";
 import { isRoutingKind, kindLabel, entityLabel, modalityLabel, MODALITY_ORDER, mentionsInternal, signatureNocTitle, PLANE_NOC_TITLE, ownerLabel, nocVerdictReason, evidenceSourceLabel, isSecurityModality, securityClassTitle, securityProvider, seamTypeLabel, SECURITY_MODALITY, SECURITY_SOURCE_LABEL } from "./labels";
 import { weakestFidelity } from "../../lib/fidelity";
@@ -895,10 +896,26 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
           ? `Automated checks detected loss or latency in this window. No independent routing, device, traffic-flow, or application evidence confirmed the same failure. ${impactLine}`
           : `Anomalous ${modalityLabel(dominant).toLowerCase()} evidence was observed in this window. No independent evidence class confirmed the same failure. ${impactLine}`;
 
+  // What the routing evidence actually was. The engine refuses a routing
+  // witness that only the controller (management plane) relayed — say so,
+  // instead of "routing evidence observed" beside "no trusted routing evidence"
+  // (ticket P-5B357F).
+  const engineReasons = [...rawReasons, ...whyNot, ...evidenceGaps];
+  const routingFromController = engineReasons.some((r) => /required modality missing[^:]*:\s*control_plane/i.test(r))
+    && engineReasons.some((r) => /management_plane/i.test(r));
+  // "OSPF neighbor change" keeps its acronym; "Link up/down" reads mid-sentence.
+  const routeLabel = routeKind ? kindLabel(routeKind) : "";
+  const routeWhat = routeLabel
+    ? `${/^[A-Z][a-z]/.test(routeLabel) ? "a " + routeLabel.charAt(0).toLowerCase() + routeLabel.slice(1) : (/^[AEIOU]/.test(routeLabel) ? "an " : "a ") + routeLabel}`
+    : "a routing/link change";
   const why: WhyLine[] = [{
     tone: "orange", label: "What the evidence shows",
-    text: (hasDevice && hasRouting) ? "Device health and routing/link evidence were observed on the same device area."
-      : hasRouting ? "A routing/link change was observed on the affected routing adjacency."
+    text: (hasDevice && hasRouting) ? (routingFromController
+        ? `Device health changed, and the controller reported ${routeWhat} on the same device area; no router reported it directly.`
+        : `Device health and ${routeWhat} were observed on the same device area.`)
+      : hasRouting ? (routingFromController
+        ? `The controller reported ${routeWhat}; no router reported it directly.`
+        : `${routeWhat.charAt(0).toUpperCase()}${routeWhat.slice(1)} was observed on the affected routing adjacency.`)
         : dominant === "active_probe" ? "Active-check sources reported degradation to the same target during an overlapping time window."
           : `Anomalous ${modalityLabel(dominant).toLowerCase()} evidence was observed in the same time window and scope.`,
   }];
@@ -915,9 +932,9 @@ export function buildRcaCase(timeline: CorrTimeline, obj: CorrObject, _seams: Re
     tone: "blue", label: "What would confirm it",
     text: dominant === "active_probe" && !hasRouting && !hasDevice
       ? "Identify whether the checks failed during DNS, TCP, TLS, or HTTP; validate vantage independence; and compare the incident window with real-user traffic, load-balancer health, application errors, and network telemetry."
-      : hasDevice
-        ? "Add peer-side BGP/routing state, traffic-flow loss, downstream service impact, or an active check from an independent vantage."
-        : "Add peer-side BGP/routing state, interface errors or drops, traffic-flow loss, downstream service impact, or an active check from an independent vantage.",
+      // Named for the protocol the case is about — the headline, then the
+      // title, then the routing signal (confirmAdvice.ts, ticket P-5B357F).
+      : confirmAdvice(confirmProtocol(headlineId !== "undetermined" ? headlineId : "", title, routeKind), hasDevice),
   });
 
   // ── blast radius, ONE source of truth (2026-09-02). The engine's `affected`
