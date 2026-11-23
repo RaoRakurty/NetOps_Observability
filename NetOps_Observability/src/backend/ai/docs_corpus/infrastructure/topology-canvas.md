@@ -30,7 +30,7 @@ The toolbar runs across the top of the page. The controls, left to right:
 | **Live** / **Persisted** | The data source. *Live* recomputes the projection for the current mode on each load. *Persisted* reads the continuously reconciled graph with stable identities and shows a coverage readout of nodes, edges and a stale count. |
 | **Overlay** | What colours the map. Only overlays the current view actually carries are offered, so the picker never offers one that would render nothing. |
 | **Group** | A dropdown that regroups the canvas by a node dimension. **Zone** segregates by ownership border. |
-| **Shape** | A dropdown that arranges the canvas by topology archetype. **Auto** names what was detected and why. |
+| **Shape** | A dropdown that arranges the canvas by topology archetype. **Auto** names what was detected and why. When the canvas is grouped into sites, or shows an SD-WAN estate around its transports, **Auto** keeps the site boxes and picks no shape, because a ring, star or mesh would scatter each site's devices. Choose a shape by hand to override this. |
 | **Canvas** / **Overview** / **Geo** | The renderer. |
 | **Density** | A dropdown: **Exec**, **Operator**, **Engineer**, **Incident**. It controls how much each node card reveals. *Engineer* also forces every label on. |
 | **Labels**, **Reset layout**, zoom and fit | View controls. **Reset layout** appears once you have pinned a node. |
@@ -46,7 +46,7 @@ A freshness chip beside the toolbar reads the age of the data from the view's ow
 3. Hover a device to spotlight its first-degree neighbourhood and read its evidence popover.
 4. Select a node or an edge to open the detail drawer. Select empty canvas to clear.
 5. Search from the top of the stage to find a node by name. A match hidden inside a collapsed group expands it.
-6. Drag a node to pin it for this layout, and use **Reset layout** to return to the automatic arrangement.
+6. Drag a node to pin it for this layout. To move a whole site, drag its box by the label at its top-left: every device in it moves together, and other sites stay where they are. A box is redrawn around its devices wherever they land. Use **Reset layout** to return to the automatic arrangement.
 
 #### How a device's site is decided {#how-sites-are-decided}
 

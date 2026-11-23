@@ -7,7 +7,9 @@
 #
 # Runs from cron once a minute. Verifies every compose service is running
 # (and healthy, where a healthcheck exists) and that the dashboard answers
-# on :8000. Then:
+# on :8000. Beyond the fixed list it flags ANY container of the stack whose
+# restart policy says it should be running but which is not (STRANDED_SERVICE;
+# STRANDED_CHECK=0 disables it). Then:
 #
 #   * Healthy   -> pings the healthchecks.io heartbeat URL. If this host or
 #                  its network dies, the pings stop and healthchecks.io
@@ -540,6 +542,70 @@ for svc in $EXPECTED_SERVICES; do
     check_pid_capacity "$label" "$cid"
   done
 done
+
+# -----------------------------------------------------------------------------
+# Stranded services (critical class STRANDED_SERVICE, 2026-11-23).
+#
+# The fixed list above cannot see a service it does not name. On 2026-11-23 the
+# host rebooted and vmauth (profile-optional, so NOT in that list) stayed
+# Exited: an earlier `docker compose kill -s HUP vmauth` (credential rotation)
+# had set Docker's manual-stop flag, and Docker skips an `unless-stopped`
+# container carrying that flag at boot — `docker stop` and ANY
+# `docker kill -s <signal>` set it, and it survives reboots. Every metrics
+# query returned 502 for 1h15m and this watchdog stayed green.
+#
+# The rule here needs no list: a container of THIS compose project whose
+# restart policy is `always` or `unless-stopped` and which is exited, dead or
+# created is a problem — its own policy says it should be running. One-shots
+# (*-init, restart `no`) fall out by the POLICY test, not by name. Services the
+# fixed list already reported are not repeated. DETECT ONLY: an operator's
+# deliberate stop looks identical to Docker's flag, so this never auto-starts.
+# A docker failure here is its own critical problem — "could not look" is not
+# "nothing stranded" (§16.1). STRANDED_CHECK=0 disables it.
+# -----------------------------------------------------------------------------
+check_stranded_services() {
+  local ids rows rc err errtxt name pol state svc
+  local -a stranded=()
+  # stderr is captured, not discarded: it is the diagnostic for the failure.
+  if ! ids=$(dkr ps -aq --filter "label=com.docker.compose.project=$PROJECT" 2>&1); then
+    problems+=("STRANDED_CHECK_FAILED: could not list this stack's containers (docker ps -a: $(printf '%s' "$ids" | tr '\n' ' ' | cut -c1-200)) — a stopped service would be invisible")
+    return 0
+  fi
+  [ -n "$ids" ] || return 0
+  # One inspect for every container. A container removed between the ps and
+  # the inspect (a deploy recreating it) makes inspect exit non-zero with
+  # "No such object" on stderr while still printing the other rows: that race
+  # is not a failure. Any OTHER error is. stdout/stderr are kept apart so an
+  # error line can never be parsed as a container row.
+  if ! err=$(mktemp 2>&1); then
+    problems+=("STRANDED_CHECK_FAILED: mktemp failed ($err) — a stopped service would be invisible")
+    return 0
+  fi
+  # shellcheck disable=SC2086  # ids is a whitespace-separated id list by design
+  rows=$(dkr inspect -f '{{.Name}} {{.HostConfig.RestartPolicy.Name}} {{.State.Status}} {{index .Config.Labels "com.docker.compose.service"}}' $ids 2>"$err")
+  rc=$?
+  errtxt=$(grep -viE 'no such (object|container)' "$err" | tr '\n' ' ' | cut -c1-200)
+  rm -f "$err"
+  if [ "$rc" -ne 0 ] && { [ -n "$errtxt" ] || [ -z "$rows" ]; }; then
+    problems+=("STRANDED_CHECK_FAILED: could not inspect this stack's containers (docker inspect exit ${rc:-?}: ${errtxt:-no output}) — a stopped service would be invisible")
+    return 0
+  fi
+  while read -r name pol state svc; do
+    [ -n "${name:-}" ] || continue
+    case "$pol" in always|unless-stopped) ;; *) continue ;; esac
+    case "$state" in exited|dead|created) ;; *) continue ;; esac
+    if [ -n "${svc:-}" ]; then
+      case " $EXPECTED_SERVICES " in *" $svc "*) continue ;; esac
+    fi
+    stranded+=("${name#/} ($state)")
+  done <<<"${rows:-}"
+  if [ ${#stranded[@]} -gt 0 ]; then
+    problems+=("STRANDED_SERVICE: ${stranded[*]} — restart policy says running, but it is not and Docker will not start it by itself (docker stop / docker kill -s <signal> set a manual-stop flag that survives reboots). Fix: docker start <name>")
+  fi
+}
+if [ "${STRANDED_CHECK:-1}" = "1" ]; then
+  check_stranded_services
+fi
 
 # Container OOM / restart detection (#102 signoff): cadvisor's per-container
 # metrics are dark under docker's containerd image store, so the in-platform
@@ -2049,7 +2115,7 @@ problem_is_critical() {
     *": not running"*|*": state="*|*": health="*|"dashboard "*|\
     *PID_LIMIT_REACHED*|*CONTAINER_RUNTIME_EXEC_FAILURE*|\
     *CLICKHOUSE_UNREACHABLE*|*CLICKHOUSE_TLS_FAILURE*|*"CANNOT PROBE"*|\
-    *API_UNRESPONSIVE*|\
+    *API_UNRESPONSIVE*|*STRANDED_SERVICE*|*STRANDED_CHECK_FAILED*|\
     *ENGINE_NOT_CONSUMING*|*ALERT_DELIVERY_BROKEN*|*PLATFORM_ALERTS_UNROUTED*|\
     *"log ingest stalled"*)
       return 0 ;;

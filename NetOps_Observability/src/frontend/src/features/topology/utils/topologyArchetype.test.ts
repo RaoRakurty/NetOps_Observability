@@ -2,7 +2,7 @@
 // Copyright 2026 Correlix
 
 import { describe, expect, it } from "vitest";
-import { detectArchetype, circularLayout, archetypeLayout } from "./topologyArchetype";
+import { detectArchetype, circularLayout, archetypeLayout, autoArchetype } from "./topologyArchetype";
 import { zoneOfNode } from "./topologyDomains";
 import type { TopologyView, TopologyNode } from "../api/topologyTypes";
 
@@ -118,5 +118,82 @@ describe("zoneOfNode (seam vocabulary §4.0)", () => {
 
   it("never asserts an owner for an unresolved boundary", () => {
     expect(zoneOfNode(n({ id: "x", kind: "unresolved" }))).toBe("");
+  });
+});
+
+// The lab's SD-WAN estate as the api serves it (2026-11-23): 8 branch edges at
+// 7 controller-reported site ids, two transports every edge attaches to, and a
+// full mesh of overlay tunnels. Auto used to detect it as a dense mesh (0.9)
+// and draw a name-sorted circle, so the site boxes the api sent meant nothing.
+function labSdwanView(layout: TopologyView["layout_type"]): TopologyView {
+  const edges: Array<[string, string]> = [];
+  const sites: Record<string, string> = {
+    "vedge-20": "20", "cedge-40": "40", "vedge-51": "50", "vedge-52": "50",
+    "cedge-60": "60", "cedge-80": "80", "cedge-81": "81", "vedge-100": "100",
+  };
+  const ids = Object.keys(sites);
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) edges.push([ids[i], ids[j]]);
+    edges.push([ids[i], "wan:internet"], [ids[i], "wan:mpls"]);
+  }
+  const v = mkView(
+    [...ids.map((id) => ({ id, kind: "router" as const, site: `discovered:t1:sdwan:${sites[id]}` })),
+      { id: "wan:internet", kind: "wan" as const }, { id: "wan:mpls", kind: "wan" as const }],
+    edges,
+  );
+  const bySite = new Map<string, string[]>();
+  for (const id of ids) bySite.set(sites[id], [...(bySite.get(sites[id]) ?? []), id]);
+  v.groups = [...bySite.entries()].map(([sid, children]) => ({
+    id: `site:discovered:t1:sdwan:${sid}`, label: `Site ${sid} · from vManage`, group_type: "site",
+    children, health: "ok", collapsed: false,
+  })) as TopologyView["groups"];
+  v.layout_type = layout;
+  return v;
+}
+
+describe("autoArchetype (Shape: Auto)", () => {
+  it("the lab estate really does detect as a confident mesh — the trap", () => {
+    const r = detectArchetype(labSdwanView("hierarchical"));
+    expect(r.archetype).toBe("mesh");
+    expect(r.confidence).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("never arranges a site-grouped view by a shape", () => {
+    const v = labSdwanView("hierarchical");
+    expect(autoArchetype(v, detectArchetype(v))).toBeNull();
+  });
+
+  it("never replaces the WAN picture, grouped or not", () => {
+    const v = { ...labSdwanView("wan_overlay"), groups: [] };
+    expect(autoArchetype(v, detectArchetype(v))).toBeNull();
+  });
+
+  it("still arranges an ungrouped campus by its shape, and one container is not 'grouped'", () => {
+    const ring = mkView(
+      ["a", "b", "c", "d", "e"].map((id) => ({ id })),
+      [["a", "b"], ["b", "c"], ["c", "d"], ["d", "e"], ["e", "a"]],
+    );
+    expect(autoArchetype(ring, detectArchetype(ring))).toBe("ring");
+    ring.groups = [{ id: "site:hq", label: "HQ", group_type: "site", children: ["a", "b", "c", "d", "e"], health: "ok", collapsed: false }] as TopologyView["groups"];
+    expect(autoArchetype(ring, detectArchetype(ring))).toBe("ring");
+  });
+
+  it("an empty container does not count as a site", () => {
+    const ring = mkView(
+      ["a", "b", "c", "d", "e"].map((id) => ({ id })),
+      [["a", "b"], ["b", "c"], ["c", "d"], ["d", "e"], ["e", "a"]],
+    );
+    ring.groups = [
+      { id: "site:x", label: "x", group_type: "site", children: ["gone"], health: "ok", collapsed: false },
+      { id: "site:y", label: "y", group_type: "site", children: ["a"], health: "ok", collapsed: false },
+    ] as TopologyView["groups"];
+    expect(autoArchetype(ring, detectArchetype(ring))).toBe("ring");
+  });
+
+  it("a weak or shapeless verdict picks nothing", () => {
+    const v = labSdwanView("hierarchical");
+    expect(autoArchetype({ ...v, groups: [] }, { archetype: "mesh", confidence: 0.5, reason: "" })).toBeNull();
+    expect(autoArchetype({ ...v, groups: [] }, { archetype: "irregular", confidence: 1, reason: "" })).toBeNull();
+    expect(autoArchetype({ ...v, groups: [] }, null)).toBeNull();
   });
 });

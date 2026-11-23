@@ -1,12 +1,14 @@
 ---
 topic: page.overview
 question: What is the Overview page?
-keywords: overview, default dashboard, what needs attention, open problems, health by site
+keywords: overview, operations overview, default dashboard, top issues, health by site
 ---
-Overview is the one default screen for the whole network. It leads with what
-needs attention — the top open problem in one sentence and the next step — then
-the KPI strip, the open problems, what is broken now, health by site, what
-changed, and whether data is arriving. Traffic and resources sit at the bottom,
-closed until you open them. It is built from the same open cases and health
-score as the rest of the console, and every panel links to the page with the
-detail. To build your own view, use My dashboards.
+Overview opens the Operations Overview, the default screen for the whole
+network. A KPI strip runs across the top (health score, active and suspected
+RCA, impacted sites and devices, live telemetry), with the top issue named in
+one sentence under it. Below sit the panels: RCA coverage, top health
+contributors, top active issues, hot paths, the recommended action, where the
+fault is on the path, health by site, capacity outlook, what changed, impact
+and telemetry coverage. Every panel links to the page with the detail. A
+grouped Standard layout is one click away in the Dashboard picker, and My
+dashboards builds your own view.

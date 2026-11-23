@@ -16,7 +16,7 @@ import type { LayoutResult } from "../../layout/layoutTypes";
 import { GROUP_PAD, LABEL_BAND } from "../../layout/groupGeometry";
 import { NODE_SIZE } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
-import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT, CLOUD_RESOURCE_NODE_TYPE } from "./rfTypes";
+import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT, CLOUD_RESOURCE_NODE_TYPE, GROUP_LABEL_PREFIX } from "./rfTypes";
 import { edgeVariant, hasEvidence, rollupHealth } from "../../utils/topologyHealth";
 import { labelDensityForZoom, tierForZoom } from "../../utils/semanticZoom";
 import { CARD_W, CARD_H } from "./nodes/DeviceNode";
@@ -219,6 +219,7 @@ export function topologyToReactFlow(
 
   // ── group nodes (container when expanded, aggregate card when collapsed) ──────
   const groupNodes: Node<RFGroupData>[] = [];
+  const labelNodes: Node<RFGroupData>[] = [];
   // Nesting depth per group, from parent_id. Bounded walk: a malformed cycle
   // must not hang the renderer.
   const depthOf = (id: string): number => {
@@ -241,6 +242,46 @@ export function topologyToReactFlow(
     }
     return false;
   };
+
+  // ── container rectangles, innermost first ────────────────────────────────────
+  // The layout engine's solved rectangle while it has one; otherwise the box is
+  // drawn AROUND its members (devices + the rectangles of the containers inside
+  // it, which is why this runs deepest-first). A container loses its solved
+  // rectangle when an operator moves it or one of its members (layout/groupDrag),
+  // so the box always encloses where its members actually are.
+  type Rect = { x: number; y: number; w: number; h: number };
+  const rectOf = new Map<string, Rect>();
+  for (const g of [...view.groups].sort((a, b) => depthOf(b.id) - depthOf(a.id))) {
+    const solved = positions[g.id];
+    if (solved?.w && solved?.h) {
+      rectOf.set(g.id, { x: solved.x, y: solved.y, w: solved.w, h: solved.h });
+      continue;
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const id of groupById.get(g.id)?.children ?? []) {
+      const p = positions[id];
+      if (!p) continue;
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + NODE_SIZE.width);
+      maxY = Math.max(maxY, p.y + NODE_SIZE.height);
+    }
+    for (const kid of childGroups.get(g.id) ?? []) {
+      const r = rectOf.get(kid);
+      if (!r) continue;
+      minX = Math.min(minX, r.x);
+      minY = Math.min(minY, r.y);
+      maxX = Math.max(maxX, r.x + r.w);
+      maxY = Math.max(maxY, r.y + r.h);
+    }
+    if (minX === Infinity) continue;
+    rectOf.set(g.id, {
+      x: minX - GROUP_PAD,
+      y: minY - GROUP_PAD - LABEL_BAND,
+      w: maxX - minX + GROUP_PAD * 2,
+      h: maxY - minY + GROUP_PAD * 2 + LABEL_BAND,
+    });
+  }
 
   const nodeById = new Map(view.nodes.map((n) => [n.id, n]));
   for (const g of view.groups) {
@@ -287,10 +328,10 @@ export function topologyToReactFlow(
         data: { group: g, collapsed: true, emphasis, counts, health: worst, onToggle: ui.onToggleGroup, depth: depthOf(g.id) },
         zIndex: 2,
         selectable: true,
-        // A group's position is always re-derived from its children's bbox, so a
-        // drag was a no-op that snapped back — while still writing a junk pin
-        // into the saved layout (audit S8). Groups are not draggable.
-        draggable: false,
+        // Draggable: the canvas moves the members by the drag delta and the box is
+        // re-drawn around them (layout/groupDrag). Its own position is never
+        // persisted — only the members' are (audit S8 still holds).
+        draggable: true,
       });
     } else {
       // DRAW THE RECT ELK SOLVED. Re-deriving it here from member positions —
@@ -300,7 +341,7 @@ export function topologyToReactFlow(
       // predates container geometry rendering rather than dropping the group,
       // and measures DESCENDANTS (nested container rects included) so a region's
       // fallback box still encloses its VPCs.
-      const rect = solvedRect ?? {
+      const rect = rectOf.get(g.id) ?? solvedRect ?? {
         x: (bbox as BBox).minX - GROUP_PAD,
         y: (bbox as BBox).minY - GROUP_PAD - LABEL_BAND,
         w: (bbox as BBox).w + GROUP_PAD * 2,
@@ -329,7 +370,24 @@ export function topologyToReactFlow(
         height: rect.h,
         zIndex: 0,
         selectable: true,
-        draggable: false,
+        // A site box moves as a unit, each box on its own (owner 2026-11-23): the
+        // canvas carries its members by the drag delta (layout/groupDrag).
+        draggable: true,
+      });
+      // The box's label chip, as its own node ABOVE the links (zIndex 3): the box
+      // itself stays behind the links so it never hides them, and the chip is the
+      // handle that opens, collapses and drags the site.
+      labelNodes.push({
+        id: `${GROUP_LABEL_PREFIX}${g.id}`,
+        type: "groupLabelNode",
+        position: { x: rect.x + 10, y: rect.y + 8 },
+        data: {
+          group: g, collapsed: false, emphasis, counts, health: worst,
+          onToggle: ui.onToggleGroup, depth: depthOf(g.id),
+        },
+        zIndex: 3,
+        selectable: true,
+        draggable: true,
       });
     }
   }
@@ -493,5 +551,5 @@ export function topologyToReactFlow(
   // inner ones (equal zIndex ⇒ array order decides), so a region never paints
   // over the VPC boxes nested inside it.
   groupNodes.sort((a, b) => ((a.data.depth ?? 0) - (b.data.depth ?? 0)));
-  return { nodes: [...groupNodes, ...deviceNodes], edges };
+  return { nodes: [...groupNodes, ...deviceNodes, ...labelNodes], edges };
 }

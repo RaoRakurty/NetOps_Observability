@@ -36,11 +36,20 @@ async function mockApi(page: Page, me = ME) {
   });
 }
 
-test("Overview renders its groups in order, with Traffic closed", async ({ page }) => {
+test("the Operations Overview is the default Overview again", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/overview/operations");
+  await expect(page.getByTestId("operations-overview")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { level: 1, name: "Operations Overview" })).toBeVisible();
+  await expect(page.getByTestId("overview-page")).toHaveCount(0);
+});
+
+test("the standard layout renders its groups in order, with Traffic closed", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/overview/operations/standard");
   const root = page.getByTestId("overview-page");
-  await expect(root.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  // First paint compiles the lazy page chunk on the cold dev server: the repo-wide 30 s first-paint wait.
+  await expect(root.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("overview-attention")).toHaveText("Nothing needs attention right now.");
   await expect(root.locator(".dm-group-head")).toHaveText([
     "Open problems", "What is broken now", "Health by site", "What changed", "Is data arriving", "Traffic and resources",
@@ -54,10 +63,10 @@ test("Overview renders its groups in order, with Traffic closed", async ({ page 
 });
 
 for (const old of ["#/overview/board", "#/dashboards/board", "#/dashboards/operations"]) {
-  test(`${old} lands on the merged Overview`, async ({ page }) => {
+  test(`${old} lands on the Overview`, async ({ page }) => {
     await mockApi(page);
     await page.goto(`/${old}`);
-    await expect(page.getByTestId("overview-page")).toBeVisible();
+    await expect(page.getByTestId("operations-overview")).toBeVisible();
     await expect(page).toHaveURL(/#\/overview\/operations$/);
   });
 }
@@ -65,17 +74,19 @@ for (const old of ["#/overview/board", "#/dashboards/board", "#/dashboards/opera
 test("Overview has no sideways scroll at phone width", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);
-  await page.goto("/#/overview/operations");
-  await expect(page.getByTestId("overview-page")).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(1);
+  for (const addr of ["/#/overview/operations", "/#/overview/operations/standard"]) {
+    await page.goto(addr);
+    await expect(page.locator(".fp.dm-board").first()).toBeVisible();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, addr).toBeLessThanOrEqual(1);
+  }
 });
 
 for (const theme of ["light", "indigo"] as const) {
   test(`Overview headings and body meet the type floor (${theme === "light" ? "light" : "dark"})`, async ({ page }) => {
     await page.addInitScript((t) => localStorage.setItem("netops.theme", t), theme);
     await mockApi(page);
-    await page.goto("/#/overview/operations");
+    await page.goto("/#/overview/operations/standard");
     const head = page.locator(".overview-page .dm-group-head").first();
     await expect(head).toBeVisible();
     expect(await head.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
@@ -84,7 +95,7 @@ for (const theme of ["light", "indigo"] as const) {
   });
 }
 
-test("a team default opens for the tenant, and the built-in Overview keeps its own address", async ({ page }) => {
+test("a team default opens for the tenant, and the Operations Overview keeps its own address", async ({ page }) => {
   await mockApi(page);
   const board = {
     id: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", type: "dashboard", name: "NOC wall", owner: "adm", tenant_id: "t_acme",
@@ -97,7 +108,7 @@ test("a team default opens for the tenant, and the built-in Overview keeps its o
   // First paint compiles the lazy page chunk on the cold dev server (CI): the repo-wide 30 s first-paint wait.
   await expect(page.getByText("Your team's default: NOC wall")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("team-default-board")).toBeVisible();
-  await page.getByTestId("dashboard-picker").selectOption({ label: "Built-in Overview" });
+  await page.getByTestId("dashboard-picker").selectOption({ label: "Operations Overview" });
   await expect(page).toHaveURL(/#\/overview\/operations\/builtin$/);
-  await expect(page.getByTestId("overview-attention")).toHaveText("Nothing needs attention right now.");
+  await expect(page.getByRole("heading", { level: 1, name: "Operations Overview" })).toBeVisible();
 });
