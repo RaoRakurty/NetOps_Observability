@@ -77,6 +77,21 @@ func TestHTMLRewritesOnlyTheTextAPersonReads(t *testing.T) {
 	}
 }
 
+func TestHTMLRawTextBodiesAreFoundOnTheOriginalBytes(t *testing.T) {
+	r := lab()
+	// Mixed-case tags and non-ASCII text whose lower-casing changes length
+	// ("İ" lower-cases to two runes): the style body must still end exactly at
+	// its own closing tag, and the text after it must still be named.
+	in := `<STYLE>/* İİİİ */ .cedge-81-dde8d64d{}</Style><p>İ cedge-81-dde8d64d</p>`
+	want := `<STYLE>/* İİİİ */ .cedge-81-dde8d64d{}</Style><p>İ cEDGE-81</p>`
+	if got := string(r.HTML([]byte(in))); got != want {
+		t.Fatalf("HTML:\n got %s\nwant %s", got, want)
+	}
+	if indexFoldASCII("ab</ScRiPt>", "</script") != 2 || indexFoldASCII("abc", "</style") != -1 {
+		t.Fatal("indexFoldASCII")
+	}
+}
+
 func TestHTMLIsSafeOnTruncatedMarkup(t *testing.T) {
 	r := lab()
 	for _, in := range []string{"<p>cedge-81-dde8d64d", "<style>cedge-81-dde8d64d", "<!-- cedge-81-dde8d64d", "x <a href=\"cedge-81-dde8d64d"} {

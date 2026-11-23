@@ -162,13 +162,15 @@ func (r *Replacer) HTML(doc []byte) []byte {
 		b.WriteString(tag)
 		i += gt + 1
 		if name := rawTextElement(tag); name != "" {
-			end := strings.Index(strings.ToLower(s[i:]), "</"+name)
-			if end < 0 {
+			// Measured on the ORIGINAL bytes: an offset found in a lower-cased
+			// copy would point elsewhere once non-ASCII text changes length.
+			closeAt := indexFoldASCII(s[i:], "</"+name)
+			if closeAt < 0 {
 				b.WriteString(s[i:])
 				break
 			}
-			b.WriteString(s[i : i+end])
-			i += end
+			b.WriteString(s[i : i+closeAt])
+			i += closeAt
 		}
 	}
 	return []byte(b.String())
@@ -177,14 +179,25 @@ func (r *Replacer) HTML(doc []byte) []byte {
 // rawTextElement names an opening <style> or <script> tag, whose body is not
 // text a person reads.
 func rawTextElement(tag string) string {
-	t := strings.ToLower(tag)
 	for _, n := range []string{"style", "script"} {
-		if strings.HasPrefix(t, "<"+n) && len(t) > len(n)+1 {
-			switch t[len(n)+1] {
+		p := "<" + n
+		if len(tag) > len(p) && strings.EqualFold(tag[:len(p)], p) {
+			switch tag[len(p)] {
 			case '>', ' ', '\t', '\n', '/':
 				return n
 			}
 		}
 	}
 	return ""
+}
+
+// indexFoldASCII is strings.Index for an ASCII needle, case-insensitive,
+// measured on s itself (never on a folded copy).
+func indexFoldASCII(s, sub string) int {
+	for k := 0; k+len(sub) <= len(s); k++ {
+		if s[k] == sub[0] && strings.EqualFold(s[k:k+len(sub)], sub) {
+			return k
+		}
+	}
+	return -1
 }
