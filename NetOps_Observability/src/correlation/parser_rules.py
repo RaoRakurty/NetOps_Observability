@@ -4204,7 +4204,10 @@ _ROWS: tuple[dict[str, Any], ...] = (
                                   {'vb': ['1.3.6.1.2.1.14.10.1.3']},
                                   {'vbname': ['nbripaddr', 'nbrrtrid', 'nbraddress']}]},
                  'nbr_state': {'alt': [{'vb': ['1.3.6.1.2.1.14.10.1.6']}, {'vbname': ['nbrstate']}], 'lower': True},
-                 'state': {'case': [{'when': {'re': ['$nbr_state', '\\b(?:down|attempt|init|exstart|exchange|loading|twoway|1|2|3|4|5|6|7)\\b', 'i']},
+                 'state': {'case': [{'when': {'re': ['$nbr_state', '\\b(?:(?:two|2)[-_ ]?way|4)\\b', 'i']}, 'value': 'unknown'},
+                                    {'when': {'re': ['$nbr_state',
+                                                     '\\b(?:down|attempt|init|exstart|exchange[-_ ]?start|exchange|loading|1|2|3|5|6|7)\\b',
+                                                     'i']},
                                      'value': 'down'},
                                     {'when': {'re': ['$nbr_state', '\\b(?:full|8)\\b', 'i']}, 'value': 'up'},
                                     {'when': {'always': True}, 'value': 'unknown'}]}},
@@ -4444,6 +4447,6 @@ RULES: tuple[Rule, ...] = tuple(compile_rule(row) for row in _ROWS)
 
 #: The hash the BAKE computed. `RULES_HASH` recomputes it at import; they must
 #: agree, which is what makes a hand-edit of this file impossible to hide.
-BAKED_RULES_HASH = '90f3505fe7152e2667b73abebb6f67b4ae596be64ec1b6f31e9bbe1f0be890a4'
+BAKED_RULES_HASH = 'd661c88b8c08fd6e92a0c5090e996170c4dc2e0e5d59a5fdf84bb2e74058c7a0'
 PACK_DIGEST: str = pack_digest(SYSLOG_GRAMMARS, SYSLOG_ENVELOPES)
 RULES_HASH: str = rules_hash(RULES, PACK_DIGEST)

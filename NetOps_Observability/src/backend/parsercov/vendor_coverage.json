@@ -5,7 +5,7 @@
       "display_name": "Arista Networks",
       "lanes": {
         "snmptrap": {
-          "fixtures": 10,
+          "fixtures": 14,
           "mib_nodes": 122,
           "mibs": 8,
           "rules": {
@@ -67,7 +67,7 @@
       "display_name": "Cisco",
       "lanes": {
         "snmptrap": {
-          "fixtures": 12,
+          "fixtures": 16,
           "mib_nodes": 1099,
           "mibs": 14,
           "rules": {
@@ -212,7 +212,7 @@
       "display_name": "Juniper Networks",
       "lanes": {
         "snmptrap": {
-          "fixtures": 9,
+          "fixtures": 13,
           "mib_nodes": 366,
           "mibs": 4,
           "rules": {
@@ -379,7 +379,7 @@
       "display_name": "Any vendor",
       "lanes": {
         "snmptrap": {
-          "fixtures": 16,
+          "fixtures": 20,
           "mib_nodes": 1781,
           "mibs": 26,
           "rules": {
