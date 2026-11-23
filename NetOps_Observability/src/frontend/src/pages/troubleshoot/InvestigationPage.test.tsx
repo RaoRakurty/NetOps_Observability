@@ -210,8 +210,8 @@ describe("the three blocks", () => {
   it("lays block 1 out as two cards — the open cases and the describe box", async () => {
     await show(<InvestigationPage />);
     const pick = screen.getByTestId("ts-pick");
-    expect(within(pick).getByRole("heading", { name: /^Open cases/, level: 3 })).toBeInTheDocument();
-    expect(within(pick).getByRole("heading", { name: "Describe a new problem", level: 3 })).toBeInTheDocument();
+    expect(within(pick).getByRole("heading", { name: "Open cases", level: 3 })).toBeInTheDocument();
+    expect(within(pick).getByRole("heading", { name: "Describe a problem", level: 3 })).toBeInTheDocument();
     expect(within(screen.getByTestId("ts-describe")).getByRole("button", { name: "Start investigation" })).toBeInTheDocument();
     expect(within(pick).getByText("Pick an open case, or describe a problem that is not listed.")).toBeInTheDocument();
     expect(screen.queryByText(/What's wrong/)).toBeNull();

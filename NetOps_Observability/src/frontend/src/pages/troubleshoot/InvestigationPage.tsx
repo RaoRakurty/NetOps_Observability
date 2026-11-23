@@ -313,11 +313,13 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
         <div className="ts-start">
           <div className="ts-card" data-testid="ts-open-cases">
-            <h3 className="ts-card-h">
-              <Icon name="alert-triangle" size={18} className="ts-card-ic" />
-              Open cases
-              {rows.length > 0 && <span className="ts-count badge">{rows.length}</span>}
-            </h3>
+            <div className="ts-card-top">
+              <h3 className="ts-card-h">
+                <Icon name="alert-triangle" size={18} className="ts-card-ic" />
+                Open cases
+              </h3>
+              {rows.length > 0 && <span className="ts-count badge" aria-label={`${rows.length} open`}>{rows.length}</span>}
+            </div>
             {casesErr ? (
               <p className="ts-bad" role="alert">{casesErr}</p>
             ) : rows.length === 0 ? (
@@ -354,7 +356,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
           <div className="ts-card ts-describe" data-testid="ts-describe">
             <h3 className="ts-card-h">
               <Icon name="edit" size={18} className="ts-card-ic" />
-              Describe a new problem
+              Describe a problem
             </h3>
             <label className="ts-describe-l" htmlFor="ts-describe-in">What are users or devices experiencing?</label>
             <input
