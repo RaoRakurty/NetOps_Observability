@@ -202,6 +202,12 @@ export type NavLeaf = {
   // that is a duplicate (nav.analytics.test.ts guards Analytics).
   // platformOnly on a sub-item hides it from tenants like a platformOnly leaf.
   subItems?: { id: string; label: string; route?: string; platformOnly?: boolean }[];
+  // collapsible: the flyout hides this leaf's sub-items until the leaf is
+  // clicked (owner, 2026-11-23: Digital Experience and Cloud). Clicking the leaf
+  // then toggles them instead of navigating; its first sub-item is the page's
+  // default tab, so the page is still one click away. Open already when the
+  // current route is inside the leaf.
+  collapsible?: boolean;
 };
 
 export type NavSection = {
@@ -266,7 +272,7 @@ export const NAV: NavSection[] = [
       { id: "alerts", label: "Active Alerts", render: () => <Alerts /> },
       // Digital Experience (DEM). Sub-items mirror the page's seven tabs, and
       // each one is a real deep link: #/operations/digital-experience/<tab>.
-      { id: "digital-experience", label: "Digital Experience", render: () => <DigitalExperience />, subItems: [
+      { id: "digital-experience", label: "Digital Experience", render: () => <DigitalExperience />, collapsible: true, subItems: [
         { id: "experience", label: "Experience" }, { id: "incidents", label: "Incidents" },
         { id: "journeys", label: "Journeys" }, { id: "paths", label: "Service Paths" },
         { id: "synthetics", label: "Synthetics" }, { id: "changes", label: "Changes" },
@@ -276,7 +282,7 @@ export const NAV: NavSection[] = [
       // that. The application layer left for Infrastructure → Applications, so
       // the old "Services → Services" repetition is gone. Cloud Logs moved in
       // from Explore → Logs and deep-links to the log plane it still renders on.
-      { id: "cloud", label: "Cloud", render: () => <CloudObservability />, subItems: [
+      { id: "cloud", label: "Cloud", render: () => <CloudObservability />, collapsible: true, subItems: [
         { id: "overview", label: "Overview" }, { id: "resources", label: "Resources" },
         { id: "logs", label: "Cloud Logs", route: "explore/logs/cloud" },
         { id: "datasources", label: "Data Sources" }, { id: "security", label: "Security" },
