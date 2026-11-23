@@ -13,7 +13,7 @@ import { corrObject } from "../../test/factories";
 const api = {
   correlations: vi.fn(), healthScore: vi.fn(), correlationsStats: vi.fn(), geomap: vi.fn(), me: vi.fn(),
   eventsFeed: vi.fn(), metricsForecast: vi.fn(), stackHealth: vi.fn(), correlationTimeline: vi.fn(),
-  listSaved: vi.fn(), getOverviewDefault: vi.fn(),
+  listSaved: vi.fn(), getOverviewDefault: vi.fn(), devices: vi.fn(),
 };
 vi.mock("../../services/api", () => ({
   api: new Proxy({}, { get: (_t, k: string) => (api as Record<string, unknown>)[k] }),
@@ -42,6 +42,7 @@ vi.mock("../panels", async (orig) => {
 
 import OverviewPage from "./OverviewPage";
 import { __resetBoardHealth } from "../panels";
+import { resetDeviceNamesForTest } from "../../lib/deviceNames";
 
 const healthy = { scope: "global", score: 95, band: "healthy", confidence: "high", coverage_status: "OK", signal_classes_live: ["availability", "device_health"], contributions: [], stale_inputs: [] };
 const stats = { open: 0, open_confirmed: 0, open_suspected: 0, signatures_matched: 0 };
@@ -59,6 +60,7 @@ beforeEach(() => {
   api.stackHealth.mockResolvedValue({ overall: "healthy", up: 10, degraded: 0, down: 0 });
   api.correlationTimeline.mockResolvedValue({ signals: [] });
   api.listSaved.mockResolvedValue([]);
+  api.devices.mockResolvedValue([]);
   api.getOverviewDefault.mockResolvedValue({ tenant_id: "t1", dashboard_id: "", dashboard: null, unavailable: false });
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); location.hash = ""; });
@@ -218,6 +220,22 @@ describe("Overview — the team default", () => {
     render(<OverviewPage />);
     expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
     expect(screen.queryByTestId("team-default-unavailable")).toBeNull();
+  });
+});
+
+describe("Operations Overview — hostnames, never the internal device id (owner, 2026-11-23)", () => {
+  beforeEach(() => resetDeviceNamesForTest());
+  it("Capacity outlook and the top-issue sentence name the device by its hostname", async () => {
+    api.devices.mockResolvedValue([{ id: "cedge-40-fdf7b64f", name: "cEDGE-40", address: "10.255.255.40", source: "snmp", last_seen: "" }]);
+    api.metricsForecast.mockResolvedValue({
+      min_days: 14,
+      interfaces: [{ device: "cedge-40-fdf7b64f", interface: "Gi1", status: "trending", days_to_90: 9, current_util_pct: 71 }],
+    });
+    api.correlations.mockResolvedValue({ data: [corrObject({ verdict_tier: "confirmed", state: "open", top_hypothesis: "link_down", affected: JSON.stringify({ devices: ["cedge-40-fdf7b64f"] }) })] });
+    render(<OverviewPage />);
+    expect(await screen.findByText("cEDGE-40")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/ on cEDGE-40/)).toBeTruthy());
+    expect(document.body.textContent).not.toContain("fdf7b64f");
   });
 });
 
