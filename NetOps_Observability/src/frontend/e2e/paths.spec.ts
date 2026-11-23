@@ -11,6 +11,12 @@
 
 import { test, expect, type Page, type Route } from "@playwright/test";
 
+// First paint after a navigation compiles the lazy page chunk on the cold dev
+// server: the repo-wide 30 s first-paint wait. Only the FIRST assertion after
+// each goto/reload takes it (a click right after goto already waits for its
+// element); every later assertion keeps the default, tight wait.
+const FIRST_PAINT = 30_000;
+
 const ME = { username: "alice", role: "operator", tenant_id: "t_acme", platform_admin: false, accessible_tenants: ["t_acme"], all_tenants: false };
 
 const SUGGESTED = {
@@ -101,7 +107,7 @@ test("Tunnels draws one row per tunnel and a site matrix that filters the table"
   await mockApi(page);
   await page.goto("/#/investigate/paths/tunnels");
   const matrix = page.getByTestId("tunnels-matrix");
-  await expect(matrix).toBeVisible();
+  await expect(matrix).toBeVisible({ timeout: FIRST_PAINT });
   // Two site pairs, each drawn on both sides of the diagonal.
   await expect(page.getByTestId("tunnels-matrix-cell")).toHaveCount(4);
   await expect(page.locator('[data-testid="tunnels-matrix-cell"][data-state="disagree"]').first()).toHaveClass(/t-warn/);
@@ -120,7 +126,7 @@ test("a Tunnels case chip opens the case in RCA", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/investigate/paths/tunnels");
   const chip = page.getByTestId("tunnel-case");
-  await expect(chip).toHaveAttribute("href", "#/investigate/rca?id=case-uuid-1");
+  await expect(chip).toHaveAttribute("href", "#/investigate/rca?id=case-uuid-1", { timeout: FIRST_PAINT });
   await chip.click();
   await expect(page).toHaveURL(/#\/investigate\/rca\?id=case-uuid-1$/);
 });
@@ -129,7 +135,7 @@ test("Paths is one leaf after Topology; Troubleshooting sits beside RCA", async 
   await mockApi(page);
   await page.goto("/#/investigate/paths/tunnels");
   const nav = page.getByRole("navigation", { name: "Investigate views" });
-  await expect(nav).toBeVisible();
+  await expect(nav).toBeVisible({ timeout: FIRST_PAINT });
   const labels = (await nav.locator(".subnav-cell").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
   const rca = labels.findIndex((t) => t === "RCA");
   expect(labels[rca + 1]).toBe("Troubleshooting");
@@ -169,7 +175,7 @@ for (const [hash, tab, label] of [
   test(`${hash} opens the ${label} tab`, async ({ page }) => {
     await mockApi(page);
     await page.goto(`/${hash}`);
-    await expect(page.getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true", { timeout: FIRST_PAINT });
     if (hash !== "#/investigate/paths") await expect(page).toHaveURL(new RegExp(`#/investigate/paths/${tab}$`));
   });
 }
@@ -191,7 +197,7 @@ test("the site filter narrows the open tab and is remembered across tabs and rel
   await mockApi(page);
   await page.goto("/#/investigate/paths/tunnels");
   const site = page.getByTestId("paths-site");
-  await expect(site.locator("option")).toHaveText(["All sites", "Branch 40", "Branch 50", "DC East"]);
+  await expect(site.locator("option")).toHaveText(["All sites", "Branch 40", "Branch 50", "DC East"], { timeout: FIRST_PAINT });
   await expect(page.getByText("2 of 2 tunnels")).toBeVisible();
   await site.selectOption({ label: "Branch 50" });
   await expect(page.getByText("1 of 1 tunnels")).toBeVisible();
@@ -200,7 +206,7 @@ test("the site filter narrows the open tab and is remembered across tabs and rel
   await expect(site).toHaveValue("branch-50");
   await expect(site.locator("option:checked")).toHaveText("branch-50 (no rows here)");
   await page.reload();
-  await expect(page.getByTestId("paths-site")).toHaveValue("branch-50");
+  await expect(page.getByTestId("paths-site")).toHaveValue("branch-50", { timeout: FIRST_PAINT });
   await page.getByRole("tab", { name: "Tunnels" }).click();
   await expect(page.getByText("1 of 1 tunnels")).toBeVisible();
   await page.getByTestId("paths-site").selectOption({ label: "All sites" });
@@ -228,7 +234,7 @@ test("a tunnel row carries its measured path and opens it hop by hop, ribbon abo
   await page.goto("/#/investigate/paths/tunnels");
   // cedge-50's tunnel carries the path to cedge-50; the other row has none.
   const cells = page.getByTestId("path-cell");
-  await expect(cells).toHaveCount(2);
+  await expect(cells).toHaveCount(2, { timeout: FIRST_PAINT });
   await expect(page.getByTestId("path-verdict")).toHaveText("Loss from hop 2");
   await page.getByTestId("path-verdict").click();
   const panel = page.getByTestId("path-panel");
@@ -254,7 +260,7 @@ test("a measured path no row claims is listed apart and opens the same way", asy
   await mockApi(page, [], [{ ...PROBE_PATH, dst: "8.8.8.8", site: "" }]);
   await page.goto("/#/investigate/paths/tunnels");
   const other = page.getByTestId("paths-other");
-  await expect(other).toContainText("Measured paths to other targets (1)");
+  await expect(other).toContainText("Measured paths to other targets (1)", { timeout: FIRST_PAINT });
   await other.locator("summary").click();
   await other.getByTestId("paths-other-open").click();
   await expect(page.getByTestId("path-panel").getByRole("heading", { name: "To 8.8.8.8" })).toBeVisible();
