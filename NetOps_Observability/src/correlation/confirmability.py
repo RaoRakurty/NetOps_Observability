@@ -206,10 +206,11 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # Wireless state-transition lane (#128 — nms/wireless_events.go stamps
     # management_plane via_controller).
     "wireless_ap_down": ModalityClass.MANAGEMENT_PLANE,
-    "wireless_ap_up": ModalityClass.MANAGEMENT_PLANE,
     "wireless_ap_join_flap": ModalityClass.MANAGEMENT_PLANE,
     "wireless_radio_down": ModalityClass.MANAGEMENT_PLANE,
-    "wireless_radio_up": ModalityClass.MANAGEMENT_PLANE,
+    # Tracker 442: a wireless recovery is a clear (never a node), like the others.
+    "wireless_ap_down_clear": ModalityClass.MANAGEMENT_PLANE,
+    "wireless_radio_down_clear": ModalityClass.MANAGEMENT_PLANE,
     # clock-skew meta-finding (log-time standard S5/R5): the PLATFORM is the
     # witness (it compared origin vs receive clocks) — management-plane, and
     # never engine-buffered, so it cannot lend a confirming plane to a fault.

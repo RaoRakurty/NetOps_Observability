@@ -4,6 +4,7 @@
 package nms
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,7 +33,7 @@ func TestWirelessStateChangeEvents(t *testing.T) {
 	if evs[0].NormalizedEventType != "wireless_ap_down" || evs[0].Severity != "high" {
 		t.Fatalf("ap down: %+v", evs[0])
 	}
-	if evs[1].NormalizedEventType != "wireless_ap_up" || evs[1].Severity != "info" {
+	if evs[1].NormalizedEventType != "wireless_ap_down_clear" || evs[1].Severity != "info" {
 		t.Fatalf("ap up: %+v", evs[1])
 	}
 	if evs[1].EvidenceRole != RoleSupporting {
@@ -75,5 +76,53 @@ func TestWirelessUnknownTransitionSilent(t *testing.T) {
 	})
 	if len(evs) != 0 {
 		t.Fatalf("unknown target state must emit nothing, got %+v", evs)
+	}
+}
+
+// Tracker 442: a wireless recovery is `<fault kind>_clear` — the convention every
+// other lane uses and the only spelling build_nodes, the RCA document and the UI
+// read as a recovery. The synthesis is vendor-neutral (it keys on the state kind,
+// never the connector), so every registered spec must produce the same kinds.
+func TestWirelessRecoveriesAreClearsForEverySpec(t *testing.T) {
+	specs := Specs()
+	if len(specs) == 0 {
+		t.Fatal("no connector specs registered")
+	}
+	for name, spec := range specs {
+		evs := WirelessStateChangeEvents(spec, "t1", "int-1", []StateChange{
+			wchange("ap_join", "up", "down", 1),
+			wchange("ap_join", "down", "up", 1),
+			wchange("radio_oper", "up", "down", 1),
+			wchange("radio_oper", "down", "up", 1),
+		})
+		if len(evs) != 4 {
+			t.Fatalf("%s: want 4 events, got %d", name, len(evs))
+		}
+		want := []struct{ kind, sev string }{
+			{"wireless_ap_down", "high"},
+			{"wireless_ap_down_clear", "info"},
+			{"wireless_radio_down", "warn"},
+			{"wireless_radio_down_clear", "info"},
+		}
+		for i, w := range want {
+			if evs[i].NormalizedEventType != w.kind || evs[i].Severity != w.sev {
+				t.Fatalf("%s[%d]: got %s/%s, want %s/%s", name, i,
+					evs[i].NormalizedEventType, evs[i].Severity, w.kind, w.sev)
+			}
+		}
+		// The clear binds to its fault's entity: same canonical id.
+		if evs[1].DeviceID != evs[0].DeviceID || evs[3].DeviceID != evs[2].DeviceID {
+			t.Fatalf("%s: a clear must bind to its fault's entity", name)
+		}
+		for _, i := range []int{1, 3} {
+			if evs[i].EvidenceRole != RoleSupporting {
+				t.Fatalf("%s[%d]: a recovery supports; it is not a fault", name, i)
+			}
+		}
+		for _, ev := range evs {
+			if strings.HasSuffix(ev.NormalizedEventType, "_up") {
+				t.Fatalf("%s: retired recovery spelling %q emitted", name, ev.NormalizedEventType)
+			}
+		}
 	}
 }

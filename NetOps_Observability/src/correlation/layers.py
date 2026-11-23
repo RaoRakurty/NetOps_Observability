@@ -118,9 +118,7 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "wireless_radar_event": CausalLayer.RF,       # DFS: spectrum event forces a channel change
     # AP/radio hardware placements.
     "wireless_ap_down": CausalLayer.DEVICE,       # the AP as an infra device
-    "wireless_ap_up": CausalLayer.DEVICE,
     "wireless_radio_down": CausalLayer.PHYSICAL,  # the radio IS the wireless PHY
-    "wireless_radio_up": CausalLayer.PHYSICAL,
     # Association-plane symptoms (L2 of the air interface).
     "wireless_ap_join_flap": CausalLayer.LINK,    # CAPWAP join churn
     "wireless_retry_rate_high": CausalLayer.LINK, # the LINK symptom RF congestion causes

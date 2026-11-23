@@ -753,8 +753,13 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   clear for the peer as established (`rcaNeverEstablishedOnly`). `up` is a positional
   claim (380 PR 2): rows classify the state a transition goes TO, so `from FULL to
   EXSTART` is a down, not a recovery. Not clears, deliberately: STP forwarding (a
-  topology change), FHRP roles, LLDP neighbour adds, wireless `*_up` kinds (tracker
-  follow-up).
+  topology change), FHRP roles, LLDP neighbour adds. **Wireless too (tracker 442,
+  2026-11-23):** an AP rejoin / radio back up is `wireless_ap_down_clear` /
+  `wireless_radio_down_clear` (nms/wireless_events.go); before it the `wireless_*_up`
+  kinds were live info nodes that the RCA document and UI listed as anomalous
+  evidence. `controller_events` folds the retired `_up` spelling onto the clear for an
+  older api. A recovery inside a flap storm stays `wireless_ap_join_flap`. No template
+  read either spelling; stage [1] only, ENGINE_SEMVER does not move.
 - **Canonical kinds from controllers (E2a, 2026-11-01).** vManage alarms (keyed on the
   release's `rule_name_display`, all 99 rules of 20.6 mapped or explicitly unclassified —
   nms/vmanage_kinds.go) and device events now arrive as the kinds the templates use:

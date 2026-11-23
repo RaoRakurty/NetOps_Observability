@@ -345,10 +345,11 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # Wireless state-transition lane (#128 Phase 3 — nms/wireless_events.go
     # synthesizes these onto netops.controller_events from ap_join/radio_oper
     # state changes; controller_events.py binds them to wireless entities).
-    # Recovery kinds (_up) are INTENTIONAL_BLIND in coverage.py: they support,
-    # they are never fault evidence.
-    "wireless_ap_down", "wireless_ap_up", "wireless_ap_join_flap",
-    "wireless_radio_down", "wireless_radio_up",
+    # Recoveries are `<kind>_clear` (tracker 442; the retired `_up` spellings fold
+    # onto them in controller_events.py), INTENTIONAL_BLIND in coverage.py: build_nodes
+    # skips every clear, so they close and are never fault evidence.
+    "wireless_ap_down", "wireless_ap_down_clear", "wireless_ap_join_flap",
+    "wireless_radio_down", "wireless_radio_down_clear",
     # clock-skew meta-finding (log-time standard S5/R5): origin timestamp vs
     # receive time beyond tolerance — a device with a wrong clock (syslog lane,
     # clock_skew_signal below) or an ingest lane delivering beyond its expected
