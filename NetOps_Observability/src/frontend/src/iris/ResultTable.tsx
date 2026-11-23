@@ -12,6 +12,8 @@ import DataTable, { type Column } from "../components/DataTable";
 import { fmtDateTime, parseTs } from "../lib/time";
 import { cellText, fmtNumber, humanize, lookup, MEASURE_FIELDS, rowId, UNITLESS_FIELDS, type Row } from "./presentation";
 import { SafeLink } from "./links";
+import type { DeviceNames } from "../lib/deviceNames";
+import { named, useIrisDeviceNames } from "./deviceNamesContext";
 
 const MAX_COLS = 12;
 const TIME_FIELDS = new Set(["time", "created_at", "executed_at", "at"]);
@@ -42,13 +44,19 @@ export function columnsFor(rows: Row[], preferred?: string[]): string[] {
   return order.slice(0, MAX_COLS);
 }
 
-function renderCell(field: string, v: unknown, unit: string) {
+/** A non-measure cell's text, with any device id in it read as the hostname
+ *  (owner, 2026-11-23). The raw value stays the link target. */
+function shownText(v: unknown, names: DeviceNames | null): string | null {
+  return named(cellText(v), names);
+}
+
+function renderCell(field: string, v: unknown, unit: string, names: DeviceNames | null) {
   if (MEASURE_FIELDS.has(field)) {
     const n = fmtNumber(v, UNITLESS_FIELDS.has(field) ? "" : unit);
     return n ?? <span className="iris-muted">Not measured</span>;
   }
   if (TIME_FIELDS.has(field) && typeof v === "string" && parseTs(v)) return fmtDateTime(v);
-  const t = cellText(v);
+  const t = shownText(v, names);
   if (t === null) return <span className="iris-muted">Not recorded</span>;
   const kind = lookup(LINK_FIELDS, field);
   if (kind && typeof v === "string") {
@@ -74,6 +82,7 @@ export default function ResultTable({
   onRowClick?: (row: Row) => void;
   ariaLabel?: string;
 }) {
+  const names = useIrisDeviceNames();
   const fields = useMemo(() => columnsFor(rows, preferred), [rows, preferred]);
   const keyed = useMemo<Keyed[]>(() => rows.map((row, i) => ({ key: `${rowId(row, i)}#${i}`, row })), [rows]);
   const columns = useMemo<Column<Keyed>[]>(
@@ -90,12 +99,12 @@ export default function ResultTable({
           // Unmeasured sorts below every measured number, never as 0.
           // (-MAX_VALUE, not -Infinity: DataTable subtracts, and -Inf - -Inf is NaN.)
           if (MEASURE_FIELDS.has(f)) return -Number.MAX_VALUE;
-          return cellText(v) ?? "";
+          return shownText(v, names) ?? "";
         },
-        text: ({ row }) => cellText(row[f]) ?? "",
-        render: ({ row }) => renderCell(f, row[f], unit),
+        text: ({ row }) => shownText(row[f], names) ?? "",
+        render: ({ row }) => renderCell(f, row[f], unit, names),
       })),
-    [fields, unit],
+    [fields, unit, names],
   );
   if (rows.length === 0) return <p className="iris-empty" role="status">Nothing found in this window.</p>;
   return (
