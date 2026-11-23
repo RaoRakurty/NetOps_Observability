@@ -529,20 +529,27 @@ func (s *server) buildDEMAPI(cat dem.Catalogue) (*dem.API, error) {
 }
 
 // demPublisher is the projector's transport: the same key-value channel the WAN
-// circuit projector already uses to hand the prober its work.
-type demPublisher struct{}
+// circuit projector already uses to hand the prober its work. The queue is
+// signed with the prober-control key (tracker 475); with no key nothing is
+// published and the projector reports it.
+type demPublisher struct{ ring *probercontrol.Keyring }
 
-func (demPublisher) Publish(ctx context.Context, targets []dem.WireTarget, ttlSec int) error {
-	return collectors.PublishDEMTargets(ctx, targets, ttlSec)
+func (p demPublisher) Publish(ctx context.Context, targets []dem.WireTarget, ttlSec int) error {
+	return collectors.PublishDEMTargets(ctx, p.ring, targets, ttlSec)
 }
 
 // demRunFetcher is the OPPOSITE direction on the same channel (tracker 253):
 // the prober's immutable per-run records, drained by the api into the bounded
-// run store the reliability grade is computed from.
-type demRunFetcher struct{}
+// run store the reliability grade is computed from. Every batch is verified
+// (tracker 475): a forged run never reaches a tenant's experience grade.
+type demRunFetcher struct{ op *probercontrol.ResultVerifier }
 
-func (demRunFetcher) FetchRuns(ctx context.Context) ([]dem.WireRun, error) {
-	return collectors.FetchDEMRuns(ctx)
+func (f demRunFetcher) FetchRuns(ctx context.Context) ([]dem.WireRun, error) {
+	if f.op == nil {
+		// Never hand FetchDEMRuns a typed nil: no verifier reads nothing.
+		return nil, errors.New("dem runs: no verifier is wired, so no run batch can be believed")
+	}
+	return collectors.FetchDEMRuns(ctx, f.op)
 }
 
 // demRunSource adapts the run store onto the experience module's RunSource seam.
@@ -1065,4 +1072,28 @@ func newProbePathVerifier(features *featureflags.Registry) *probercontrol.Result
 	}
 	return probercontrol.NewResultVerifier(probercontrol.KeyringFromEnv(os.Getenv, log.Printf),
 		probercontrol.KindProbePaths, collectors.ProbePathsMaxAge, time.Now, accept, report)
+}
+
+// newDEMRunVerifier verifies the prober's signed Digital Experience run
+// batches (tracker 475, kind dem-runs) with the P3 control key — the same
+// checks as the path sets: unsigned, bad signature, another vantage's slot,
+// stale or future-stamped, replayed. The unsigned form is accepted only while
+// the console-only DEM_RUNS_ACCEPT_UNSIGNED switch is on: its own switch, so
+// accepting unproven path sets never also accepts unproven experience runs
+// (which carry the tenant whose grade they move).
+func newDEMRunVerifier(features *featureflags.Registry) *probercontrol.ResultVerifier {
+	accept := func() bool { return features != nil && features.Enabled(probercontrol.EnvAcceptUnsignedDEMRuns) }
+	report := func(kind, slot string, why probercontrol.Reason) {
+		f := map[string]any{"kind": kind, "slot": slot, "reason": string(why)}
+		switch why {
+		case probercontrol.ReasonVerified:
+			logInfo("dem", "the prober's experience run batch verifies again", f)
+		case probercontrol.ReasonUnsignedAccepted:
+			logWarn("dem", "accepting an UNSIGNED experience run batch (DEM_RUNS_ACCEPT_UNSIGNED is on): its tenant and outcomes are unproven", f)
+		default:
+			logWarn("dem", "refused an experience run batch from the prober channel: none of its runs reach any tenant's grade", f)
+		}
+	}
+	return probercontrol.NewResultVerifier(probercontrol.KeyringFromEnv(os.Getenv, log.Printf),
+		probercontrol.KindDEMRuns, collectors.DEMRunsMaxAge, time.Now, accept, report)
 }

@@ -40,12 +40,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"netops/backend/internal/dem"
+	"netops/backend/internal/probercontrol"
 	"netops/backend/safego"
 )
 
@@ -104,19 +106,34 @@ type demRunner struct {
 	// demRunBuffer: the OLDEST records are dropped, which is the right end —
 	// reliability is a question about the recent past.
 	runs []dem.WireRun
+	// lastPubErr is the last run-publication failure (""= the last one
+	// succeeded), so a standing failure is logged once per change.
+	lastPubErr string
 }
 
 // NewDEM builds the Digital Experience runner. It is registered in the pool and
 // enabled by FEATURE_DEM; with no published work queue it measures nothing and
 // says so (0 targets), which is a different status from "unhealthy".
+//
+// Both channels are signed with the prober-control key (tracker 475): the
+// work queue is believed only when it verifies, and the run batches are
+// sealed so the api can refuse a forged one. With no key on this side the
+// runner measures nothing and publishes nothing, and its status says why.
 func NewDEM() Collector {
+	ring := probercontrol.KeyringFromEnv(os.Getenv, log.Printf)
+	work := probercontrol.NewDEMTargetsReader(ring, time.Now)
+	seal := NewDEMRunSealer(ring)
 	return &demRunner{
-		timeout:     envDuration("DEM_TIMEOUT", demDefaultTimeout),
-		fetch:       fetchDEMWork,
-		publishRuns: PublishDEMRuns,
-		checks:      &synthetics{timeout: envDuration("DEM_TIMEOUT", demDefaultTimeout)},
-		status:      Status{Name: "dem", Healthy: true, Kind: "metrics"},
-		lastRun:     map[string]time.Time{},
+		timeout: envDuration("DEM_TIMEOUT", demDefaultTimeout),
+		fetch: func(ctx context.Context) ([]dem.WireTarget, error) {
+			return FetchDEMTargets(ctx, work)
+		},
+		publishRuns: func(ctx context.Context, runs []dem.WireRun) error {
+			return PublishDEMRuns(ctx, seal, runs)
+		},
+		checks:  &synthetics{timeout: envDuration("DEM_TIMEOUT", demDefaultTimeout)},
+		status:  Status{Name: "dem", Healthy: true, Kind: "metrics"},
+		lastRun: map[string]time.Time{},
 	}
 }
 
@@ -140,12 +157,6 @@ func (d *demRunner) Run(ctx context.Context) error {
 			d.tick(ctx)
 		}
 	}
-}
-
-// fetchDEMWork reads the api-published work queue. An absent key is an empty
-// queue (not an error): the api may simply not have published yet.
-func fetchDEMWork(ctx context.Context) ([]dem.WireTarget, error) {
-	return FetchDEMTargets(ctx)
 }
 
 // due reports whether a target's interval has elapsed since its last run.
@@ -544,11 +555,29 @@ func (d *demRunner) publishRunRecords(ctx context.Context, fresh []dem.WireRun) 
 	if len(buf) == 0 || d.publishRuns == nil {
 		return
 	}
-	if err := d.publishRuns(ctx, buf); err != nil && ctx.Err() == nil {
+	err := d.publishRuns(ctx, buf)
+	if err != nil && ctx.Err() != nil {
+		return // shutting down: not a publication fault
+	}
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	d.mu.Lock()
+	changed := msg != d.lastPubErr
+	d.lastPubErr = msg
+	d.mu.Unlock()
+	switch {
+	case err != nil && (changed || !errors.Is(err, probercontrol.ErrNoKey)):
 		// §16.1/§10: never swallowed. Without run records every check grades
 		// `unknown`, and an ungraded check is one the incident detector will
 		// not let raise a high-severity incident — a silent loss of severity.
+		// A missing signing key (tracker 475) is a standing condition, so it is
+		// said once per change rather than every tick; a transport failure is
+		// said every time, as before.
 		log.Printf("dem: the per-run records could not be published; check reliability will read as ungraded: %v", err)
+	case err == nil && changed:
+		log.Printf("dem: publishing signed per-run records again")
 	}
 }
 

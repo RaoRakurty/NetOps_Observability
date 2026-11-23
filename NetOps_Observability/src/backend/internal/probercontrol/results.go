@@ -30,6 +30,9 @@ package probercontrol
 // console-only Features switch PROBE_PATHS_ACCEPT_UNSIGNED, which accepts the
 // unsigned form only (never a bad signature) and counts every such record as
 // unsigned_accepted.
+//
+// The Digital Experience run records ride the same verifier under their own
+// kind (dem-runs) and their own switch (dem.go).
 
 import (
 	"encoding/json"
@@ -222,20 +225,35 @@ func (v *ResultVerifier) Count(why Reason) uint64 {
 	return v.counts[why]
 }
 
-// WriteMetrics renders netops_prober_results_total{kind,reason}.
+// WriteMetrics renders netops_prober_results_total{kind,reason} for this
+// verifier alone. A process with more than one verifier uses
+// WriteResultMetrics, so the family's HELP and TYPE lines appear once.
 func (v *ResultVerifier) WriteMetrics(w io.Writer) {
-	if v == nil {
-		return
-	}
-	v.mu.Lock()
-	counts := make(map[Reason]uint64, len(v.counts))
-	for k, n := range v.counts {
-		counts[k] = n
-	}
-	v.mu.Unlock()
-	fmt.Fprintf(w, "# HELP netops_prober_results_total Prober result records read by the api, by kind and outcome (tracker 475: verified, or why it was refused).\n")
-	fmt.Fprintf(w, "# TYPE netops_prober_results_total counter\n")
-	for _, r := range resultReasons {
-		fmt.Fprintf(w, "netops_prober_results_total{kind=%q,reason=%q} %d\n", v.kind, r, counts[r])
+	WriteResultMetrics(w, v)
+}
+
+// WriteResultMetrics renders netops_prober_results_total{kind,reason} for every
+// non-nil verifier under ONE HELP/TYPE header (a repeated header makes the
+// exposition invalid). Nothing is written when every verifier is nil.
+func WriteResultMetrics(w io.Writer, vs ...*ResultVerifier) {
+	header := false
+	for _, v := range vs {
+		if v == nil {
+			continue
+		}
+		v.mu.Lock()
+		counts := make(map[Reason]uint64, len(v.counts))
+		for k, n := range v.counts {
+			counts[k] = n
+		}
+		v.mu.Unlock()
+		if !header {
+			fmt.Fprintf(w, "# HELP netops_prober_results_total Prober result records read by the api, by kind and outcome (tracker 475: verified, or why it was refused).\n")
+			fmt.Fprintf(w, "# TYPE netops_prober_results_total counter\n")
+			header = true
+		}
+		for _, r := range resultReasons {
+			fmt.Fprintf(w, "netops_prober_results_total{kind=%q,reason=%q} %d\n", v.kind, r, counts[r])
+		}
 	}
 }

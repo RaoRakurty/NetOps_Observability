@@ -660,6 +660,7 @@ type server struct {
 	corrPath        corrPathRef
 	remotePaths     *remotePathStore                     // remote-vantage traceroute pushes (POST /api/probe/paths)
 	probePaths      *probercontrol.ResultVerifier        // tracker 475: verifies the prober's signed path sets (nil reads none)
+	demRunVerifier  *probercontrol.ResultVerifier        // tracker 475: verifies the prober's signed DEM run batches (nil reads none)
 	integrations    *integration.Store                   // integration-platform persistence (nil on file backend)
 	providers       *integration.Registry                // inbound provider translators (registry)
 	nms             *nmsRuntime                          // NMS vendor-controller framework #95 (nil unless FEATURE_NMS_INTEGRATIONS)
@@ -1416,6 +1417,7 @@ func newServer() *server {
 		invFacts:           invfacts.NewStore(),
 		devIdentityMetrics: devidentity.NewMetrics(),
 		probePaths:         newProbePathVerifier(features),
+		demRunVerifier:     newDEMRunVerifier(features),
 		flowDatasets:       flownames.NewDatasetWatch(),
 		discovery:          d,
 		devStore:           devStore,
@@ -1799,14 +1801,16 @@ func newServer() *server {
 		srv.experienceAPI = api
 	}
 	if envBool(dem.EnvFeatureFlag) {
-		if pr, err := dem.NewProjector(srv.demTargets, demPublisher{},
+		// Tracker 475: the work queue is signed with the prober-control key and
+		// the run batches are verified, so neither direction trusts the store.
+		if pr, err := dem.NewProjector(srv.demTargets, demPublisher{ring: probercontrol.KeyringFromEnv(os.Getenv, log.Printf)},
 			durationOr(dem.EnvProjectInterval, dem.DefaultProjectInterval), srv.demMetrics,
 			func(m string, f map[string]any) { logWarn("dem", m, f) }); err != nil {
 			logError("dem", "the experience work-queue projector could not be built — the prober will receive NO targets and measure nothing", errf(err))
 		} else {
 			srv.demProjector = pr
 		}
-		if ri, err := dem.NewRunIntake(demRunFetcher{}, srv.demRuns,
+		if ri, err := dem.NewRunIntake(demRunFetcher{op: srv.demRunVerifier}, srv.demRuns,
 			dem.DefaultRunIntakeInterval, srv.demMetrics,
 			func(m string, f map[string]any) { logWarn("dem", m, f) }); err != nil {
 			logError("dem", "the experience run-record intake could not be built — every check will grade as ungraded and no experience incident will reach a high severity", errf(err))
@@ -5217,7 +5221,7 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	s.ifBridgeMetrics.WriteMetrics(w)
 	s.invFacts.WriteMetrics(w)
 	s.devIdentityMetrics.WriteMetrics(w)
-	s.probePaths.WriteMetrics(w)
+	probercontrol.WriteResultMetrics(w, s.probePaths, s.demRunVerifier)
 	s.flowDatasets.WriteMetrics(w)
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
