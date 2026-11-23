@@ -1913,6 +1913,8 @@ func newServer() *server {
 	// 2026-09-03 produced exactly that burst. Tenant derivation is the same
 	// device→tenant rule the episode fold uses (§3a): never the alert's labels.
 	engine.TenantOf = srv.alertTenant
+	// Alert summaries name a device by its hostname, never its internal id.
+	engine.DeviceNames = srv.alertDeviceNames
 	if st, err := alerts.NewNotifyStateStore(envOr("ALERT_NOTIFY_STATE_FILE", "/data/alert_notify_state.json")); err != nil {
 		// NOT fatal: the worst case is the pre-existing behaviour (one
 		// duplicate notification per still-firing alert). Loud, though — a
