@@ -41,12 +41,88 @@ groups:
         # netconf is an opportunistic capability probe (it tries every device's
         # :830 by design) — a device without NETCONF is not "unreachable".
         # Authoritative reachability comes from the polling collectors.
-        expr: collector_target_up{collector!="netconf"} == 0
+        #
+        # Tracker 368: a device whose WHOLE SITE lost collection is reported once,
+        # by SiteCollectionLost below, not once per device — fifteen "unreachable"
+        # alerts for one dark site name no site and bury the one fact that
+        # matters. The `unless` drops exactly the devices of a site that rule
+        # holds lost (same arithmetic, so the two can never disagree).
+        expr: |
+          collector_target_up{collector!="netconf"} == 0
+          unless on(device) (
+            max by (device, tenant_id, site) (netops_device_site_info{job="netops-api"})
+            * on(tenant_id, site) group_left()
+            (
+              (count by (tenant_id, site) (
+                max by (device) (last_over_time(collector_target_up{collector!="netconf"}[3m]))
+                * on(device) group_left(tenant_id, site) max by (device, tenant_id, site) (netops_device_site_info{job="netops-api"})
+              ) >= 2)
+              and on(tenant_id, site)
+              (max by (tenant_id, site) (
+                max by (device) (last_over_time(collector_target_up{collector!="netconf"}[3m]))
+                * on(device) group_left(tenant_id, site) max by (device, tenant_id, site) (netops_device_site_info{job="netops-api"})
+              ) == 0)
+            )
+          )
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.device }} unreachable from {{ $labels.collector }}"
+
+      # Tracker 368 — COLLECTION LOST FOR A WHOLE SITE. On 2026-10-20 every SNMP
+      # target of one lab site stopped answering in the same minute and nobody
+      # was told for four days. DeviceUnreachable names devices, never a site;
+      # CollectorAllTargetsUnreachable sees a whole collector; the page-tier
+      # vantages (MonitoredSourcesSilent, NMSIngestSilent) see a whole estate or
+      # a whole controller integration. None says "site X has gone dark".
+      #
+      # A site is LOST when it has at least two polled devices and none of them
+      # answered any collector in the last 3 minutes. One device alone is
+      # DeviceUnreachable's job. Membership is netops_device_site_info, which
+      # the api publishes from the SAME site rule the Topology canvas boxes by
+      # (internal/sitecollect), so the alert names the site the operator sees.
+      # Controller-only devices have no collector_target_up and are not counted:
+      # a silent controller integration is NMSIntegrationDown / NMSIngestSilent.
+      #
+      # WHAT IT MEANS FOR RCA: this says COLLECTION was lost, not that the
+      # devices are down. The site may be powered off, cut off, or only
+      # unreachable from Correlix — absence of telemetry is not a fault signal,
+      # and the engine never reads a missing poll as a device outage.
+      #
+      # Tier: warning. It is a CUSTOMER-network condition, owned by the tenant
+      # whose (tenant_id, site) pair the api published (alertOwner's
+      # SiteCollection* exception) and delivered through that tenant's lane.
+      # The four page conditions are the platform's own liveness; a whole-
+      # estate loss pages there (MonitoredSourcesSilent). vmalert's platform-
+      # global webhook drops this alert by design (tenant + site labels, §3a).
+      - alert: SiteCollectionLost
+        expr: |
+          (count by (tenant_id, site, site_label) (
+            max by (device) (last_over_time(collector_target_up{collector!="netconf"}[3m]))
+            * on(device) group_left(tenant_id, site, site_label)
+              max by (device, tenant_id, site, site_label) (netops_device_site_info{job="netops-api"})
+          ) >= 2)
+          and on(tenant_id, site, site_label)
+          (max by (tenant_id, site, site_label) (
+            max by (device) (last_over_time(collector_target_up{collector!="netconf"}[3m]))
+            * on(device) group_left(tenant_id, site, site_label)
+              max by (device, tenant_id, site, site_label) (netops_device_site_info{job="netops-api"})
+          ) == 0)
+        for: 2m
+        labels:
+          severity: critical
+          tier: warning
+        annotations:
+          summary: "Collection lost for site {{ $labels.site_label }}: none of its {{ $value }} polled devices has answered for 3 minutes"
+          description: >-
+            Every device Correlix polls at this site stopped answering at once.
+            This is a loss of COLLECTION — the site may be down, cut off, or
+            unreachable only from Correlix — so its devices' individual
+            unreachable alerts are folded into this one. Check the path from the
+            collector to the site (WAN link, VPN, firewall, management VRF)
+            before the devices themselves.
+          runbook: "docs/runbooks/engine-liveness-matrix.md"
 
       - alert: InterfaceDown
         expr: device_if_oper_status == 2 and device_if_admin_status == 1
