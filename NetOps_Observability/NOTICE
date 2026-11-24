@@ -279,6 +279,20 @@ the repository) as test data only. Provenance and per-file
 sha256 digests: tests/fixtures/kubeconform-schemas/README.md.
 
 --------------------------------------------------------------------------------
+Adaptive Card JSON schema (test fixture)
+--------------------------------------------------------------------------------
+
+src/backend/internal/adaptivecard/testdata/adaptive-card-1.4.0.json is
+Microsoft's Adaptive Card schema 1.4.0, copied unmodified from
+https://github.com/microsoft/AdaptiveCards (schemas/1.4.0/adaptive-card.json)
+at commit 93695cf2df1117ab08e36ebe707d0ced18e4e9b3, used only by tests to
+validate the Microsoft Teams cards Correlix sends. "Copyright (c) 2017
+Microsoft", licensed under the MIT License; the full text ships beside it as
+LICENSE.AdaptiveCards. Not part of any Correlix image or binary (only test code
+imports the package); present in the source archive as test data only.
+Provenance and sha256: src/backend/internal/adaptivecard/testdata/README.md.
+
+--------------------------------------------------------------------------------
 Complete inventory
 --------------------------------------------------------------------------------
 
