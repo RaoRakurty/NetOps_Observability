@@ -49,6 +49,9 @@ func Kind(kind string) string {
 		return "Device alarm"
 	case "device_resource_anomaly":
 		return "Device CPU/memory change"
+	case "device_cpu_context":
+		// Tracker 489: CPU on a platform that busy-polls by design — context, not a cause.
+		return "Device CPU (expected high)"
 	case "flow_volume_anomaly":
 		return "Traffic volume change"
 	case "sot_drift":

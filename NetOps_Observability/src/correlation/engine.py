@@ -70,7 +70,20 @@ from signals import (
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.7.0"  # 3.7.0 = traffic-judgement fixes (owner 2026-11-24) on top of 3.6.0.
+ENGINE_SEMVER = "3.8.0"  # 3.8.0 = resource-threshold dwell + busy-poll CPU context (tracker 489).
+# 3.8.0: owner decisions 2026-11-24 on tracker 489 (lab, 7 days: the vEdges' CPU
+# threshold traps + syslog twins flapped every ~66 s; 92 % of critical raises cleared
+# within 120 s, median 4 s; ~148 single-node undetermined objects a week).
+#   stage [1] dwell (resource_dwell.py, main.buffer_signal): a CPU / memory THRESHOLD
+#     raise (trap/syslog, attrs.resource ∈ {cpu, memory}) is buffered only after
+#     CORR_RESOURCE_DWELL_S (300 s) without a clear for its (tenant, device, resource);
+#     a raise cleared inside it is counted and kept in corr_signals; trap + syslog
+#     twins fold into one release. Kill switch CORR_RESOURCE_DWELL_S=0.
+#   stage [1] busy-poll: a CPU signal from a catalog.BUSY_POLL_PLATFORMS model
+#     (registry model via entity_resolver.json) is recast to `device_cpu_context`
+#     at warn — no template reads it.
+#   stage [5] a component made only of context kinds (CONTEXT_ONLY_KINDS: volume ∪
+#     busy-poll CPU) with busy-poll CPU in it opens no object (counted).
 # 3.7.0: owner decisions 2026-11-24 — "how does a traffic-volume change become a
 # critical suspect?" (lab: 1,185 of 4,079 objects in 7 days headlined
 # local-link-fault "suspected 0.5" with ZERO link_state_change signals).
@@ -3714,6 +3727,46 @@ def _volume_context_only(comp: tuple[Node, ...]) -> bool:
     return bool(comp) and all(n.kind in VOLUME_CONTEXT_KINDS for n in comp)
 
 
+# Owner 2026-11-24 (tracker 489, ENGINE_SEMVER 3.8.0): a platform whose data plane
+# busy-polls by design (catalog.BUSY_POLL_PLATFORMS) reads ~100 % CPU while healthy.
+# Its CPU signals arrive recast to `device_cpu_context` (resource_dwell, stage [1]);
+# a component made only of context kinds — that, traffic volume, or both — opens no
+# object. No template reads the kind, so beside a real fault it is evidence-list
+# context and never the headline.
+CPU_CONTEXT_KINDS: frozenset[str] = frozenset({"device_cpu_context"})
+CONTEXT_ONLY_KINDS: frozenset[str] = VOLUME_CONTEXT_KINDS | CPU_CONTEXT_KINDS
+
+
+def _cpu_context_only(comp: tuple[Node, ...]) -> bool:
+    """True when every node is a context kind and at least one is busy-poll CPU
+    (a volume-only component is `_volume_context_only`'s, counted there)."""
+    return (bool(comp) and all(n.kind in CONTEXT_ONLY_KINDS for n in comp)
+            and any(n.kind in CPU_CONTEXT_KINDS for n in comp))
+
+
+_CPU_CONTEXT_SINGLETONS_TOTAL = 0
+
+
+def _count_cpu_context_singleton() -> None:
+    global _CPU_CONTEXT_SINGLETONS_TOTAL
+    _CPU_CONTEXT_SINGLETONS_TOTAL += 1
+
+
+def cpu_context_singletons_total() -> int:
+    return _CPU_CONTEXT_SINGLETONS_TOTAL
+
+
+def cpu_context_metric_lines() -> tuple[str, ...]:
+    """The counter's exposition lines; the name is owned by the module that counts."""
+    return (
+        ("# HELP corr_cpu_context_singletons_total Cohort touches of a component made "
+         "only of context kinds with busy-poll CPU in it (owner 2026-11-24, tracker 489, "
+         "ENGINE_SEMVER 3.8.0), which opens no object by itself. The evidence is kept."),
+        "# TYPE corr_cpu_context_singletons_total counter",
+        f"corr_cpu_context_singletons_total {_CPU_CONTEXT_SINGLETONS_TOTAL}",
+    )
+
+
 _VOLUME_CONTEXT_SINGLETONS_TOTAL = 0
 
 
@@ -3987,6 +4040,11 @@ def run_window(
             # cohort touches it; the signals stay in the window and corr_signals.
             if cohort_keys is None or not cohort_keys.isdisjoint(comp_keys):
                 _count_volume_context_singleton()
+            continue
+        if _cpu_context_only(comp):
+            # 3.8.0 (tracker 489): busy-poll CPU (with or without volume) is context.
+            if cohort_keys is None or not cohort_keys.isdisjoint(comp_keys):
+                _count_cpu_context_singleton()
             continue
         admin_only = not comp_edges and _admin_change_only(comp[0], open_floor)
         if admin_only and (cohort_keys is None or comp[0].key in cohort_keys):

@@ -37,6 +37,10 @@ type erDevice struct {
 	Device   string `json:"device"`            // correlation device entity (device id)
 	Name     string `json:"name,omitempty"`    // human name (an alias for IP→device)
 	MgmtIP   string `json:"mgmt_ip,omitempty"` // management address
+	// Model is the registry's chassis model / product id. The engine reads it only to
+	// recognise a platform whose data plane busy-polls by design (tracker 489,
+	// catalog.BUSY_POLL_PLATFORMS): its CPU signals are context, never a cause.
+	Model string `json:"model,omitempty"`
 }
 
 type erIfaceIP struct {
@@ -74,7 +78,7 @@ func buildEntityResolverExport(devs []models.Device, ifaddr, ifidx map[string]ma
 		t := deviceTenant(d)
 		tenantBy[d.ID] = t
 		out.Devices = append(out.Devices, erDevice{
-			TenantID: t, Device: d.ID, Name: d.Name, MgmtIP: d.Address,
+			TenantID: t, Device: d.ID, Name: d.Name, MgmtIP: d.Address, Model: d.Model,
 		})
 	}
 	for dev, m := range ifaddr {

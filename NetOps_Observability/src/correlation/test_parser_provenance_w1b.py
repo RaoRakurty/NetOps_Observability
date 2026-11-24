@@ -354,6 +354,9 @@ OTHER_LANE_KINDS = frozenset({
     # ENGINE_SEMVER 3.7.0 kind split: the METRIC lane's interface fault / state
     # episodes (producers.INTERFACE_METRIC_KINDS via main.metric_identity).
     "if_errors", "if_discards", "if_crc", "if_state_anomaly",
+    # ENGINE_SEMVER 3.8.0 (tracker 489): a busy-poll platform's CPU signal, recast at
+    # the window entry (resource_dwell.recast_busy_poll), owned by no rule.
+    "device_cpu_context",
     # tracker 222: the METRIC lane's IGP adjacency episode
     # (device_ospf_nbr_state / device_isis_adj_state → the `igp` signal family
     # → main.metric_identity). Its SIGNAL-lane twins, ospf_adjacency_change and
