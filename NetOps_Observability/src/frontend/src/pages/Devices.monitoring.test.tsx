@@ -196,7 +196,7 @@ describe("the paid-tier overage banner", () => {
   it("shows no license banner at all when the caller cannot read the license", async () => {
     setup([]);
     render(<Devices />);
-    await screen.findByText("Inventory & Devices");
+    await screen.findByRole("heading", { level: 1, name: "Devices" });
     expect(screen.queryByRole("note")).toBeNull();
   });
 });
