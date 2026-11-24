@@ -10,7 +10,7 @@
 import type { ELK as ElkInstance } from "elkjs/lib/elk-api";
 import type { TopologyView } from "../api/topologyTypes";
 import type { LayoutResult } from "./layoutTypes";
-import { NODE_SIZE } from "./layoutTypes";
+import { NODE_SIZE, nodeWidth } from "./layoutTypes";
 import { presetFor } from "./layoutPresets";
 import { wanOverlayLayout } from "./wanOverlayLayout";
 import { ELK_GROUP_PADDING, GROUP_GAP, GROUP_ASPECT, GROUP_MIN_H, groupMinWidth } from "./groupGeometry";
@@ -231,7 +231,8 @@ export function minSize(w: number, h: number, direction: string): string {
 function buildChildren(view: TopologyView, preset: ReturnType<typeof presetFor>): ElkChild[] {
   const leaf = (n: TopologyView["nodes"][number]): ElkChild => ({
     id: n.id,
-    width: NODE_SIZE.width,
+    // The card's own width (its hostname, shown in full): ELK reserves what is drawn.
+    width: nodeWidth(n),
     height: NODE_SIZE.height,
     ...(preset.partitionByRole
       ? { layoutOptions: { "elk.partitioning.partition": String(roleTier(n.role, n.kind)) } }

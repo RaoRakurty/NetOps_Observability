@@ -21,7 +21,8 @@
 
 import type { TopologyView } from "../api/topologyTypes";
 import type { LayoutResult } from "./layoutTypes";
-import { CARD_W, CARD_H } from "../renderers/react-flow/nodes/DeviceNode";
+import { CARD_H } from "../renderers/react-flow/nodes/DeviceNode";
+import { nodeWidth } from "./layoutTypes";
 import { GROUP_GAP, GROUP_PAD, LABEL_BAND, GROUP_MIN_H, groupMinWidth } from "./groupGeometry";
 
 const CELL_GAP_X = 28; // between cards inside a site box
@@ -30,7 +31,7 @@ const TRANSPORT_GAP_X = 120; // between transport nodes
 const BAND_GAP = 90; // between the transport row and the nearest shelf
 const TARGET_ASPECT = 2.0; // ≈ the shape of the stage
 
-type Box = { id: string; w: number; h: number; container: boolean; members: string[] };
+type Box = { id: string; w: number; h: number; container: boolean; members: string[]; colW: number };
 
 const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -48,6 +49,7 @@ export function wanOverlayLayout(view: TopologyView): LayoutResult {
   // ── site boxes (containers) + loose nodes ─────────────────────────────────
   const claimed = new Set<string>();
   const nodeIds = new Set(view.nodes.map((n) => n.id));
+  const nodeById = new Map(view.nodes.map((n) => [n.id, n] as const));
   const boxes: Box[] = [];
   const groups = [...(view.groups ?? [])].sort((a, b) => natural.compare(a.label || a.id, b.label || b.id));
   for (const g of groups) {
@@ -57,22 +59,29 @@ export function wanOverlayLayout(view: TopologyView): LayoutResult {
     members.forEach((m) => claimed.add(m));
     const cols = gridCols(members.length);
     const rows = Math.ceil(members.length / cols);
-    const w = Math.max(groupMinWidth(g.label || g.id, members.length), 2 * GROUP_PAD + cols * CARD_W + (cols - 1) * CELL_GAP_X);
+    // One column width per box: its widest card (hostnames shown in full), so
+    // the grid stays aligned and no card overlaps its neighbour.
+    const colW = members.reduce((m, id) => Math.max(m, nodeWidth(nodeById.get(id) ?? {})), 0);
+    const w = Math.max(groupMinWidth(g.label || g.id, members.length), 2 * GROUP_PAD + cols * colW + (cols - 1) * CELL_GAP_X);
     const h = Math.max(GROUP_MIN_H, LABEL_BAND + 2 * GROUP_PAD + rows * CARD_H + (rows - 1) * CELL_GAP_Y);
-    boxes.push({ id: g.id, w, h, container: true, members });
+    boxes.push({ id: g.id, w, h, container: true, members, colW });
   }
   const loose = view.nodes
     .filter((n) => !transportIds.has(n.id) && !claimed.has(n.id))
     .sort((a, b) => natural.compare(a.label || a.id, b.label || b.id));
-  for (const n of loose) boxes.push({ id: n.id, w: CARD_W, h: CARD_H, container: false, members: [] });
+  for (const n of loose) {
+    const w = nodeWidth(n);
+    boxes.push({ id: n.id, w, h: CARD_H, container: false, members: [], colW: w });
+  }
 
   // ── transport row, centred on x = 0 ───────────────────────────────────────
-  const rowW = transports.length * CARD_W + Math.max(0, transports.length - 1) * TRANSPORT_GAP_X;
-  transports
-    .sort((a, b) => natural.compare(a.label || a.id, b.label || b.id))
-    .forEach((t, i) => {
-      out[t.id] = { x: -rowW / 2 + i * (CARD_W + TRANSPORT_GAP_X), y: 0 };
-    });
+  const sortedT = [...transports].sort((a, b) => natural.compare(a.label || a.id, b.label || b.id));
+  const rowW = sortedT.reduce((s, t) => s + nodeWidth(t), 0) + Math.max(0, sortedT.length - 1) * TRANSPORT_GAP_X;
+  let tx = -rowW / 2;
+  for (const t of sortedT) {
+    out[t.id] = { x: tx, y: 0 };
+    tx += nodeWidth(t) + TRANSPORT_GAP_X;
+  }
 
   // ── shelf-pack the boxes to a screen-shaped width ─────────────────────────
   const area = boxes.reduce((s, b) => s + (b.w + GROUP_GAP) * (b.h + GROUP_GAP), 0);
@@ -118,14 +127,14 @@ export function wanOverlayLayout(view: TopologyView): LayoutResult {
     out[b.id] = { x, y, w: b.w, h: b.h };
     const cols = gridCols(b.members.length);
     const rows = Math.ceil(b.members.length / cols);
-    const innerW = cols * CARD_W + (cols - 1) * CELL_GAP_X;
+    const innerW = cols * b.colW + (cols - 1) * CELL_GAP_X;
     const innerH = rows * CARD_H + (rows - 1) * CELL_GAP_Y;
     // Centre the grid in the box (a box may be wider/taller than its grid
     // because of the minimum size).
     const ox = x + (b.w - innerW) / 2;
     const oy = y + LABEL_BAND + GROUP_PAD + (b.h - LABEL_BAND - 2 * GROUP_PAD - innerH) / 2;
     b.members.forEach((m, k) => {
-      out[m] = { x: ox + (k % cols) * (CARD_W + CELL_GAP_X), y: oy + Math.floor(k / cols) * (CARD_H + CELL_GAP_Y) };
+      out[m] = { x: ox + (k % cols) * (b.colW + CELL_GAP_X), y: oy + Math.floor(k / cols) * (CARD_H + CELL_GAP_Y) };
     });
   }
   return out;

@@ -160,3 +160,39 @@ test("dragging a site box moves its devices with it, and only its devices", asyn
   expect(Math.abs(otherAfter.x - other.x)).toBeLessThan(2);
   expect(Math.abs(otherAfter.y - other.y)).toBeLessThan(2);
 });
+
+/** The canvas zoom (React Flow's viewport scale). */
+async function zoomOf(page: Page): Promise<number> {
+  return page.locator(".react-flow__viewport").first().evaluate((el) => {
+    const m = getComputedStyle(el).transform.match(/matrix\(([^,]+)/);
+    return m ? parseFloat(m[1]) : 1;
+  });
+}
+
+test("every hostname reads in full on its card at 100 % zoom", async ({ page }) => {
+  // Owner, 2026-11-24: "keep hostname as it is" — "cEDGE-40", never "cEDG…".
+  // At fit-to-view the canvas draws far-zoom badges (no hostname text), so the
+  // check runs at 100 %, where cards show their names.
+  await page.setViewportSize({ width: 1600, height: 950 });
+  await mockApi(page);
+  await page.goto("/#/investigate/topology");
+  await expect(page.getByTestId("rf__node-vEdge-51")).toBeVisible({ timeout: FIRST_PAINT });
+  await settled(page, "rf__node-site:" + key("50"));
+  const b = await box(page, "rf__node-site:" + key("50"));
+  await page.mouse.move(b.x + b.w / 2, b.y + b.h / 2);
+  for (let i = 0; i < 40 && Math.abs((await zoomOf(page)) - 1) > 0.03; i++) {
+    await page.mouse.wheel(0, (await zoomOf(page)) < 1 ? -60 : 60);
+    await page.waitForTimeout(100);
+  }
+  let checked = 0;
+  for (const id of Object.keys(SITES)) {
+    const label = page.getByTestId("rf__node-" + id).getByText(id, { exact: true });
+    if ((await label.count()) === 0 || !(await label.isVisible())) continue;
+    // Clipped text overflows its own box: scrollWidth > clientWidth.
+    const clipped = await label.evaluate((el) => el.scrollWidth > el.clientWidth + 0.5);
+    expect(clipped, id + "'s hostname is truncated on its card").toBe(false);
+    checked++;
+  }
+  // Site 50's two edges sit under the cursor at 100 %: at least those are read.
+  expect(checked, "hostnames checked at 100 %").toBeGreaterThanOrEqual(2);
+});
