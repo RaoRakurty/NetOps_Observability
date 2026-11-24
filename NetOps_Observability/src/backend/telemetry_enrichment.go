@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"netops/backend/internal/cloudtenant"
 	"netops/backend/internal/credfile"
 	"netops/backend/internal/credfp"
 	"netops/backend/internal/credscrub"
@@ -405,6 +406,15 @@ func (s *server) writeTenantEnrichmentOnce(dir string) bool {
 		ifAddr = m // no sharing channel configured: no interface rows, truthfully
 	}
 	rows := s.enrichmentRowsForIdentity(devices, ifAddr)
+	// Tracker 392: the cloud lane's registry rows (cloud:<resource_id> → the
+	// tenant the inventory was stamped with). An unreadable cloud inventory
+	// keeps the previous file, like every hold above: a file without the cloud
+	// rows would make every cloud series unattributable for a tick and back.
+	cloudRows, held := s.cloudRegistryRows()
+	if held {
+		return false
+	}
+	rows = mergeCloudRegistryRows(rows, cloudRows)
 	changed, err := writeEnrichmentCSV(dir, rows)
 	if err != nil {
 		log.Printf("tenant-enrichment: write %s: %v", dir, err)
@@ -416,6 +426,58 @@ func (s *server) writeTenantEnrichmentOnce(dir string) bool {
 		log.Printf("tenant-enrichment: wrote %d identity rows to %s/%s (changed — vector tiers will reload)", len(rows), dir, enrichmentFileName)
 	}
 	return changed
+}
+
+// cloudRegistryRows reads the WHOLE cross-tenant cloud inventory (bounded by
+// cloud.ListHardCap) and returns its registry rows (internal/cloudtenant). It
+// returns held=true when the inventory cannot be read, so the caller keeps the
+// previous file. No cloud store (file backend, dev builds) is no cloud rows.
+func (s *server) cloudRegistryRows() (rows []enrichmentRow, held bool) {
+	if s.cloud == nil {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := s.cloud.ListResources(ctx, "", true)
+	if err != nil {
+		log.Printf("tenant-enrichment: cloud inventory unread (%v) — device_tenant.csv left as it stands (the cloud lane's tenants come only from it, tracker 392)", err)
+		return nil, true
+	}
+	in := make([]cloudtenant.Resource, 0, len(res))
+	for _, r := range res {
+		in = append(in, cloudtenant.Resource{ResourceID: r.ResourceID, TenantID: r.TenantID})
+	}
+	crows, st := cloudtenant.Rows(in)
+	if st.Ambiguous > 0 || st.Blank > 0 {
+		log.Printf("tenant-enrichment: cloud registry: %d rows, %d resource ids listed under more than one tenant (omitted — a miss on the cloud lane is refused), %d inventory rows without a resource id", st.Rows, st.Ambiguous, st.Blank)
+	}
+	rows = make([]enrichmentRow, 0, len(crows))
+	for _, cr := range crows {
+		rows = append(rows, enrichmentRow{Identity: cr.Identity, Tenant: cr.Tenant})
+	}
+	return rows, false
+}
+
+// mergeCloudRegistryRows adds the cloud rows to the device rows. A DEVICE row
+// whose identity lies in the reserved cloud namespace is dropped first (logged):
+// a tenant could otherwise name a device "cloud:<another tenant's resource id>"
+// and make that resource's key ambiguous, or claim it outright.
+func mergeCloudRegistryRows(deviceRows, cloudRows []enrichmentRow) []enrichmentRow {
+	out := make([]enrichmentRow, 0, len(deviceRows)+len(cloudRows))
+	dropped := 0
+	for _, r := range deviceRows {
+		if cloudtenant.IsReserved(r.Identity) {
+			dropped++
+			continue
+		}
+		out = append(out, r)
+	}
+	if dropped > 0 {
+		log.Printf("tenant-enrichment: %d device identities use the reserved %q namespace — omitted (a device can never claim a cloud resource's registry key)", dropped, cloudtenant.Prefix)
+	}
+	out = append(out, cloudRows...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Identity < out[j].Identity })
+	return out
 }
 
 // enrichmentRowsFor builds the export from the server's stores. Each device's site

@@ -4,6 +4,7 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"netops/backend/internal/logredact"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -84,15 +86,23 @@ import (
 // integration's tenant_id but a device label that need not be an inventory id
 // (an unresolved system-ip), so excluding by device id alone let a restricted
 // tenant's unresolved controller series into the Global view.
-func metricsExcludeFilters(ids, names, tenants []string) []string {
+//
+// cloud (tracker 392) is the restricted tenants' cloud inventory: a cloud-lane
+// series carries `resource_id`, and its `device` is the resource NAME (no
+// inventory device id) while its tenant_id may predate attribution, so neither
+// clause above is proof it is hidden. cloud.ids excludes those resource ids;
+// cloud.all (the inventory was unreadable or too large to express) excludes
+// EVERY cloud-lane series from the view instead — fail-closed, never shown.
+func metricsExcludeFilters(ids, names, tenants []string, cloud cloudExclusion) []string {
 	idRe, nameRe := regexAlternation(ids), regexAlternation(names)
 	tenantRe := regexAlternation(normalizedTenants(tenants))
-	if idRe == "" && nameRe == "" && tenantRe == "" {
+	cloudClause := cloud.clause()
+	if idRe == "" && nameRe == "" && tenantRe == "" && cloudClause == "" {
 		return nil
 	}
-	tenantClause := ""
+	tenantClause := cloudClause
 	if tenantRe != "" {
-		tenantClause = `,tenant_id!~"(?i)(` + tenantRe + `)"`
+		tenantClause = `,tenant_id!~"(?i)(` + tenantRe + `)"` + cloudClause
 	}
 	labelled := `{device!=""`
 	if idRe != "" {
@@ -103,6 +113,64 @@ func metricsExcludeFilters(ids, names, tenants []string) []string {
 		unlabelled += `,hostname!~"` + nameRe + `",source!~"` + nameRe + `"`
 	}
 	return []string{labelled + tenantClause + "}", unlabelled + tenantClause + "}"}
+}
+
+// cloudExclusion is the cloud-lane half of the restricted Global view (tracker
+// 392). The zero value excludes nothing.
+type cloudExclusion struct {
+	ids []string // restricted tenants' cloud resource ids
+	all bool     // exclude every cloud-lane series (inventory unread / too large)
+}
+
+// maxCloudExclusionIDs bounds the resource ids one query names: the filter
+// rides the VictoriaMetrics query string. Past it the view fails closed (all).
+const maxCloudExclusionIDs = 2000
+
+// clause renders the matcher appended to both partitions. A device-lane series
+// has no resource_id label, which reads as "" — so `resource_id!~…` keeps it and
+// `resource_id=""` keeps ONLY device-lane series.
+func (c cloudExclusion) clause() string {
+	if c.all {
+		return `,resource_id=""`
+	}
+	if re := regexAlternation(c.ids); re != "" {
+		return `,resource_id!~"` + re + `"`
+	}
+	return ""
+}
+
+// restrictedCloudExclusion reads the restricted tenants' cloud inventories, each
+// at its OWN tenant (non-cross), for the platform owner's Global view. It is
+// only called on that path, so no other lane and no other caller pays the read.
+func (s *server) restrictedCloudExclusion(restricted []string) cloudExclusion {
+	if s.cloud == nil || len(restricted) == 0 {
+		return cloudExclusion{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	seen := map[string]bool{}
+	var ids []string
+	for _, t := range restricted {
+		res, err := s.cloud.ListResources(ctx, t, false)
+		if err != nil {
+			logWarn("metrics", "restricted tenant's cloud inventory unread — every cloud-lane series is hidden from the Global view this request (fail-closed, tracker 392)",
+				map[string]any{"error": err.Error()})
+			return cloudExclusion{all: true}
+		}
+		for _, r := range res {
+			if r.ResourceID != "" && !seen[r.ResourceID] {
+				seen[r.ResourceID] = true
+				ids = append(ids, r.ResourceID)
+			}
+		}
+		if len(ids) > maxCloudExclusionIDs {
+			logWarn("metrics", "restricted tenants list more cloud resources than one query can name — every cloud-lane series is hidden from the Global view (fail-closed, tracker 392)",
+				map[string]any{"resources": len(ids), "cap": maxCloudExclusionIDs})
+			return cloudExclusion{all: true}
+		}
+	}
+	sort.Strings(ids)
+	return cloudExclusion{ids: ids}
 }
 
 // normalizedTenants lower-cases and trims tenant ids, dropping empties: the
@@ -181,7 +249,7 @@ func (s *server) metricsScopeFiltersFor(c jwtClaims) []string {
 		tenant, _ := principalTenant(c)
 		return metricsTenantScoped(metricsScopeFilters(ids, names, cross), tenant)
 	case len(rt.ids) > 0 || len(rt.names) > 0 || len(rt.tenants) > 0:
-		if f := metricsExcludeFilters(rt.ids, rt.names, rt.tenants); len(f) > 0 {
+		if f := metricsExcludeFilters(rt.ids, rt.names, rt.tenants, s.restrictedCloudExclusion(rt.tenants)); len(f) > 0 {
 			return f
 		}
 	}

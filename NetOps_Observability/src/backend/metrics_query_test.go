@@ -214,7 +214,7 @@ func admitted(filters []string, series map[string]string) bool {
 // series is not hidden because its constant `source` equals a restricted
 // device's name.
 func TestMetricsExcludeFiltersPartitionByDeviceLabel(t *testing.T) {
-	f := metricsExcludeFilters([]string{"acme-core"}, []string{"derived"}, nil)
+	f := metricsExcludeFilters([]string{"acme-core"}, []string{"derived"}, nil, cloudExclusion{})
 	restricted := map[string]string{"__name__": "device_cpu_percent", "device": "acme-core"}
 	restrictedByName := map[string]string{"__name__": "cpu_usage", "hostname": "derived"}
 	other := map[string]string{"__name__": "device_mem_percent", "device": "globex-core", "source": "derived"}
