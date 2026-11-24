@@ -150,6 +150,7 @@ and thereby certified the blind scope as healthy.
 | Aspect | Status | Enforced by |
 |---|---|---|
 | DB-layer row policies exist and fail closed | ✅ | Verified live: `cloud_costs` 0 → 1 policy, 15 → 18 total (F-50) |
+| A pooled Postgres connection outside `WithTenant` reads NO tenant_iso row and writes none — including after it served a `WithTenant` transaction (it no longer falls back to the blank tenant, so installation/platform rows stay out of a forgotten-scope query); explicit scopes (`""`, a tenant, `*`) are unchanged | ✅ | **PG** — `TestPooledConnectionAfterWithTenantReadsNoRows`, `TestRolledBackWithTenantRevertsToTheSentinel`, `TestExplicitScopesStillReachTheirRows` (`internal/platformdb/rls_pooled_pg_test.go`): every pool connection starts with `app.tenant_id = platformdb.UnscopedTenant` (forced, not DSN-overridable — `TestDSNCannotOverrideTheUnscopedSentinel`); tracker 312, 2026-11-23 |
 | Every feature ships an isolation test | ✅ | **BUILD** — `TestEveryScopedRouteHasIsolationCoverage`: a new scoped route needs a real isolation test or fails the build (§3a rule 5). 82 pre-existing routes baselined, set shrinks only |
 | One tenant's failed write cannot destroy another's data | ✅ | **BUILD** — `TestAITenantConfigFailedSaveDoesNotDestroyOtherTenants` (F-64) |
 | GraphQL enforces the same RBAC as REST | ✅ | **BUILD** — `TestGraphQLEnforcesTheSameRBACGateAsREST` (was an auth bypass) |
