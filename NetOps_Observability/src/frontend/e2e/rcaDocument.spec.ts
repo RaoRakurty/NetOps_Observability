@@ -300,6 +300,21 @@ test("the RCA view holds at phone width with no horizontal page scroll", async (
   await shot(page, "rca-view-p424934-phone");
 });
 
+// P-3E0400's timeline carries "Promoted to RCA case by u_223a…": one long
+// unbreakable actor id that widened the page by 54px at 390px until the event
+// text was allowed to shrink and wrap inside its row.
+for (const theme of ["light", "dark"] as const) {
+  test(`P-3E0400's timeline holds at phone width with no horizontal page scroll (${theme})`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await openP3(page, theme);
+    const text = page.locator(".rw-event-text", { hasText: "Promoted to RCA case by" }).first();
+    await expect(text).toBeVisible();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+    expect(await text.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(14);
+  });
+}
+
 // ── P-7EE84E: the causal topology is clean on screen, not only in the PDF ─────
 // The lab-shaped context (2 faulted edges, 14 neighbours) from the Go twin's
 // parity golden is drawn in the real RCA view: no two nodes' text overlaps,

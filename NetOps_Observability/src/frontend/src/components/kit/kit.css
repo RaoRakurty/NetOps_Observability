@@ -1,0 +1,125 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 Correlix */
+
+/* The shared visual-language kit (docs/design/visual-language.md, phase 2).
+   Every colour here is a theme token — the semantic --ok / --warn / --crit /
+   --info, the one --accent, and the neutrals — so each theme (light, dark,
+   oled, indigo, graphite) restyles the kit without a rule of its own.
+   kit.test.tsx refuses a literal colour in this file. */
+
+/* ── StatusChip: icon + word + semantic colour, never colour alone ───────── */
+.kit-status {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 6px;
+  font-size: 13px; font-weight: 600; line-height: 1.35; white-space: nowrap;
+  --kit-tone: var(--fg-muted, var(--muted));
+  color: color-mix(in srgb, var(--kit-tone) 72%, var(--fg));
+  background: color-mix(in srgb, var(--kit-tone) 14%, transparent);
+}
+.kit-status svg { flex: none; stroke-width: 2.4; }
+.kit-status[data-tone="ok"] { --kit-tone: var(--ok, var(--good)); }
+.kit-status[data-tone="warn"] { --kit-tone: var(--warn); }
+.kit-status[data-tone="bad"] { --kit-tone: var(--crit, var(--bad)); }
+.kit-status[data-tone="info"] { --kit-tone: var(--info); }
+.kit-status[data-tone="neutral"] {
+  color: var(--fg-muted, var(--muted));
+  background: color-mix(in srgb, var(--fg-muted, var(--muted)) 10%, transparent);
+}
+
+/* ── PageHeader: icon tile + title + count + actions ────────────────────── */
+.kit-ph {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 12px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--border, var(--panel-border));
+}
+.kit-ph-tile {
+  width: 32px; height: 32px; flex: none; display: grid; place-items: center;
+  border: 1px solid var(--border, var(--panel-border)); border-radius: 8px;
+  color: var(--fg-muted, var(--muted)); background: var(--surface, var(--panel));
+}
+.kit-ph-title { font-size: 17px; font-weight: 600; margin: 0; color: var(--fg); }
+.kit-ph-count {
+  font-size: 12.5px; font-weight: 600; line-height: 1.5; padding: 0 7px; border-radius: 6px;
+  color: var(--fg-muted, var(--muted));
+  background: color-mix(in srgb, var(--fg-muted, var(--muted)) 12%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.kit-ph-sub { flex-basis: 100%; margin: -2px 0 0 42px; color: var(--fg-muted, var(--muted)); font-size: 14px; }
+.kit-ph-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── Outlined button (row actions, header actions) ──────────────────────── */
+.kit-obtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 11px; border-radius: 8px;
+  border: 1px solid var(--border, var(--panel-border));
+  background: var(--surface, var(--panel)); color: var(--fg);
+  font: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+}
+.kit-obtn:hover { background: var(--hover); }
+.kit-obtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kit-obtn.kit-icon-only { width: 32px; padding: 0; justify-content: center; }
+.kit-obtn svg { color: var(--fg-muted, var(--muted)); }
+
+/* ── Dropdowns: a native <select> dressed as a pill or a full-width row ─── */
+.kit-select {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  color: var(--fg); font-size: 14px;
+}
+.kit-select > svg { flex: none; color: var(--fg-muted, var(--muted)); pointer-events: none; }
+.kit-select select {
+  appearance: none; -webkit-appearance: none; border: 0; background: transparent;
+  color: inherit; font: inherit; cursor: pointer; padding: 0 18px 0 0; margin: 0; min-width: 0;
+}
+.kit-select select:focus-visible { outline: none; }
+.kit-select .kit-chev { position: absolute; right: 9px; pointer-events: none; color: var(--fg-subtle, var(--muted)); }
+.kit-select:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Compact pill — "Health ⌄", "Site ⌄". Neutral, never coloured. */
+.kit-pill {
+  height: 32px; padding: 0 9px; border-radius: 8px;
+  border: 1px solid var(--border, var(--panel-border)); background: var(--surface, var(--panel));
+}
+.kit-pill .kit-lead { color: var(--fg-muted, var(--muted)); }
+/* Full-width selector — "All sites ⌄". Borderless until hovered. */
+.kit-field {
+  display: flex; width: 100%; height: 34px; padding: 0 8px; border-radius: 8px;
+  border: 1px solid transparent;
+}
+.kit-field select { flex: 1; }
+.kit-field:hover { border-color: var(--border, var(--panel-border)); }
+.kit-sortlabel { display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted, var(--muted)); font-size: 14px; }
+
+/* ── FilterSection: collapsible group, LEFT chevron, right-aligned counts ── */
+.kit-fs { display: flex; flex-direction: column; }
+.kit-fs + .kit-fs { margin-top: 10px; }
+.kit-fs-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 4px 0; border: 0; background: none; cursor: pointer;
+  color: var(--fg); font: inherit; font-size: 14px; font-weight: 600; text-align: left;
+}
+.kit-fs-head svg { color: var(--fg-subtle, var(--muted)); transition: transform 0.12s; }
+.kit-fs-head[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.kit-fs-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.kit-fs-action {
+  margin-left: auto; border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-size: 14px; font-weight: 500;
+}
+.kit-fs-row {
+  display: flex; align-items: center; gap: 9px; padding: 4px 0 4px 20px;
+  color: var(--fg); font-size: 14px; cursor: pointer;
+}
+.kit-fs-row input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; flex: none; }
+.kit-fs-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kit-fs-count { margin-left: auto; color: var(--fg-muted, var(--muted)); font-variant-numeric: tabular-nums; }
+
+/* ── Table cell helpers: hostname + address, neutral attribute with icon ── */
+.kit-host { display: inline-flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.kit-host-name { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.kit-host-addr { font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; color: var(--fg-muted, var(--muted)); }
+.kit-attr { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); min-width: 0; }
+.kit-attr > svg { flex: none; color: var(--fg-muted, var(--muted)); }
+.kit-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
+.kit-muted { color: var(--fg-muted, var(--muted)); }
+
+/* ── Toolbar row: dropdowns left, search right ──────────────────────────── */
+.kit-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 11px; }
+.kit-toolbar-end { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

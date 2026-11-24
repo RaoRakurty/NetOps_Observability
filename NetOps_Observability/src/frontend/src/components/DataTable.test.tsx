@@ -9,9 +9,55 @@
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
-import DataTable from "./DataTable";
+import DataTable, { columnTrack, columnMinPx, trackMinPx } from "./DataTable";
 
 afterEach(cleanup);
+
+// No column collapses to nothing (visual language phase 2): #408 found the
+// Incidents title column at 0px with the menu open at 1280px, because a column
+// without a width got `minmax(0,1fr)`. Every flexible track now has a floor.
+describe("no column collapses to zero width", () => {
+  it("gives every flexible track a header-based floor", () => {
+    expect(columnTrack({ header: "Device" })).toBe(`minmax(${columnMinPx({ header: "Device" })}px,1fr)`);
+    expect(columnTrack({ header: "Site", width: "14%" })).toBe("minmax(80px,14%)");
+    expect(columnTrack({ header: "Title", width: "2fr" })).toBe("minmax(80px,2fr)");
+  });
+
+  it("leaves fixed, explicit and dragged widths alone", () => {
+    expect(columnTrack({ header: "IP", width: 156 })).toBe("156px");
+    expect(columnTrack({ header: "X", width: "minmax(240px,1fr)" })).toBe("minmax(240px,1fr)");
+    expect(columnTrack({ header: "X", width: "12rem" })).toBe("12rem");
+    expect(columnTrack({ header: "Device" }, 300)).toBe("300px");
+  });
+
+  it("sizes the floor from the header text, never under 80px", () => {
+    expect(columnMinPx({ header: "IP" })).toBe(80);
+    expect(columnMinPx({ header: "Configuration backup" })).toBe(Math.ceil(20 * 8 + 34));
+    expect(columnMinPx({ header: <span>icon</span> })).toBe(96);
+  });
+
+  it("reads the declared floor of an explicit minmax track", () => {
+    expect(trackMinPx({ header: "Device", width: "minmax(190px,1.6fr)" })).toBe(190);
+    expect(trackMinPx({ header: "IP", width: 156 })).toBe(156);
+    expect(trackMinPx({ header: "Site", width: "14%" })).toBe(80);
+  });
+
+  it("puts the summed floor on the header row, so a narrow table scrolls instead", () => {
+    const { container } = render(
+      <DataTable<{ name: string; n: number }>
+        rows={[{ name: "a", n: 1 }]}
+        rowKey={(r) => r.name}
+        columns={[
+          { key: "name", header: "Name", text: (r) => r.name, render: (r) => r.name },
+          { key: "n", header: "N", width: 60, render: (r) => r.n },
+        ]}
+      />,
+    );
+    const head = container.querySelector(".dtv-head") as HTMLElement;
+    expect(head.style.gridTemplateColumns).toBe("minmax(80px,1fr) 60px");
+    expect(head.style.minWidth).toBe("140px");
+  });
+});
 
 interface Row { name: string; n: number }
 const rows: Row[] = [

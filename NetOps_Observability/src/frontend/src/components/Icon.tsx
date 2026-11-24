@@ -832,6 +832,48 @@ const PATHS: Record<string, JSX.Element> = {
       <path d="M2 19h20" />
     </>
   ),
+  // ── Visual language, phase 2 (2026-11-24): the status-chip and toolbar glyphs.
+  // Status chip "bad" (down / deny / critical): a circle struck through.
+  ban: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="m4.9 4.9 14.2 14.2" />
+    </>
+  ),
+  // Status chip "warn" (degraded / warning / suspected): a circled "!".
+  "alert-circle": (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </>
+  ),
+  // Status chip "neutral": a plain ring (a state with no judgement attached).
+  circle: <circle cx="12" cy="12" r="9" />,
+  // Last seen / ages.
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </>
+  ),
+  // Sort control ("Sort by ⇅").
+  "arrow-up-down": (
+    <>
+      <path d="m21 16-4 4-4-4" />
+      <path d="M17 20V4" />
+      <path d="m3 8 4-4 4 4" />
+      <path d="M7 4v16" />
+    </>
+  ),
+  // Vendor / model (a product box).
+  package: (
+    <>
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+      <path d="m3.3 7 8.7 5 8.7-5" />
+      <path d="M12 22V12" />
+    </>
+  ),
 };
 
 /** True when `name` is a glyph in this set (an unknown name renders the
