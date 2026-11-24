@@ -4009,10 +4009,54 @@ func srcAuthorityTenant(dev models.Device, tenant string, cross bool) string {
 // union-find is tenant-partitioned, but a record the caller may not see must
 // never contribute a value to its answer).
 func (s *server) deviceFactsFor(ctx context.Context, dev models.Device, tenant string, cross bool) deviceFacts {
+	return s.newDeviceFactsResolver(ctx, tenant, cross, true).facts(dev)
+}
+
+// deviceFactsResolver is the ONE place a device's descriptive facts are
+// resolved — for Iris (deviceFactsFor) and for every inventory read
+// (stampDeviceReadFields, tracker 389), so the device page and Iris cannot
+// disagree. It reads each owning tenant's source order once per request.
+type deviceFactsResolver struct {
+	s       *server
+	ctx     context.Context
+	tenant  string
+	cross   bool
+	observe bool // count resolutions in the Iris metrics (Iris answers only)
+	orders  map[string]deviceFacts
+}
+
+func (s *server) newDeviceFactsResolver(ctx context.Context, tenant string, cross bool, observe bool) *deviceFactsResolver {
+	return &deviceFactsResolver{s: s, ctx: ctx, tenant: tenant, cross: cross, observe: observe, orders: map[string]deviceFacts{}}
+}
+
+// order is the applicable source order for the workspace that owns a device,
+// read once per request (a failed read is the platform default, said once).
+func (r *deviceFactsResolver) order(owner string) deviceFacts {
+	if o, ok := r.orders[owner]; ok {
+		return o
+	}
+	rctx, cancel := context.WithTimeout(r.ctx, 3*time.Second)
+	defer cancel()
+	order, customized, err := srcauthority.Effective(rctx, r.s.srcAuthority, owner)
+	out := deviceFacts{Order: order, Customized: customized}
+	if err != nil {
+		out.PolicyFailed = true
+		r.s.srcAuthorityMetrics.PolicyError()
+		logError("iris.source_authority", "the workspace's source order could not be read; using the platform default", errf(err))
+	}
+	r.orders[owner] = out
+	return out
+}
+
+// facts resolves dev from every per-source record merged into it. Each record
+// is re-checked against the caller (zero trust: the union-find is tenant-
+// partitioned, but a record the caller may not see must never contribute a
+// value to its answer).
+func (r *deviceFactsResolver) facts(dev models.Device) deviceFacts {
 	var records []models.Device
-	if s.discovery != nil {
-		for _, rec := range s.discovery.Constituents(dev.ID) {
-			if canSeeDevice(rec, tenant, cross) {
+	if r.s.discovery != nil {
+		for _, rec := range r.s.discovery.Constituents(dev.ID) {
+			if canSeeDevice(rec, r.tenant, r.cross) {
 				records = append(records, rec)
 			}
 		}
@@ -4020,18 +4064,12 @@ func (s *server) deviceFactsFor(ctx context.Context, dev models.Device, tenant s
 	if len(records) == 0 {
 		records = []models.Device{dev} // a device served without a raw record: its own row is its one source
 	}
-	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	order, customized, err := srcauthority.Effective(rctx, s.srcAuthority, srcAuthorityTenant(dev, tenant, cross))
-	out := deviceFacts{Order: order, Customized: customized}
-	if err != nil {
-		out.PolicyFailed = true
-		s.srcAuthorityMetrics.PolicyError()
-		logError("iris.source_authority", "the workspace's source order could not be read; using the platform default", errf(err))
-	}
-	out.Resolutions = srcauthority.ResolveDevice(order, records)
-	for _, r := range out.Resolutions {
-		s.srcAuthorityMetrics.Observe(r)
+	out := r.order(srcAuthorityTenant(dev, r.tenant, r.cross))
+	out.Resolutions = srcauthority.ResolveDevice(out.Order, records)
+	if r.observe {
+		for _, res := range out.Resolutions {
+			r.s.srcAuthorityMetrics.Observe(res)
+		}
 	}
 	return out
 }

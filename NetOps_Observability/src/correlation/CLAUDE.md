@@ -134,6 +134,18 @@ event states nothing. EOS and SR OS syslog and the Viptela interface trap carry 
 - Tenant check: `verified_tenant` (M:660) refuses a claim that contradicts the registry;
   "" becomes "global". On the registry-anchored lanes (syslog, snmptrap, flows) an
   identity the registry does not know is refused (`identity_unattributable`).
+  **Cloud metrics (tracker 392, 2026-11-24):** a `signal_family: cloud_resource`
+  sample's `device` is the resource NAME, which any tenant can give a device, so its
+  identity is `cloud:<index>` (the provider resource id; `main.CLOUD_IDENTITY_PREFIX`)
+  and the lane is registry-anchored: a resource the cloud inventory does not list (or
+  two tenants list) is refused, never "global". The api writes those rows from the cloud
+  inventory into the same registry file (`internal/cloudtenant`; a device identity can
+  never enter the namespace), and the aggregator stamps by the same key and keeps a miss
+  out of VictoriaMetrics. A cloud key attributes from EXACTLY one row in both readers
+  (aggregator `length(crows) == 1`; `_tenant_registry` treats any repeated `cloud:` row as
+  a miss, even under one tenant) — defence in depth, the writer never repeats one. Every
+  other metric is unchanged (unanchored, by `device`).
+  Stage [1] admission only: no template, gate or constant moved.
   The registry (`device_tenant.csv`, `telemetry_enrichment.go`) has one row per
   inventory device **id**, **name** and **address**. `identity` and `tenant_id` are the
   first two columns and are read by position; the inventory facts after them

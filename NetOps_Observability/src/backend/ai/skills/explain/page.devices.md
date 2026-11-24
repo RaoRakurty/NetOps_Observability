@@ -10,3 +10,6 @@ any past it are marked over the limit and a banner says how many. Health here
 comes from the device's own heartbeat combined with its correlated alerts, and
 each row opens the device's full detail — interfaces, neighbours,
 configuration and telemetry.
+When sources report different vendor, model, version or serial values, the
+page shows the one your source order picks (the same Iris uses) with a grey
+i beside it that names the sources.

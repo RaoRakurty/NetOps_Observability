@@ -159,6 +159,31 @@ type Device struct {
 	// 2026-10-18) — this is shown beside it, not instead of it.
 	ReportedSiteID     string `json:"reported_site_id,omitempty"`
 	ReportedSiteSource string `json:"reported_site_source,omitempty"`
+	// SourceDisagreements lists the descriptive facts (vendor, model, software
+	// version, serial) whose per-source records disagree. Vendor, Model,
+	// SerialNumber and SoftwareVersion on a read carry the value that wins
+	// under the tenant's source order — the same rule (srcauthority) and the
+	// same sentence Iris states, so the device page and Iris never differ
+	// (tracker 389). Server-stamped on read, never persisted, never input.
+	SourceDisagreements []FactDisagreement `json:"source_disagreements,omitempty"`
+}
+
+// FactDisagreement is one fact the device's sources disagree on: the winning
+// value and source, every other source's value, and the plain sentence Iris
+// would state about it. Values are cleaned for display (srcauthority.Clean).
+type FactDisagreement struct {
+	Fact   string      `json:"fact"`   // vendor | model | software_version | serial
+	Label  string      `json:"label"`  // operator wording: "software version"
+	Value  string      `json:"value"`  // the value shown (the winner)
+	Source string      `json:"source"` // the winner's source, in words
+	Others []FactClaim `json:"others"`
+	Text   string      `json:"text"` // the full sentence, as Iris states it
+}
+
+// FactClaim is what one losing source reported.
+type FactClaim struct {
+	Value  string `json:"value"`
+	Source string `json:"source"`
 }
 
 // Metric is a single time-series sample emitted by a collector.

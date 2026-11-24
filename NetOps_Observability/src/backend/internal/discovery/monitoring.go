@@ -193,6 +193,7 @@ func clearMonitoring(d models.Device) models.Device {
 	// operator-written record never carries one, whatever the body said.
 	d.DiscoveryStale = false
 	d.ReportedSiteID, d.ReportedSiteSource = "", ""
+	d.SourceDisagreements = nil // stamped on read from the source order (tracker 389)
 	return d
 }
 

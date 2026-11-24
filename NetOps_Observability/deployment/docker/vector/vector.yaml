@@ -2564,6 +2564,20 @@ transforms:
   # Metric events: the Go collector already canonicalized them (typed code), so
   # this is minimal — tag the signal and stamp the tenant from the device id, the
   # same enrichment every other plane uses. No regex/parse chain here.
+  #
+  # Tracker 392: a CLOUD sample (signal_family "cloud_resource", from the
+  # cloud-ingest pollers) never takes its tenant from the DEVICE registry. Its
+  # `device` is the resource NAME, so a device another tenant named the same
+  # stamped this tenant's cloud series as theirs — in netops.metrics, in
+  # VictoriaMetrics and as RCA evidence. The cloud lane looks up ONLY
+  # `cloud:<resource_id>` (the api writes those rows from the cloud inventory,
+  # whose tenant comes from the owning connector, internal/cloudtenant), keyed
+  # by the sample's `index` (the provider's resource id). A miss — the resource
+  # is in no inventory yet, or two tenants list it — is UNATTRIBUTABLE:
+  # `__cloud_registry` = "miss" keeps it out of VictoriaMetrics
+  # (cloud_metrics_only) and the engine refuses it on the bus
+  # (registry-anchored). It is never defaulted to the platform tenant.
+  # `__cloud_registry` is transient: the netops.metrics sink drops it.
   metrics_normalized:
     type: remap
     inputs: [metrics_in]
@@ -2571,7 +2585,20 @@ transforms:
       .signal = "metric"
       dev = string(.device) ?? ""
       .tenant_id = ""
-      if dev != "" {
+      if (string(.signal_family) ?? "") == "cloud_resource" {
+        .__cloud_registry = "miss"
+        rid = string(.index) ?? ""
+        if rid != "" {
+          crows = find_enrichment_table_records("device_tenant", { "identity": "cloud:" + rid }, select: ["tenant_id"]) ?? []
+          # Exactly ONE row attributes. The writer never emits two (an id two
+          # tenants list is omitted), so two or more means the file was not
+          # written by it — stay "miss" (unattributable), never first-row-wins.
+          if length(crows) == 1 {
+            .tenant_id = to_string(crows[0].tenant_id) ?? ""
+            .__cloud_registry = "hit"
+          }
+        }
+      } else if dev != "" {
         # select: this is the hottest lane, and it reads only the tenant, so it does
         # not pay to copy the inventory facts for every sample (387 PR 12).
         trows = find_enrichment_table_records("device_tenant", { "identity": dev }, select: ["tenant_id"]) ?? []
@@ -2590,7 +2617,9 @@ transforms:
   cloud_metrics_only:
     type: filter
     inputs: [metrics_normalized]
-    condition: '.signal_family == "cloud_resource"'
+    # Tracker 392: only an ATTRIBUTED cloud sample reaches VictoriaMetrics — an
+    # unattributable one would land under tenant_id "" (platform-visible).
+    condition: '.signal_family == "cloud_resource" && .__cloud_registry == "hit"'
 
   cloud_metrics_vm:
     type: log_to_metric
@@ -3360,7 +3389,9 @@ sinks:
       partitioner: "murmur2_random"
     encoding:
       codec: json
-      except_fields: ["__key"]
+      # __cloud_registry (tracker 392) is a transient routing marker; the
+      # engine re-derives attribution from the registry itself.
+      except_fields: ["__key", "__cloud_registry"]
     compression: snappy
 
   # Bus-bridge events land on whatever netops.* topic their envelope named

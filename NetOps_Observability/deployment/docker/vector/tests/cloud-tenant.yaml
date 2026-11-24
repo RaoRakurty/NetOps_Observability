@@ -1,0 +1,159 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# cloud-tenant.yaml: the cloud metric lane's tenant on the shipped transforms
+# (tracker 392). Run by tests/test_cloud_tenant_vector.py against the fixture
+# table tests/fixtures/device_tenant.csv, where tenant t_b owns a DEVICE named
+# `web-1` and `web-1` is also the NAME of tenant t_a's cloud resource `i-a`
+# (registry row `cloud:i-a,t_a`). A cloud sample is attributed ONLY by
+# `cloud:<index>`; a miss never reaches VictoriaMetrics.
+
+tests:
+  - name: "a cloud sample belongs to the resource owner, not the device that shares its name"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "cloud_provider"
+          collection_path: "cloudwatch_api"
+          device: "web-1"
+          vendor: "aws"
+          index: "i-a"
+          signal_family: "cloud_resource"
+          metric: "cloud_cpu_utilization"
+          value: 97.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: metrics_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "t_a")
+              assert_eq!(.__cloud_registry, "hit")
+              assert_eq!(.__key, "t_a")
+      - extract_from: cloud_metrics_only
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "t_a")
+
+  - name: "a cloud resource in no inventory is unattributable and never reaches VictoriaMetrics"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "cloud_provider"
+          collection_path: "cloudwatch_api"
+          device: "web-1"
+          vendor: "aws"
+          index: "i-unknown"
+          signal_family: "cloud_resource"
+          metric: "cloud_cpu_utilization"
+          value: 97.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: metrics_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "")
+              assert_eq!(.__cloud_registry, "miss")
+    no_outputs_from:
+      - cloud_metrics_only
+
+  - name: "a cloud id listed under two tenants is unattributable and never reaches VictoriaMetrics"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "cloud_provider"
+          collection_path: "cloudwatch_api"
+          device: "dup-1"
+          vendor: "aws"
+          index: "i-dup"
+          signal_family: "cloud_resource"
+          metric: "cloud_cpu_utilization"
+          value: 97.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: metrics_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "")
+              assert_eq!(.__cloud_registry, "miss")
+    no_outputs_from:
+      - cloud_metrics_only
+
+  - name: "a cloud id listed twice — even under one tenant — attributes nothing (exactly one row attributes)"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "cloud_provider"
+          collection_path: "cloudwatch_api"
+          device: "twice-1"
+          vendor: "aws"
+          index: "i-twice"
+          signal_family: "cloud_resource"
+          metric: "cloud_cpu_utilization"
+          value: 97.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: metrics_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "")
+              assert_eq!(.__cloud_registry, "miss")
+    no_outputs_from:
+      - cloud_metrics_only
+
+  - name: "a platform-owned cloud resource is attributed to the platform and still reaches VictoriaMetrics"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "cloud_provider"
+          collection_path: "cloudwatch_api"
+          device: "db-1"
+          vendor: "aws"
+          index: "i-p"
+          signal_family: "cloud_resource"
+          metric: "cloud_cpu_utilization"
+          value: 41.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: cloud_metrics_only
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "")
+              assert_eq!(.__cloud_registry, "hit")
+
+  - name: "a device metric still resolves through the device registry"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "collector"
+          collection_path: "snmp_poll"
+          device: "web-1"
+          vendor: "cisco"
+          signal_family: "device_resource"
+          metric: "device_cpu_percent"
+          value: 91.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: metrics_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "t_b")
+              assert!(!exists(.__cloud_registry))
