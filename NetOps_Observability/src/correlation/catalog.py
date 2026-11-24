@@ -1048,7 +1048,11 @@ BUILTIN_TEMPLATES: list[dict] = [
             # The L1/L2 state transition AND a same-interface counter anomaly —
             # two planes on one port. (Same-interface co-location is the engine's
             # grounding job; the scorer needs both kinds present.)
-            {"kind": "link_state_change", "entity_type": "interface"},
+            # Owner 2026-11-24 (option B): the link-state change is the ANCHOR —
+            # a counter anomaly alone is generic evidence and must not earn this
+            # template partial coverage (1,184 of 1,186 lab objects in 7 days
+            # headlined "local link fault — suspected 0.5" with no link change).
+            {"kind": "link_state_change", "entity_type": "interface", "anchor": True},
             {"kind": "if_metric_anomaly", "entity_type": "interface"},
         ],
         "required_modalities": ["control_plane", "device_telemetry"],
@@ -1448,7 +1452,9 @@ BUILTIN_TEMPLATES: list[dict] = [
         "seams": ["CARRIER_INTERCONNECT", "CLOUD_APP"],
         "deployment_scope": "hybrid",
         "requires": [
-            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device"},
+            # Anchor (owner 2026-11-24 audit): the template is about the BGP
+            # session going down; probe loss / a route-count drop alone is generic.
+            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device", "anchor": True},
             {"kind": "probe_loss|route_count_drop"},
             {"kind": "cloud_health|cloud_change", "optional": True},
             {"kind": "tunnel_flap", "optional": True},
@@ -2131,7 +2137,9 @@ BUILTIN_TEMPLATES: list[dict] = [
         "seams": ["WAN_SDWAN", "CARRIER_INTERCONNECT"],
         "deployment_scope": "hybrid",
         "requires": [
-            {"kind": "link_state_change", "entity_type": "interface"},
+            # Anchor (owner 2026-11-24 audit): a circuit FLAP is the access link
+            # changing state; probe loss or a BGP drop alone is generic evidence.
+            {"kind": "link_state_change", "entity_type": "interface", "anchor": True},
             {"kind": "probe_loss|bgp_adjacency_change"},
             {"kind": "if_errors|optical_power_low", "optional": True},
         ],
@@ -3635,7 +3643,9 @@ WIRELESS_TEMPLATES: list[dict] = [
         "title": "AP down — power/uplink path (PoE or switch port)",
         "domain": "ent.wireless",
         "requires": [
-            {"kind": "wireless_ap_down", "entity_type": "access_point"},
+            # Anchor (owner 2026-11-24 audit): the AP being down is what the
+            # template is about; a lone switch-port change is a link event.
+            {"kind": "wireless_ap_down", "entity_type": "access_point", "anchor": True},
             # The INDEPENDENT witness: the access switch reports the AP's
             # uplink port down. This is what separates power/cable from an AP
             # software fault — and what lets the verdict confirm at all (B2).

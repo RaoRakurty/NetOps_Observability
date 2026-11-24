@@ -437,7 +437,12 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 #: legitimately moves one of these re-freezes it with its own proof.
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
-STEP0_DIGEST = "0dafd680d13d29fa"
+# Re-frozen 2026-11-24 for the ENGINE_SEMVER 3.7.0 anchors (owner option B): every
+# fixture's TOP is unchanged; only partial runners-up that lacked their new anchor
+# left the list — `lastmile-circuit-flap` with no link change (bgp-peer-flap) and
+# `ap-down-power` with no AP down (lastmile / local-link), letting the next
+# template into the TOP_K slot (test_traffic_judgement_37_anchor.py).
+STEP0_DIGEST = "b589c312c61a649f"
 PINNED_RULE_COUNT = 103  # parser_rules.RULES since tracker 387 wave 2 (Comware PHY_UPDOWN row)
 
 
