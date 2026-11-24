@@ -73,9 +73,13 @@ function toneClass(t: OverlayTone): string {
   return `rtc-tone-${t}`;
 }
 
+// The pictures render no smaller than their 760-unit viewBox (P-7EE84E): text
+// is laid out for 14px, so a narrow column scrolls sideways (.rtc-scroll)
+// instead of shrinking the labels below the NOC type floor.
 function EgoGraph({ ego }: { ego: EgoView }) {
   return (
-    <svg className="rtc-svg" viewBox={`0 0 ${ego.w} ${ego.h}`} role="img"
+    <div className="rtc-scroll" data-testid="topo-ego">
+    <svg className="rtc-svg" viewBox={`0 0 ${ego.w} ${ego.h}`} role="img" style={{ minWidth: ego.w }}
       aria-label="Known topology around the affected devices with fault and causal overlays">
       {ego.edges.map((e) => (
         <g key={e.edge.id} data-edge={e.edge.id}>
@@ -99,6 +103,7 @@ function EgoGraph({ ego }: { ego: EgoView }) {
         </g>
       ))}
     </svg>
+    </div>
   );
 }
 
@@ -106,7 +111,8 @@ function DevicePanel({ p }: { p: DevicePanelView }) {
   const cx = p.dev.x + p.dev.w / 2, cy = p.dev.y + p.dev.h / 2;
   return (
     <>
-      <svg className="rtc-svg" viewBox={`0 0 ${p.w} ${p.h}`} role="img"
+      <div className="rtc-scroll">
+      <svg className="rtc-svg" viewBox={`0 0 ${p.w} ${p.h}`} role="img" style={{ minWidth: p.w }}
         aria-label={`${p.node.label}: its evidence interfaces and the causal marks between them`}>
         {p.connectors.map((c, i) => c.relation
           ? <CausalLine key={i} l={{ x1: c.x1, y1: c.y1, x2: c.x2, y2: c.y2, relation: c.relation, directed: c.directed }} />
@@ -136,6 +142,7 @@ function DevicePanel({ p }: { p: DevicePanelView }) {
           <text x={470} y={cy + 4} className="rtc-svg-meta">No interface carries attached evidence.</text>
         )}
       </svg>
+      </div>
       {(p.morePorts > 0 || p.undirectedPortPairs > 0) && (
         <div className="rtc-fact">
           {p.morePorts > 0 && `${p.morePorts} more interfaces in the table. `}

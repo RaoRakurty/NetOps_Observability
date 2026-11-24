@@ -13,10 +13,13 @@
 --
 -- discovered_devices is FORCE-RLS: without app.tenant_id = '*' a DELETE run as
 -- the application role silently matches nothing. It is set for this session and
--- cleared at the end (a role that bypasses RLS is unaffected either way).
+-- RESET at the end (a role that bypasses RLS is unaffected either way). RESET,
+-- not set_config(..., '', false): on one of the api's pooled connections the
+-- session default is platformdb.UnscopedTenant (tracker 312), and writing ''
+-- at session level would leave that connection reading the blank tenant's rows.
 SELECT set_config('app.tenant_id', '*', false);
 DELETE FROM discovered_devices WHERE source = 'snmp' AND tenant_id <> '';
-SELECT set_config('app.tenant_id', '', false);
+RESET app.tenant_id;
 
 DROP TABLE IF EXISTS discovery_scopes;
 

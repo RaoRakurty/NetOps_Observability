@@ -13,13 +13,13 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { TopologyView, OverlayKind, TopologySelection, Health } from "../../api/topologyTypes";
 import type { LayoutResult } from "../../layout/layoutTypes";
-import { GROUP_PAD, LABEL_BAND } from "../../layout/groupGeometry";
-import { NODE_SIZE } from "../../layout/layoutTypes";
+import { GROUP_PAD, LABEL_BAND, groupMinWidth } from "../../layout/groupGeometry";
+import { NODE_SIZE, nodeWidth } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
 import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT, CLOUD_RESOURCE_NODE_TYPE, GROUP_LABEL_PREFIX } from "./rfTypes";
 import { edgeVariant, hasEvidence, rollupHealth } from "../../utils/topologyHealth";
 import { labelDensityForZoom, tierForZoom } from "../../utils/semanticZoom";
-import { CARD_W, CARD_H } from "./nodes/DeviceNode";
+import { CARD_H } from "./nodes/DeviceNode";
 
 /** Invisible hover/click band around each edge (React Flow default is 20px). */
 const EDGE_INTERACTION_WIDTH = 12;
@@ -111,7 +111,10 @@ type BBox = { minX: number; minY: number; maxX: number; maxY: number; w: number;
  * container whose descendants are all groups, which is how every region box was
  * silently dropped (#134).
  */
-function bboxOf(nodeIds: string[], positions: LayoutResult, groupIds: string[] = []): BBox | null {
+function bboxOf(
+  nodeIds: string[], positions: LayoutResult, groupIds: string[] = [],
+  widthOf: (id: string) => number = () => NODE_SIZE.width,
+): BBox | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   let any = false;
   for (const id of nodeIds) {
@@ -120,7 +123,7 @@ function bboxOf(nodeIds: string[], positions: LayoutResult, groupIds: string[] =
     any = true;
     minX = Math.min(minX, p.x);
     minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x + NODE_SIZE.width);
+    maxX = Math.max(maxX, p.x + widthOf(id));
     maxY = Math.max(maxY, p.y + NODE_SIZE.height);
   }
   for (const id of groupIds) {
@@ -243,6 +246,10 @@ export function topologyToReactFlow(
     return false;
   };
 
+  // Each card's fixed footprint width, from its hostname (layout/layoutTypes).
+  const footprintById = new Map(view.nodes.map((n) => [n.id, nodeWidth(n)] as const));
+  const nodeW = (id: string): number => footprintById.get(id) ?? nodeWidth({});
+
   // ── container rectangles, innermost first ────────────────────────────────────
   // The layout engine's solved rectangle while it has one; otherwise the box is
   // drawn AROUND its members (devices + the rectangles of the containers inside
@@ -263,7 +270,7 @@ export function topologyToReactFlow(
       if (!p) continue;
       minX = Math.min(minX, p.x);
       minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x + NODE_SIZE.width);
+      maxX = Math.max(maxX, p.x + nodeW(id));
       maxY = Math.max(maxY, p.y + NODE_SIZE.height);
     }
     for (const kid of childGroups.get(g.id) ?? []) {
@@ -292,7 +299,7 @@ export function topologyToReactFlow(
     // correctly; only this derivation was flat.
     const desc = descendantsOf(g.id);
     const memberNodes = desc.nodes.map((id) => nodeById.get(id)).filter(Boolean) as typeof view.nodes;
-    const bbox = bboxOf(desc.nodes, positions, desc.groups);
+    const bbox = bboxOf(desc.nodes, positions, desc.groups, nodeW);
     // A box that is inside a collapsed ancestor is not drawn at all — the ancestor's
     // aggregate card stands for it.
     if (hasCollapsedAncestor(g.id)) continue;
@@ -344,7 +351,9 @@ export function topologyToReactFlow(
       const rect = rectOf.get(g.id) ?? solvedRect ?? {
         x: (bbox as BBox).minX - GROUP_PAD,
         y: (bbox as BBox).minY - GROUP_PAD - LABEL_BAND,
-        w: (bbox as BBox).w + GROUP_PAD * 2,
+        // Never narrower than its own label chip (redrawn around members after
+        // a drag): the chip must not hang past the box onto a neighbour.
+        w: Math.max((bbox as BBox).w + GROUP_PAD * 2, groupMinWidth(g.label || g.id, counts.total)),
         h: (bbox as BBox).h + GROUP_PAD * 2 + LABEL_BAND,
       };
       groupNodes.push({
@@ -463,9 +472,9 @@ export function topologyToReactFlow(
         position: positions[n.id] ?? { x: 0, y: 0 },
         // Declared dimensions = the card's FIXED size, so React Flow never
         // re-measures the node when the array is rebuilt on hover (the device
-        // card renders at exactly CARD_W × CARD_H). This is what keeps a hovered
+        // card renders at exactly nodeWidth(node) × CARD_H). This is what keeps a hovered
         // node from shaking as spotlight recomputes.
-        width: CARD_W,
+        width: nodeWidth(n),
         height: CARD_H,
         data: {
           node: n,

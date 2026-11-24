@@ -93,6 +93,17 @@ const HeartbeatAlertName = "AlertingHeartbeat"
 // this the operator's phone repeats every rule, forever.
 const DefaultCooldown = 30 * time.Minute
 
+// hostRedeliverAfter is how soon a host-route push that reached NO channel may
+// be admitted again (tracker 314). The cool-down used to be stamped on
+// acceptance and kept on failure, so a page whose whole retry ladder failed was
+// suppressed for the full window when vmalert re-sent it — the failed delivery
+// silenced its own retry. The stamp is now released on total failure, but not
+// to zero: a wedged channel would otherwise turn every vmalert resend into a
+// fresh five-attempt ladder. One retry window per this interval, each still
+// bounded by the ladder and the per-target push budget. Clamped to the
+// cool-down (a shorter cool-down is already the stricter answer).
+const hostRedeliverAfter = 2 * time.Minute
+
 const (
 	// maxBodyBytes bounds the request body. This route is JWT-EXEMPT (it
 	// authenticates with its own shared secret), so it rides a HasPrefix escape
@@ -468,7 +479,7 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 	// the cut told the sender every alert had landed, which is the one thing a
 	// delivery receiver must never say (§10).
 	received := len(alerts) + cut
-	var dispatched, suppressed, dropped, droppedCustomer, heartbeats int
+	var dispatched, suppressed, dropped, droppedCustomer, heartbeats, redelivered int
 	for _, a := range alerts {
 		switch res := r.handleAlert(a); res {
 		case resultDispatched:
@@ -481,6 +492,8 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 			droppedCustomer++
 		case resultHeartbeat:
 			heartbeats++
+		case resultRedelivered:
+			redelivered++
 		}
 	}
 	r.deps.Metrics.add(&r.deps.Metrics.alertsReceived, int64(received))
@@ -488,6 +501,7 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 	r.deps.Metrics.add(&r.deps.Metrics.suppressed, int64(suppressed))
 	r.deps.Metrics.add(&r.deps.Metrics.droppedTenant, int64(dropped))
 	r.deps.Metrics.add(&r.deps.Metrics.droppedCustomer, int64(droppedCustomer))
+	r.deps.Metrics.add(&r.deps.Metrics.hostRedelivered, int64(redelivered))
 
 	// The warning digest leaves HERE, on request arrival, because the
 	// always-firing AlertingHeartbeat guarantees this handler is called on
@@ -588,6 +602,10 @@ const (
 	resultDroppedTenant
 	resultDroppedCustomer
 	resultHeartbeat
+	// resultRedelivered: the product leg was still inside its cool-down, but
+	// the host route's previous push reached no channel, so the host route
+	// alone was tried again (tracker 314).
+	resultRedelivered
 )
 
 func (r *receiver) handleAlert(a wireAlert) result {
@@ -708,7 +726,19 @@ func (r *receiver) handleAlert(a wireAlert) result {
 	// Dedup applies to both legs. firing and resolved hash differently by
 	// construction (status is in the fingerprint), so a resolution is never
 	// suppressed by its own trigger and is always delivered promptly.
-	if !r.admit(fp) {
+	//
+	// TWO LEGS, TWO STAMPS (tracker 314). The product dispatcher is
+	// fire-and-forget — it reports no outcome — so its stamp is taken on
+	// acceptance, exactly as before. The host route DOES know whether a push
+	// landed, so it has its own stamp under hostKey(fp), taken here (so two
+	// resends in flight can never both deliver) and RELEASED by the fan-out in
+	// pushHost only when the push reached no channel at all. A resend after
+	// that re-tries the host route alone: product channels that already have
+	// the alert do not get it twice.
+	productOK := r.admit(fp)
+	hostKeyFP := hostKey(fp)
+	hostAt, hostOK := r.admitAt(hostKeyFP)
+	if !productOK && !hostOK {
 		return resultSuppressed
 	}
 
@@ -731,9 +761,13 @@ func (r *receiver) handleAlert(a wireAlert) result {
 	if status == statusResolved {
 		at := r.parseTime(a.EndsAt)
 		alert.ResolvedAt = &at
-		r.deps.Dispatcher.DispatchResolve(alert)
-	} else {
-		r.deps.Dispatcher.Dispatch(alert)
+	}
+	if productOK {
+		if status == statusResolved {
+			r.deps.Dispatcher.DispatchResolve(alert)
+		} else {
+			r.deps.Dispatcher.Dispatch(alert)
+		}
 	}
 	// TWO AUDIENCES, TWO ROUTES (hostroute.go). The product dispatcher above
 	// carries this alert to whatever channels an operator configured; the host
@@ -741,18 +775,61 @@ func (r *receiver) handleAlert(a wireAlert) result {
 	// not anything was ever configured. Both legs are downstream of the SAME
 	// tenant refusal and the SAME cool-down, so the second route adds a
 	// destination, never a second buzz.
-	r.pushHost(alert, labels, status)
+	if !hostOK {
+		return resultDispatched
+	}
+	r.pushHost(alert, labels, status, func() { r.releaseHost(hostKeyFP, hostAt) })
+	if !productOK {
+		return resultRedelivered
+	}
 	return resultDispatched
+}
+
+// hostKey is the host route's stamp for a fingerprint, in the same bounded
+// store as the product stamp (NUL cannot occur in a fingerprint).
+func hostKey(fp string) string { return "host\x00" + fp }
+
+// releaseHost makes a host-route stamp admissible again hostRedeliverAfter from
+// now, because the push it guarded reached no channel (tracker 314). It acts
+// only on the stamp it was given: a newer stamp (a later window) is never
+// shortened by an old failure.
+func (r *receiver) releaseHost(key string, stampedAt time.Time) {
+	gap := hostRedeliverAfter
+	if gap > r.cooldown {
+		gap = r.cooldown
+	}
+	r.mu.Lock()
+	t, ok := r.seen[key]
+	released := ok && t.Equal(stampedAt)
+	if released {
+		// Admissible again once now+gap is reached: admit compares now-stamp
+		// against the cool-down.
+		r.seen[key] = r.now().Add(gap - r.cooldown)
+	}
+	r.mu.Unlock()
+	if released {
+		r.deps.Metrics.inc(&r.deps.Metrics.hostReleased)
+		r.log("warn", "platform alert reached NO host-monitoring channel — a resend may retry it", map[string]any{
+			"route": RouteHostMonitoring, "retry_after_s": int(gap / time.Second),
+		})
+	}
 }
 
 // admit reports whether fp may be delivered now, and records the delivery.
 // The store is swept and hard-capped on every insert (§9 bounded queues).
 func (r *receiver) admit(fp string) bool {
+	_, ok := r.admitAt(fp)
+	return ok
+}
+
+// admitAt is admit that also returns the stamp it wrote, so the caller can
+// release exactly that stamp later (releaseHost).
+func (r *receiver) admitAt(fp string) (time.Time, bool) {
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if last, ok := r.seen[fp]; ok && now.Sub(last) < r.cooldown {
-		return false
+		return time.Time{}, false
 	}
 	// Sweep expired entries first — under normal operation this alone keeps the
 	// map at the number of concurrently-firing alerts.
@@ -775,7 +852,7 @@ func (r *receiver) admit(fp string) bool {
 		delete(r.seen, oldestKey)
 	}
 	r.seen[fp] = now
-	return true
+	return now, true
 }
 
 // The two states this receiver recognises. They are the values that reach
