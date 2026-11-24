@@ -68,7 +68,9 @@ async function openCanvas(page: Page) {
   // unscoped locator matches twice and fails strict mode — which took every
   // test in this file down at the shared entry point, not just the one that
   // changed.
-  await expect(page.getByTestId("rf__node-sick-rtr")).toBeVisible(); // canvas rendered
+  // First paint compiles the lazy page chunk on the cold dev server: the repo-wide
+  // 30 s first-paint wait (#396). Later assertions stay tight.
+  await expect(page.getByTestId("rf__node-sick-rtr")).toBeVisible({ timeout: 30_000 }); // canvas rendered
 }
 
 // The name AS RENDERED ON THE CANVAS. Scoped to the React Flow node on purpose:
