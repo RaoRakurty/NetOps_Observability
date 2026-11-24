@@ -6,3 +6,6 @@ cisco-edge1,lab,cisco-edge1,cisco,,,
 forti-edge1,lab,forti-edge1-id,fortinet,FG-100F,,
 forti-edge2,lab,forti-edge2-id,fortinet,FG-200F,,
 victim-box,victim,victim-id,cisco,VICTIM-MODEL,victim-site,victim-role
+web-1,t_b,,,,,
+cloud:i-a,t_a,,,,,
+cloud:i-p,,,,,,

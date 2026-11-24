@@ -491,6 +491,12 @@ _cloud_topo_mtimes: dict[str, float] = {}        # filename → last-seen mtime
 # flows/logs the Vector aggregator tags. The file is re-read when its mtime
 # changes; an absent file or unmatched device yields "" (global/platform).
 TENANT_ENRICHMENT_FILE = os.environ.get("TENANT_ENRICHMENT_FILE", "/data/enrichment/device_tenant.csv")
+# Tracker 392: the cloud metric lane's registry identity. The api writes one row
+# per cloud resource as `cloud:<resource_id>` → the tenant the cloud inventory was
+# stamped with (Go internal/cloudtenant.Prefix; Vector metrics_normalized builds
+# the same key), and never lets a DEVICE identity into that namespace.
+CLOUD_SIGNAL_FAMILY = "cloud_resource"
+CLOUD_IDENTITY_PREFIX = "cloud:"
 _tenant_map: dict[str, str] = {}
 _tenant_mtime: float = -1.0
 # How often the device->tenant registry file may be re-stat'ed (tracker 156).
@@ -12875,9 +12881,27 @@ async def handle_metric(ev: dict) -> None:
     # describe an entity the exporter has no inventory row for (a fresh device,
     # a cloud resource), so the registry is used to CONTRADICT a claim, never to
     # require one. A contradiction is refused + quarantined, never averaged.
+    #
+    # Tracker 392: a CLOUD sample is the exception. Its `device` is the resource
+    # NAME, which any tenant can give one of its devices — checked against the
+    # device registry, another tenant's same-named device "verified" this
+    # tenant's cloud series as theirs, and their CUSUM anomalies became that
+    # tenant's RCA evidence. The cloud lane's identity is the resource id
+    # (`index`) in the reserved registry namespace (cloud:<resource_id>, written
+    # from the cloud inventory — internal/cloudtenant), and the lane is
+    # REGISTRY-ANCHORED: a resource the inventory does not list (or that two
+    # tenants list) is unattributable and refused, never the platform tenant.
+    if str(ev.get("signal_family") or "") == CLOUD_SIGNAL_FAMILY:
+        rid = str(ev.get("index") or "").strip()
+        tenant_identity = (CLOUD_IDENTITY_PREFIX + rid) if rid else ""
+        registry_anchored = True
+    else:
+        tenant_identity = str(ev.get("device") or "")
+        registry_anchored = False
     try:
         tenant = verified_tenant(str(ev.get("tenant_id") or ""),
-                                 str(ev.get("device") or ""), "metrics")
+                                 tenant_identity, "metrics",
+                                 registry_anchored=registry_anchored)
     except TenantClaimRefused as exc:
         METRICS_DROPPED += 1
         keep_deadletter_payload("metrics", ev, exc)
