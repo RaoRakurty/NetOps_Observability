@@ -68,6 +68,42 @@ describe("IrisTriggers", () => {
     await waitFor(() => expect(save).toHaveBeenCalledWith({ enabled: true, max_runs_per_day: 5, max_tokens_per_day: 200000 }));
   });
 
+  // The settings draft used to be reset from props in an effect. Every reload
+  // builds a new settings object, so turning a trigger on/off (which reloads)
+  // wiped unsaved settings edits — and a late-running effect overwrote the
+  // admin's click in the test above under CPU load (2026-11-22/23).
+  it("keeps unsaved settings when another action reloads the page", async () => {
+    const t1 = { id: "t1", name: "Critical", kind: "incident" as const, enabled: false, filter: { min_severity: "error" },
+      schedule: { every_minutes: 0 }, created_by: "c", created_at: "", updated_at: "" };
+    const load = vi.spyOn(api, "investigationTriggers").mockImplementation(async () => overview({ triggers: [t1] }));
+    vi.spyOn(api, "setInvestigationTriggerEnabled").mockResolvedValue({} as never);
+    const save = vi.spyOn(api, "saveInvestigationTriggerSettings").mockResolvedValue({ enabled: true, max_runs_per_day: 7, max_tokens_per_day: 200000 });
+    render(<IrisTriggers />);
+    await waitFor(() => expect(screen.getByTestId("trigger-settings")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText(/Let Iris investigate on its own/));
+    fireEvent.change(screen.getByLabelText("Runs per day"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect((screen.getByLabelText("Runs per day") as HTMLInputElement).value).toBe("7"));
+    expect((screen.getByLabelText(/Let Iris investigate on its own/) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ enabled: true, max_runs_per_day: 7, max_tokens_per_day: 200000 }));
+  });
+
+  it("shows the saved values after a save that changed them", async () => {
+    let saved = { enabled: false, max_runs_per_day: 20, max_tokens_per_day: 200000 };
+    vi.spyOn(api, "investigationTriggers").mockImplementation(async () => overview({ settings: { ...saved } }));
+    vi.spyOn(api, "saveInvestigationTriggerSettings").mockImplementation(async (s) => {
+      saved = { ...s, max_runs_per_day: Math.min(s.max_runs_per_day, 50) }; // the server clamps
+      return saved;
+    });
+    render(<IrisTriggers />);
+    await waitFor(() => expect(screen.getByTestId("trigger-settings")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Runs per day"), { target: { value: "90" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect((screen.getByLabelText("Runs per day") as HTMLInputElement).value).toBe("50"));
+  });
+
   it("shows runs with their outcome, server text escaped", async () => {
     vi.spyOn(api, "investigationTriggers").mockResolvedValue(overview({
       triggers: [{ id: "t1", name: "<i>Critical</i>", kind: "incident", enabled: false, filter: { min_severity: "error" },
