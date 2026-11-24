@@ -1,0 +1,4890 @@
+{
+  "_comment": "P-7EE84E parity golden: rca_report_topology_layout.go and pathModel.ts egoGeometry must produce these positions. Refresh with RCA_UPDATE_TOPOCTX_GOLDEN=1 go test ./internal/rca/ -run TestEgoLayoutParityGolden.",
+  "cases": [
+    {
+      "name": "lab-sdwan",
+      "context": {
+        "state": "topology_with_path",
+        "sources": null,
+        "anchors": [
+          "cedge-81-dde8d64d",
+          "vedge-51-79fbba30"
+        ],
+        "nodes": [
+          {
+            "id": "cedge-81-dde8d64d",
+            "label": "cEDGE-81",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "vedge-51-79fbba30",
+            "label": "vEdge-51",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "vsmart-1",
+            "label": "vSmart",
+            "role": "controller",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "vbond-1",
+            "label": "vBond",
+            "role": "orchestrator",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "vmanage-1",
+            "label": "vManage",
+            "role": "manager",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "cedge-40-fdf7b64f",
+            "label": "cEDGE-40",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "cedge-60-07ae8615",
+            "label": "cEDGE-60",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "cedge-80-b0afc197",
+            "label": "cEDGE-80",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "vedge-52-bf77ee2c",
+            "label": "vEdge-52",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "vedge-20-02efdcad",
+            "label": "vEdge-20",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "vedge-100-3efc4148",
+            "label": "vEdge-100",
+            "role": "wan_edge",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "isp-a",
+            "label": "ISP-A internet transport",
+            "role": "carrier",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "isp-b",
+            "label": "ISP-B MPLS transport",
+            "role": "carrier",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "dc-core-1",
+            "label": "dc-core-1.lab.correlix.local",
+            "role": "dc_core",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "fw-1",
+            "label": "branch-fw-81",
+            "role": "firewall",
+            "source": "inventory",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "ext-1",
+            "label": "203.0.113.7",
+            "source": "inventory",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-vsmart-1",
+            "a": "cedge-81-dde8d64d",
+            "b": "vsmart-1",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-vbond-1",
+            "a": "vedge-51-79fbba30",
+            "b": "vbond-1",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-vmanage-1",
+            "a": "cedge-81-dde8d64d",
+            "b": "vmanage-1",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-cedge-40-fdf7b64f",
+            "a": "vedge-51-79fbba30",
+            "b": "cedge-40-fdf7b64f",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-cedge-60-07ae8615",
+            "a": "cedge-81-dde8d64d",
+            "b": "cedge-60-07ae8615",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-cedge-80-b0afc197",
+            "a": "vedge-51-79fbba30",
+            "b": "cedge-80-b0afc197",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-vedge-52-bf77ee2c",
+            "a": "cedge-81-dde8d64d",
+            "b": "vedge-52-bf77ee2c",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-vedge-20-02efdcad",
+            "a": "vedge-51-79fbba30",
+            "b": "vedge-20-02efdcad",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-vedge-100-3efc4148",
+            "a": "cedge-81-dde8d64d",
+            "b": "vedge-100-3efc4148",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-isp-a",
+            "a": "vedge-51-79fbba30",
+            "b": "isp-a",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-isp-b",
+            "a": "cedge-81-dde8d64d",
+            "b": "isp-b",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-dc-core-1",
+            "a": "vedge-51-79fbba30",
+            "b": "dc-core-1",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-fw-1",
+            "a": "cedge-81-dde8d64d",
+            "b": "fw-1",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-ext-1",
+            "a": "vedge-51-79fbba30",
+            "b": "ext-1",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-anchors",
+            "a": "cedge-81-dde8d64d",
+            "b": "vedge-51-79fbba30",
+            "relationship": "overlay",
+            "sources": [
+              "vmanage"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          }
+        ],
+        "more_nodes": 0,
+        "faults": [
+          {
+            "target_type": "interface",
+            "target_id": "cedge-81-dde8d64d:GigabitEthernet2",
+            "device": "cedge-81-dde8d64d",
+            "port": "GigabitEthernet2",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "cedge-81-dde8d64d:Tunnel100002",
+            "device": "cedge-81-dde8d64d",
+            "port": "Tunnel100002",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "vedge-51-79fbba30:GigabitEthernet2",
+            "device": "vedge-51-79fbba30",
+            "port": "GigabitEthernet2",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "vedge-51-79fbba30:Tunnel100002",
+            "device": "vedge-51-79fbba30",
+            "port": "Tunnel100002",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "vsmart-1:eth1",
+            "device": "vsmart-1",
+            "port": "eth1",
+            "kinds": [
+              "bfd_down"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          }
+        ],
+        "causal": null,
+        "reason": ""
+      },
+      "w": 760,
+      "h": 463,
+      "pos": {
+        "cedge-40-fdf7b64f": [
+          197.75,
+          319
+        ],
+        "cedge-60-07ae8615": [
+          292.94,
+          48
+        ],
+        "cedge-80-b0afc197": [
+          326.3,
+          319
+        ],
+        "cedge-81-dde8d64d": [
+          207.6,
+          234
+        ],
+        "dc-core-1": [
+          292,
+          400
+        ],
+        "ext-1": [
+          507.7,
+          400
+        ],
+        "fw-1": [
+          380,
+          129
+        ],
+        "isp-a": [
+          644.3,
+          319
+        ],
+        "isp-b": [
+          653,
+          48
+        ],
+        "vbond-1": [
+          62,
+          319
+        ],
+        "vedge-100-3efc4148": [
+          496.73,
+          48
+        ],
+        "vedge-20-02efdcad": [
+          454.85,
+          319
+        ],
+        "vedge-51-79fbba30": [
+          552.4,
+          234
+        ],
+        "vedge-52-bf77ee2c": [
+          392.66,
+          48
+        ],
+        "vmanage-1": [
+          197.57,
+          48
+        ],
+        "vsmart-1": [
+          78.5,
+          48
+        ]
+      }
+    },
+    {
+      "name": "gen-a1-n3",
+      "context": {
+        "state": "topology_only",
+        "sources": null,
+        "anchors": [
+          "anchor-0"
+        ],
+        "nodes": [
+          {
+            "id": "anchor-0",
+            "label": "core-router-00-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-0",
+            "label": "branch-site-00-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-1",
+            "label": "branch-site-01-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-2",
+            "label": "branch-site-02-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-0-0",
+            "a": "anchor-0",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-1",
+            "a": "anchor-0",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-2",
+            "a": "anchor-0",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          }
+        ],
+        "more_nodes": 0,
+        "faults": [
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:GigabitEthernet0/0/1",
+            "device": "anchor-0",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:TenGigE0/1/0/3",
+            "device": "anchor-0",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-0:Tunnel100",
+            "device": "n-0",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          }
+        ],
+        "causal": null,
+        "reason": ""
+      },
+      "w": 760,
+      "h": 301,
+      "pos": {
+        "anchor-0": [
+          380,
+          153
+        ],
+        "n-0": [
+          252.3,
+          48
+        ],
+        "n-1": [
+          380,
+          238
+        ],
+        "n-2": [
+          507.7,
+          48
+        ]
+      }
+    },
+    {
+      "name": "gen-a1-n12",
+      "context": {
+        "state": "topology_only",
+        "sources": null,
+        "anchors": [
+          "anchor-0"
+        ],
+        "nodes": [
+          {
+            "id": "anchor-0",
+            "label": "core-router-00-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-0",
+            "label": "branch-site-00-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-1",
+            "label": "branch-site-01-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-2",
+            "label": "branch-site-02-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-3",
+            "label": "branch-site-03-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-4",
+            "label": "branch-site-04-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-5",
+            "label": "branch-site-05-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-6",
+            "label": "branch-site-06-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-7",
+            "label": "branch-site-07-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-8",
+            "label": "branch-site-08-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-9",
+            "label": "branch-site-09-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-10",
+            "label": "branch-site-10-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-11",
+            "label": "branch-site-11-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-0-0",
+            "a": "anchor-0",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-1",
+            "a": "anchor-0",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-2",
+            "a": "anchor-0",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-3",
+            "a": "anchor-0",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-4",
+            "a": "anchor-0",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-5",
+            "a": "anchor-0",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-6",
+            "a": "anchor-0",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-7",
+            "a": "anchor-0",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-8",
+            "a": "anchor-0",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-9",
+            "a": "anchor-0",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-10",
+            "a": "anchor-0",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-11",
+            "a": "anchor-0",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          }
+        ],
+        "more_nodes": 0,
+        "faults": [
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:GigabitEthernet0/0/1",
+            "device": "anchor-0",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:TenGigE0/1/0/3",
+            "device": "anchor-0",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-0:Tunnel100",
+            "device": "n-0",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-3:Tunnel100",
+            "device": "n-3",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-6:Tunnel100",
+            "device": "n-6",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-9:Tunnel100",
+            "device": "n-9",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          }
+        ],
+        "causal": null,
+        "reason": ""
+      },
+      "w": 760,
+      "h": 523,
+      "pos": {
+        "anchor-0": [
+          380,
+          254
+        ],
+        "n-0": [
+          124.6,
+          48
+        ],
+        "n-1": [
+          124.6,
+          359
+        ],
+        "n-10": [
+          635.4,
+          149
+        ],
+        "n-11": [
+          635.4,
+          460
+        ],
+        "n-2": [
+          380,
+          48
+        ],
+        "n-3": [
+          380,
+          359
+        ],
+        "n-4": [
+          635.4,
+          48
+        ],
+        "n-5": [
+          635.4,
+          359
+        ],
+        "n-6": [
+          124.6,
+          149
+        ],
+        "n-7": [
+          124.6,
+          460
+        ],
+        "n-8": [
+          380,
+          149
+        ],
+        "n-9": [
+          380,
+          460
+        ]
+      }
+    },
+    {
+      "name": "gen-a0-n5",
+      "context": {
+        "state": "topology_only",
+        "sources": null,
+        "anchors": null,
+        "nodes": [
+          {
+            "id": "n-0",
+            "label": "branch-site-00-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-1",
+            "label": "branch-site-01-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-2",
+            "label": "branch-site-02-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-3",
+            "label": "branch-site-03-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-4",
+            "label": "branch-site-04-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-n",
+            "a": "n-0",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          }
+        ],
+        "more_nodes": 0,
+        "faults": [
+          {
+            "target_type": "interface",
+            "target_id": "n-0:Tunnel100",
+            "device": "n-0",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-3:Tunnel100",
+            "device": "n-3",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          }
+        ],
+        "causal": null,
+        "reason": ""
+      },
+      "w": 760,
+      "h": 212,
+      "pos": {
+        "n-0": [
+          124.6,
+          48
+        ],
+        "n-1": [
+          252.3,
+          149
+        ],
+        "n-2": [
+          380,
+          48
+        ],
+        "n-3": [
+          507.7,
+          149
+        ],
+        "n-4": [
+          635.4,
+          48
+        ]
+      }
+    },
+    {
+      "name": "gen-a2-n8",
+      "context": {
+        "state": "topology_only",
+        "sources": null,
+        "anchors": [
+          "anchor-0",
+          "anchor-1"
+        ],
+        "nodes": [
+          {
+            "id": "anchor-0",
+            "label": "core-router-00-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-1",
+            "label": "core-router-01-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-0",
+            "label": "branch-site-00-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-1",
+            "label": "branch-site-01-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-2",
+            "label": "branch-site-02-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-3",
+            "label": "branch-site-03-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-4",
+            "label": "branch-site-04-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-5",
+            "label": "branch-site-05-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-6",
+            "label": "branch-site-06-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-7",
+            "label": "branch-site-07-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-0-0",
+            "a": "anchor-0",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-1",
+            "a": "anchor-0",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-2",
+            "a": "anchor-0",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-3",
+            "a": "anchor-0",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-4",
+            "a": "anchor-0",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-5",
+            "a": "anchor-0",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-6",
+            "a": "anchor-0",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-7",
+            "a": "anchor-0",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-0",
+            "a": "anchor-1",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-1",
+            "a": "anchor-1",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-2",
+            "a": "anchor-1",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-3",
+            "a": "anchor-1",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-4",
+            "a": "anchor-1",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-5",
+            "a": "anchor-1",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-6",
+            "a": "anchor-1",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-7",
+            "a": "anchor-1",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          }
+        ],
+        "more_nodes": 0,
+        "faults": [
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:GigabitEthernet0/0/1",
+            "device": "anchor-0",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:TenGigE0/1/0/3",
+            "device": "anchor-0",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-1:GigabitEthernet0/0/1",
+            "device": "anchor-1",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-1:TenGigE0/1/0/3",
+            "device": "anchor-1",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-0:Tunnel100",
+            "device": "n-0",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-3:Tunnel100",
+            "device": "n-3",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-6:Tunnel100",
+            "device": "n-6",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          }
+        ],
+        "causal": null,
+        "reason": ""
+      },
+      "w": 760,
+      "h": 503,
+      "pos": {
+        "anchor-0": [
+          207.6,
+          254
+        ],
+        "anchor-1": [
+          552.4,
+          254
+        ],
+        "n-0": [
+          124.6,
+          48
+        ],
+        "n-1": [
+          124.6,
+          359
+        ],
+        "n-2": [
+          380,
+          48
+        ],
+        "n-3": [
+          380,
+          359
+        ],
+        "n-4": [
+          635.4,
+          48
+        ],
+        "n-5": [
+          635.4,
+          359
+        ],
+        "n-6": [
+          380,
+          149
+        ],
+        "n-7": [
+          380,
+          440
+        ]
+      }
+    },
+    {
+      "name": "gen-a3-n16",
+      "context": {
+        "state": "topology_only",
+        "sources": null,
+        "anchors": [
+          "anchor-0",
+          "anchor-1",
+          "anchor-2"
+        ],
+        "nodes": [
+          {
+            "id": "anchor-0",
+            "label": "core-router-00-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-1",
+            "label": "core-router-01-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-2",
+            "label": "core-router-02-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-0",
+            "label": "branch-site-00-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-1",
+            "label": "branch-site-01-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-2",
+            "label": "branch-site-02-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-3",
+            "label": "branch-site-03-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-4",
+            "label": "branch-site-04-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-5",
+            "label": "branch-site-05-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-6",
+            "label": "branch-site-06-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-7",
+            "label": "branch-site-07-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-8",
+            "label": "branch-site-08-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-9",
+            "label": "branch-site-09-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-10",
+            "label": "branch-site-10-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-11",
+            "label": "branch-site-11-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-12",
+            "label": "branch-site-12-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-13",
+            "label": "branch-site-13-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-14",
+            "label": "branch-site-14-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-15",
+            "label": "branch-site-15-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-0-0",
+            "a": "anchor-0",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-1",
+            "a": "anchor-0",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-2",
+            "a": "anchor-0",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-3",
+            "a": "anchor-0",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-4",
+            "a": "anchor-0",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-5",
+            "a": "anchor-0",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-6",
+            "a": "anchor-0",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-7",
+            "a": "anchor-0",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-8",
+            "a": "anchor-0",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-9",
+            "a": "anchor-0",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-10",
+            "a": "anchor-0",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-11",
+            "a": "anchor-0",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-12",
+            "a": "anchor-0",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-13",
+            "a": "anchor-0",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-14",
+            "a": "anchor-0",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-15",
+            "a": "anchor-0",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-0",
+            "a": "anchor-1",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-1",
+            "a": "anchor-1",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-2",
+            "a": "anchor-1",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-3",
+            "a": "anchor-1",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-4",
+            "a": "anchor-1",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-5",
+            "a": "anchor-1",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-6",
+            "a": "anchor-1",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-7",
+            "a": "anchor-1",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-8",
+            "a": "anchor-1",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-9",
+            "a": "anchor-1",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-10",
+            "a": "anchor-1",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-11",
+            "a": "anchor-1",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-12",
+            "a": "anchor-1",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-13",
+            "a": "anchor-1",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-14",
+            "a": "anchor-1",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-15",
+            "a": "anchor-1",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-0",
+            "a": "anchor-2",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-1",
+            "a": "anchor-2",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-2",
+            "a": "anchor-2",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-3",
+            "a": "anchor-2",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-4",
+            "a": "anchor-2",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-5",
+            "a": "anchor-2",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-6",
+            "a": "anchor-2",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-7",
+            "a": "anchor-2",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-8",
+            "a": "anchor-2",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-9",
+            "a": "anchor-2",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-10",
+            "a": "anchor-2",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-11",
+            "a": "anchor-2",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-12",
+            "a": "anchor-2",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-13",
+            "a": "anchor-2",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-14",
+            "a": "anchor-2",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-15",
+            "a": "anchor-2",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          }
+        ],
+        "more_nodes": 0,
+        "faults": [
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:GigabitEthernet0/0/1",
+            "device": "anchor-0",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:TenGigE0/1/0/3",
+            "device": "anchor-0",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-1:GigabitEthernet0/0/1",
+            "device": "anchor-1",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-1:TenGigE0/1/0/3",
+            "device": "anchor-1",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-2:GigabitEthernet0/0/1",
+            "device": "anchor-2",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-2:TenGigE0/1/0/3",
+            "device": "anchor-2",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-0:Tunnel100",
+            "device": "n-0",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-3:Tunnel100",
+            "device": "n-3",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-6:Tunnel100",
+            "device": "n-6",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-9:Tunnel100",
+            "device": "n-9",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-12:Tunnel100",
+            "device": "n-12",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-15:Tunnel100",
+            "device": "n-15",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          }
+        ],
+        "causal": null,
+        "reason": ""
+      },
+      "w": 760,
+      "h": 834,
+      "pos": {
+        "anchor-0": [
+          207.6,
+          355
+        ],
+        "anchor-1": [
+          552.4,
+          355
+        ],
+        "anchor-2": [
+          380,
+          464
+        ],
+        "n-0": [
+          124.6,
+          48
+        ],
+        "n-1": [
+          124.6,
+          569
+        ],
+        "n-10": [
+          635.4,
+          149
+        ],
+        "n-11": [
+          635.4,
+          670
+        ],
+        "n-12": [
+          252.3,
+          250
+        ],
+        "n-13": [
+          252.3,
+          771
+        ],
+        "n-14": [
+          507.7,
+          250
+        ],
+        "n-15": [
+          507.7,
+          771
+        ],
+        "n-2": [
+          380,
+          48
+        ],
+        "n-3": [
+          380,
+          569
+        ],
+        "n-4": [
+          635.4,
+          48
+        ],
+        "n-5": [
+          635.4,
+          569
+        ],
+        "n-6": [
+          124.6,
+          149
+        ],
+        "n-7": [
+          124.6,
+          670
+        ],
+        "n-8": [
+          380,
+          149
+        ],
+        "n-9": [
+          380,
+          670
+        ]
+      }
+    },
+    {
+      "name": "gen-a6-n24",
+      "context": {
+        "state": "topology_only",
+        "sources": null,
+        "anchors": [
+          "anchor-0",
+          "anchor-1",
+          "anchor-2",
+          "anchor-3",
+          "anchor-4",
+          "anchor-5"
+        ],
+        "nodes": [
+          {
+            "id": "anchor-0",
+            "label": "core-router-00-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-1",
+            "label": "core-router-01-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-2",
+            "label": "core-router-02-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-3",
+            "label": "core-router-03-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-4",
+            "label": "core-router-04-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "anchor-5",
+            "label": "core-router-05-very-long-hostname",
+            "role": "dc_spine_border_router_x",
+            "source": "inventory",
+            "anchor": true,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-0",
+            "label": "branch-site-00-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-1",
+            "label": "branch-site-01-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-2",
+            "label": "branch-site-02-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-3",
+            "label": "branch-site-03-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-4",
+            "label": "branch-site-04-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-5",
+            "label": "branch-site-05-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-6",
+            "label": "branch-site-06-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-7",
+            "label": "branch-site-07-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-8",
+            "label": "branch-site-08-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-9",
+            "label": "branch-site-09-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-10",
+            "label": "branch-site-10-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-11",
+            "label": "branch-site-11-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-12",
+            "label": "branch-site-12-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-13",
+            "label": "branch-site-13-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-14",
+            "label": "branch-site-14-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-15",
+            "label": "branch-site-15-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-16",
+            "label": "branch-site-16-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-17",
+            "label": "branch-site-17-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-18",
+            "label": "branch-site-18-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-19",
+            "label": "branch-site-19-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-20",
+            "label": "branch-site-20-edge-router",
+            "source": "lldp",
+            "anchor": false,
+            "managed": false,
+            "stale": false
+          },
+          {
+            "id": "n-21",
+            "label": "branch-site-21-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-22",
+            "label": "branch-site-22-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          },
+          {
+            "id": "n-23",
+            "label": "branch-site-23-edge-router",
+            "role": "wan_edge_router_branch_x",
+            "source": "lldp",
+            "anchor": false,
+            "managed": true,
+            "stale": false
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-0-0",
+            "a": "anchor-0",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-1",
+            "a": "anchor-0",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-2",
+            "a": "anchor-0",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-3",
+            "a": "anchor-0",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-4",
+            "a": "anchor-0",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-5",
+            "a": "anchor-0",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-6",
+            "a": "anchor-0",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-7",
+            "a": "anchor-0",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-8",
+            "a": "anchor-0",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-9",
+            "a": "anchor-0",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-10",
+            "a": "anchor-0",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-11",
+            "a": "anchor-0",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-12",
+            "a": "anchor-0",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-13",
+            "a": "anchor-0",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-14",
+            "a": "anchor-0",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-15",
+            "a": "anchor-0",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-16",
+            "a": "anchor-0",
+            "b": "n-16",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-17",
+            "a": "anchor-0",
+            "b": "n-17",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-18",
+            "a": "anchor-0",
+            "b": "n-18",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-19",
+            "a": "anchor-0",
+            "b": "n-19",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-20",
+            "a": "anchor-0",
+            "b": "n-20",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-21",
+            "a": "anchor-0",
+            "b": "n-21",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-22",
+            "a": "anchor-0",
+            "b": "n-22",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-0-23",
+            "a": "anchor-0",
+            "b": "n-23",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-0",
+            "a": "anchor-1",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-1",
+            "a": "anchor-1",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-2",
+            "a": "anchor-1",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-3",
+            "a": "anchor-1",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-4",
+            "a": "anchor-1",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-5",
+            "a": "anchor-1",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-6",
+            "a": "anchor-1",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-7",
+            "a": "anchor-1",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-8",
+            "a": "anchor-1",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-9",
+            "a": "anchor-1",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-10",
+            "a": "anchor-1",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-11",
+            "a": "anchor-1",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-12",
+            "a": "anchor-1",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-13",
+            "a": "anchor-1",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-14",
+            "a": "anchor-1",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-15",
+            "a": "anchor-1",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-16",
+            "a": "anchor-1",
+            "b": "n-16",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-17",
+            "a": "anchor-1",
+            "b": "n-17",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-18",
+            "a": "anchor-1",
+            "b": "n-18",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-19",
+            "a": "anchor-1",
+            "b": "n-19",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-20",
+            "a": "anchor-1",
+            "b": "n-20",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-21",
+            "a": "anchor-1",
+            "b": "n-21",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-22",
+            "a": "anchor-1",
+            "b": "n-22",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-1-23",
+            "a": "anchor-1",
+            "b": "n-23",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-0",
+            "a": "anchor-2",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-1",
+            "a": "anchor-2",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-2",
+            "a": "anchor-2",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-3",
+            "a": "anchor-2",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-4",
+            "a": "anchor-2",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-5",
+            "a": "anchor-2",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-6",
+            "a": "anchor-2",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-7",
+            "a": "anchor-2",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-8",
+            "a": "anchor-2",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-9",
+            "a": "anchor-2",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-10",
+            "a": "anchor-2",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-11",
+            "a": "anchor-2",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-12",
+            "a": "anchor-2",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-13",
+            "a": "anchor-2",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-14",
+            "a": "anchor-2",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-15",
+            "a": "anchor-2",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-16",
+            "a": "anchor-2",
+            "b": "n-16",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-17",
+            "a": "anchor-2",
+            "b": "n-17",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-18",
+            "a": "anchor-2",
+            "b": "n-18",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-19",
+            "a": "anchor-2",
+            "b": "n-19",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-20",
+            "a": "anchor-2",
+            "b": "n-20",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-21",
+            "a": "anchor-2",
+            "b": "n-21",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-22",
+            "a": "anchor-2",
+            "b": "n-22",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-2-23",
+            "a": "anchor-2",
+            "b": "n-23",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-0",
+            "a": "anchor-3",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-1",
+            "a": "anchor-3",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-2",
+            "a": "anchor-3",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-3",
+            "a": "anchor-3",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-4",
+            "a": "anchor-3",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-5",
+            "a": "anchor-3",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-6",
+            "a": "anchor-3",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-7",
+            "a": "anchor-3",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-8",
+            "a": "anchor-3",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-9",
+            "a": "anchor-3",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-10",
+            "a": "anchor-3",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-11",
+            "a": "anchor-3",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-12",
+            "a": "anchor-3",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-13",
+            "a": "anchor-3",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-14",
+            "a": "anchor-3",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-15",
+            "a": "anchor-3",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-16",
+            "a": "anchor-3",
+            "b": "n-16",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-17",
+            "a": "anchor-3",
+            "b": "n-17",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-18",
+            "a": "anchor-3",
+            "b": "n-18",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-19",
+            "a": "anchor-3",
+            "b": "n-19",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-20",
+            "a": "anchor-3",
+            "b": "n-20",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-21",
+            "a": "anchor-3",
+            "b": "n-21",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-22",
+            "a": "anchor-3",
+            "b": "n-22",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-3-23",
+            "a": "anchor-3",
+            "b": "n-23",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-0",
+            "a": "anchor-4",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-1",
+            "a": "anchor-4",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-2",
+            "a": "anchor-4",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-3",
+            "a": "anchor-4",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-4",
+            "a": "anchor-4",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-5",
+            "a": "anchor-4",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-6",
+            "a": "anchor-4",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-7",
+            "a": "anchor-4",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-8",
+            "a": "anchor-4",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-9",
+            "a": "anchor-4",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-10",
+            "a": "anchor-4",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-11",
+            "a": "anchor-4",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-12",
+            "a": "anchor-4",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-13",
+            "a": "anchor-4",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-14",
+            "a": "anchor-4",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-15",
+            "a": "anchor-4",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-16",
+            "a": "anchor-4",
+            "b": "n-16",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-17",
+            "a": "anchor-4",
+            "b": "n-17",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-18",
+            "a": "anchor-4",
+            "b": "n-18",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-19",
+            "a": "anchor-4",
+            "b": "n-19",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-20",
+            "a": "anchor-4",
+            "b": "n-20",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-21",
+            "a": "anchor-4",
+            "b": "n-21",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-22",
+            "a": "anchor-4",
+            "b": "n-22",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-4-23",
+            "a": "anchor-4",
+            "b": "n-23",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-0",
+            "a": "anchor-5",
+            "b": "n-0",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-1",
+            "a": "anchor-5",
+            "b": "n-1",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-2",
+            "a": "anchor-5",
+            "b": "n-2",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-3",
+            "a": "anchor-5",
+            "b": "n-3",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-4",
+            "a": "anchor-5",
+            "b": "n-4",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-5",
+            "a": "anchor-5",
+            "b": "n-5",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-6",
+            "a": "anchor-5",
+            "b": "n-6",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-7",
+            "a": "anchor-5",
+            "b": "n-7",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-8",
+            "a": "anchor-5",
+            "b": "n-8",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-9",
+            "a": "anchor-5",
+            "b": "n-9",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-10",
+            "a": "anchor-5",
+            "b": "n-10",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-11",
+            "a": "anchor-5",
+            "b": "n-11",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-12",
+            "a": "anchor-5",
+            "b": "n-12",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-13",
+            "a": "anchor-5",
+            "b": "n-13",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-14",
+            "a": "anchor-5",
+            "b": "n-14",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-15",
+            "a": "anchor-5",
+            "b": "n-15",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-16",
+            "a": "anchor-5",
+            "b": "n-16",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-17",
+            "a": "anchor-5",
+            "b": "n-17",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-18",
+            "a": "anchor-5",
+            "b": "n-18",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-19",
+            "a": "anchor-5",
+            "b": "n-19",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-20",
+            "a": "anchor-5",
+            "b": "n-20",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-21",
+            "a": "anchor-5",
+            "b": "n-21",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-22",
+            "a": "anchor-5",
+            "b": "n-22",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          },
+          {
+            "id": "e-5-23",
+            "a": "anchor-5",
+            "b": "n-23",
+            "relationship": "l3",
+            "sources": [
+              "lldp"
+            ],
+            "bidirectional": false,
+            "stale": false,
+            "freshness": "current"
+          }
+        ],
+        "more_nodes": 0,
+        "faults": [
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:GigabitEthernet0/0/1",
+            "device": "anchor-0",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-0:TenGigE0/1/0/3",
+            "device": "anchor-0",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-1:GigabitEthernet0/0/1",
+            "device": "anchor-1",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-1:TenGigE0/1/0/3",
+            "device": "anchor-1",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-2:GigabitEthernet0/0/1",
+            "device": "anchor-2",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-2:TenGigE0/1/0/3",
+            "device": "anchor-2",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-3:GigabitEthernet0/0/1",
+            "device": "anchor-3",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-3:TenGigE0/1/0/3",
+            "device": "anchor-3",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-4:GigabitEthernet0/0/1",
+            "device": "anchor-4",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-4:TenGigE0/1/0/3",
+            "device": "anchor-4",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-5:GigabitEthernet0/0/1",
+            "device": "anchor-5",
+            "port": "GigabitEthernet0/0/1",
+            "kinds": [
+              "link_down"
+            ],
+            "peak_severity": "crit",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "anchor-5:TenGigE0/1/0/3",
+            "device": "anchor-5",
+            "port": "TenGigE0/1/0/3",
+            "kinds": [
+              "if_errors"
+            ],
+            "peak_severity": "warn",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-0:Tunnel100",
+            "device": "n-0",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-3:Tunnel100",
+            "device": "n-3",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-6:Tunnel100",
+            "device": "n-6",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-9:Tunnel100",
+            "device": "n-9",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-12:Tunnel100",
+            "device": "n-12",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-15:Tunnel100",
+            "device": "n-15",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-18:Tunnel100",
+            "device": "n-18",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          },
+          {
+            "target_type": "interface",
+            "target_id": "n-21:Tunnel100",
+            "device": "n-21",
+            "port": "Tunnel100",
+            "kinds": [
+              "tunnel_down"
+            ],
+            "peak_severity": "high",
+            "evidence_refs": null
+          }
+        ],
+        "causal": null,
+        "reason": ""
+      },
+      "w": 760,
+      "h": 1145,
+      "pos": {
+        "anchor-0": [
+          207.6,
+          456
+        ],
+        "anchor-1": [
+          552.4,
+          456
+        ],
+        "anchor-2": [
+          207.6,
+          565
+        ],
+        "anchor-3": [
+          552.4,
+          565
+        ],
+        "anchor-4": [
+          207.6,
+          674
+        ],
+        "anchor-5": [
+          552.4,
+          674
+        ],
+        "n-0": [
+          124.6,
+          48
+        ],
+        "n-1": [
+          124.6,
+          779
+        ],
+        "n-10": [
+          635.4,
+          149
+        ],
+        "n-11": [
+          635.4,
+          880
+        ],
+        "n-12": [
+          124.6,
+          250
+        ],
+        "n-13": [
+          124.6,
+          981
+        ],
+        "n-14": [
+          380,
+          250
+        ],
+        "n-15": [
+          380,
+          981
+        ],
+        "n-16": [
+          635.4,
+          250
+        ],
+        "n-17": [
+          635.4,
+          981
+        ],
+        "n-18": [
+          124.6,
+          351
+        ],
+        "n-19": [
+          124.6,
+          1082
+        ],
+        "n-2": [
+          380,
+          48
+        ],
+        "n-20": [
+          380,
+          351
+        ],
+        "n-21": [
+          380,
+          1082
+        ],
+        "n-22": [
+          635.4,
+          351
+        ],
+        "n-23": [
+          635.4,
+          1082
+        ],
+        "n-3": [
+          380,
+          779
+        ],
+        "n-4": [
+          635.4,
+          48
+        ],
+        "n-5": [
+          635.4,
+          779
+        ],
+        "n-6": [
+          124.6,
+          149
+        ],
+        "n-7": [
+          124.6,
+          880
+        ],
+        "n-8": [
+          380,
+          149
+        ],
+        "n-9": [
+          380,
+          880
+        ]
+      }
+    }
+  ]
+}

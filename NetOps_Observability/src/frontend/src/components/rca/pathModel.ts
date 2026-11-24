@@ -238,30 +238,170 @@ function roleWords(n: TopoCtxNode): string {
   return !n.managed && !sub ? "not in inventory" : sub;
 }
 
-// layoutEgo — anchors on the centre line; with one anchor its neighbours sit on
-// an ellipse around it, with several they alternate on a row above and below
-// (so no link is drawn through another anchor). Identical to topoEgoSVG.
-function layoutEgo(tc: TopologyContext): EgoView {
+// ── text-aware ego geometry (P-7EE84E, 2026-11-24) ─────────────────────────────
+// The old layout put nodes on FIXED slots (760×250/330, ellipse or two rows)
+// sized for the print text (9px labels). The screen draws the same slots with
+// 14px bold labels, so on a busy context the labels ran into each other and
+// the top row's text sat on the anchors — "crammed on screen, fine in the PDF".
+//
+// Rule: every node has a FOOTPRINT — its circle plus the text drawn around it
+// (anomalous mark above; label and role line below), measured with the LARGER
+// renderer's metrics (the screen: 14px bold label, 12.5px role, 12.5px bold
+// mark) at the truncation limits it draws. The print renderer's text (9/7.5px,
+// tighter offsets) always fits inside the screen footprint, so ONE geometry is
+// clean at both scales and the screen, the print fallback and the server PDF
+// still draw the same picture (rca_report_topology_layout.go is the twin; the
+// shared golden testdata/topoctx/ego_layout.golden.json pins the parity).
+//
+// Width stays 760 so neither renderer shrinks its text; a context that needs
+// more room gets more ROWS (height grows), never tighter spacing. The ellipse
+// (≤ 1 anchor) is kept only when every footprint fits on it without touching
+// another or leaving the picture; otherwise neighbours pack into rows above
+// and below the anchor row, alternating as before.
+
+/** Conservative per-character advance for the screen text (the larger scale). */
+export const EGO_TEXT = { labelCh: 8.7, metaCh: 7.0, markCh: 7.8, labelMax: 22, roleMax: 24, markMax: 36 } as const;
+const EGO_MARGIN_X = 20;
+const EGO_GAP_X = 16;
+const EGO_GAP_MAX = 64;
+const EGO_GAP_Y = 18;
+const EGO_PAD_Y = 14;
+const EGO_BOX_GAP = 4;
+
+export interface EgoFootprint { halfW: number; above: number; below: number }
+
+function runeCount(s: string, max: number): number {
+  return Math.min([...s].length, max);
+}
+
+/** The "anomalous: …" mark drawn above a node (screen and print use the same words). */
+export function egoMarkText(tc: TopologyContext, id: string): string {
+  const ports = interfaceFaults(tc, id).map((f) => f.port || f.target_id);
+  return ports.length ? `anomalous: ${ports.join(" · ")}` : "";
+}
+
+/** A node's footprint: half its width, and how far its drawing reaches above
+ *  and below the centre (circle radius 18 for an anchor, 14 otherwise). */
+export function egoFootprint(label: string, role: string, mark: string, anchor: boolean): EgoFootprint {
+  const r = anchor ? 18 : 14;
+  const halfW = Math.max(
+    r,
+    (EGO_TEXT.labelCh * runeCount(label, EGO_TEXT.labelMax)) / 2,
+    role ? (EGO_TEXT.metaCh * runeCount(role, EGO_TEXT.roleMax)) / 2 : 0,
+    mark ? (EGO_TEXT.markCh * runeCount(mark, EGO_TEXT.markMax)) / 2 : 0,
+  );
+  return { halfW, above: mark ? r + 20 : r, below: role ? r + 35 : r + 20 };
+}
+
+export interface EgoBox { x0: number; y0: number; x1: number; y1: number }
+
+export function egoBox(x: number, y: number, f: EgoFootprint): EgoBox {
+  return { x0: x - f.halfW, y0: y - f.above, x1: x + f.halfW, y1: y + f.below };
+}
+
+export function egoBoxesOverlap(a: EgoBox, b: EgoBox, gap = 0): boolean {
+  return a.x0 < b.x1 + gap && b.x0 < a.x1 + gap && a.y0 < b.y1 + gap && b.y0 < a.y1 + gap;
+}
+
+function egoFits(ids: string[], pos: Map<string, [number, number]>, fp: Map<string, EgoFootprint>, w: number, h: number): boolean {
+  const boxes = ids.map((id) => egoBox(pos.get(id)![0], pos.get(id)![1], fp.get(id)!));
+  for (let i = 0; i < boxes.length; i++) {
+    const a = boxes[i];
+    if (a.x0 < 0 || a.y0 < 0 || a.x1 > w || a.y1 > h) return false;
+    for (let j = i + 1; j < boxes.length; j++) if (egoBoxesOverlap(a, boxes[j], EGO_BOX_GAP)) return false;
+  }
+  return true;
+}
+
+function egoPackRows(ids: string[], fp: Map<string, EgoFootprint>): string[][] {
+  const usable = EGO_W - 2 * EGO_MARGIN_X;
+  const rows: string[][] = [];
+  let cur: string[] = [];
+  let width = 0;
+  for (const id of ids) {
+    const nw = 2 * fp.get(id)!.halfW;
+    const need = cur.length ? width + EGO_GAP_X + nw : nw;
+    if (cur.length && need > usable) {
+      rows.push(cur);
+      cur = [id];
+      width = nw;
+    } else {
+      cur.push(id);
+      width = need;
+    }
+  }
+  if (cur.length) rows.push(cur);
+  return rows;
+}
+
+/** The ego-graph geometry: width, height and every node's centre. Pure. */
+export function egoGeometry(tc: TopologyContext): { w: number; h: number; pos: Map<string, [number, number]> } {
   const anchors = tc.nodes.filter((n) => n.anchor);
   const neigh = tc.nodes.filter((n) => !n.anchor);
-  const h = neigh.length > 8 ? 330 : 250;
-  const cx = EGO_W / 2, cy = h / 2;
-  const pos = new Map<string, [number, number]>();
-  const spacing = Math.min(140, 560 / Math.max(1, anchors.length));
-  anchors.forEach((a, i) => pos.set(a.id, [cx + (i - (anchors.length - 1) / 2) * spacing, cy]));
+  const fp = new Map<string, EgoFootprint>();
+  for (const n of tc.nodes) fp.set(n.id, egoFootprint(n.label, roleWords(n), egoMarkText(tc, n.id), n.anchor));
+  const all = [...anchors, ...neigh].map((n) => n.id);
+
   if (anchors.length <= 1) {
+    // The original picture: one centre, its neighbours on an ellipse — kept
+    // only when it is clean.
+    const h = neigh.length > 8 ? 330 : 250;
+    const cx = EGO_W / 2, cy = h / 2;
+    const pos = new Map<string, [number, number]>();
+    anchors.forEach((a) => pos.set(a.id, [cx, cy]));
     const rx = EGO_W / 2 - 70, ry = h / 2 - 38;
     neigh.forEach((n, i) => {
       const ang = neigh.length === 1 ? 0 : -Math.PI / 2 + (2 * Math.PI * i) / neigh.length;
       pos.set(n.id, [cx + rx * Math.cos(ang), cy + ry * Math.sin(ang)]);
     });
-  } else {
-    const top = neigh.filter((_, i) => i % 2 === 0);
-    const bottom = neigh.filter((_, i) => i % 2 === 1);
-    for (const [row, y] of [[top, 40], [bottom, h - 52]] as [TopoCtxNode[], number][]) {
-      row.forEach((n, j) => pos.set(n.id, [50 + (EGO_W - 100) * (j + 0.5) / row.length, y]));
-    }
+    if (egoFits(all, pos, fp, EGO_W, h)) return { w: EGO_W, h, pos };
   }
+
+  // Rows: neighbours alternate above / below the anchor row (so no link is
+  // drawn through another anchor), each band packed into as many rows as its
+  // footprints need; every row is centred.
+  const top = neigh.filter((_, i) => i % 2 === 0).map((n) => n.id);
+  const bottom = neigh.filter((_, i) => i % 2 === 1).map((n) => n.id);
+  const rows = [
+    ...egoPackRows(top, fp),
+    ...egoPackRows(anchors.map((a) => a.id), fp),
+    ...egoPackRows(bottom, fp),
+  ];
+  const pos = new Map<string, [number, number]>();
+  let cursor = EGO_PAD_Y;
+  const usable = EGO_W - 2 * EGO_MARGIN_X;
+  for (const row of rows) {
+    let above = 0, below = 0, base = 0;
+    for (const id of row) {
+      const f = fp.get(id)!;
+      above = Math.max(above, f.above);
+      below = Math.max(below, f.below);
+      base += 2 * f.halfW;
+    }
+    // Spread the row into its spare width (never below EGO_GAP_X — packing
+    // guaranteed that — and never more than EGO_GAP_MAX), then centre it.
+    const k = row.length;
+    const gap = k > 1 ? Math.min(EGO_GAP_MAX, (usable - base) / (k - 1)) : 0;
+    const total = base + gap * (k - 1);
+    const y = cursor + above;
+    let x = (EGO_W - total) / 2;
+    for (const id of row) {
+      const f = fp.get(id)!;
+      pos.set(id, [x + f.halfW, y]);
+      x += 2 * f.halfW + gap;
+    }
+    cursor = y + below + EGO_GAP_Y;
+  }
+  return { w: EGO_W, h: cursor - EGO_GAP_Y + EGO_PAD_Y, pos };
+}
+
+// layoutEgo — the ego-graph view over egoGeometry: known links, the "?" on a
+// link the engine joined no evidence across, cross-device causal lines, and
+// the nodes with their overlays. Identical to topoEgoSVG.
+function layoutEgo(tc: TopologyContext): EgoView {
+  const anchors = tc.nodes.filter((n) => n.anchor);
+  const neigh = tc.nodes.filter((n) => !n.anchor);
+  const { h, pos } = egoGeometry(tc);
 
   const unknownOnLink = new Set<string>();
   for (const m of tc.causal) {
@@ -327,7 +467,9 @@ function layoutPanel(tc: TopologyContext, n: TopoCtxNode): DevicePanelView {
   let morePorts = 0;
   if (ports.length > PANEL_MAX_PORTS) { morePorts = ports.length - PANEL_MAX_PORTS; ports = ports.slice(0, PANEL_MAX_PORTS); }
   const h = Math.max(110, 40 + 30 * ports.length);
-  const devX = 40, devW = 220, portX = 470, portW = 190;
+  // devW 240 (was 220): the screen draws the device name at 14px bold, up to
+  // 24 characters (≈ 209px) plus padding — 220 let it touch the box edge.
+  const devX = 40, devW = 240, portX = 470, portW = 190;
   const devY = h / 2;
   const portY = (i: number) => (ports.length === 1 ? devY : 30 + (i * (h - 60)) / (ports.length - 1));
   const idx = new Map<string, number>();
