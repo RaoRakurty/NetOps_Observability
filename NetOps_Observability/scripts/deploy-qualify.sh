@@ -708,6 +708,32 @@ kafka_sweep_orphans() {  # $1 = id, for the log line
   return 0
 }
 
+# A `compose up --force-recreate` killed mid-way (a docker call past its bound
+# on a loaded host) leaves the OLD container renamed `<12-hex>_<name>` and never
+# removed. Every later recreate of that service then fails ("Container … Recreate")
+# — one interrupted run broke every following qualify on 2026-11-23 (B3,
+# opensearch-init). Sweep that debris, and SAY SO, like kafka_sweep_orphans.
+# Only a one-shot's debris is touched: same project + service labels, a
+# `<12-hex>_` name prefix, and not running.
+oneshot_sweep_recreate_debris() {  # $1 = id, $2 = compose service
+  local rows oid oname ostate
+  if ! rows="$(dkr ps -a --filter "label=com.docker.compose.project=$PROJECT" \
+                         --filter "label=com.docker.compose.service=$2" \
+                         --format '{{.ID}} {{.Names}} {{.State}}' 2>&1)"; then
+    warn "$1: could not list $2 containers to sweep recreate debris: $(oneline "$rows" 160)"
+    return 0
+  fi
+  while read -r oid oname ostate; do
+    [ -n "$oid" ] || continue
+    case "$oname" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]_*) : ;; *) continue ;; esac
+    [ "$ostate" = "running" ] && continue
+    warn "$1: found $oname ($ostate), left by a recreate that was killed mid-way — removing it so $2 can be recreated"
+    dkr rm -f "$oid" >/dev/null 2>&1 ||
+      warn "$1: could not remove $oname — remove it by hand: docker rm -f $oid"
+  done <<<"$rows"
+  return 0
+}
+
 # Run a `restart: "no"` one-shot service to completion, BOUNDED, with no
 # orphan. Deliberately NOT `docker compose run --rm`: that creates a second,
 # differently-named container which survives the CLI being killed. Starting the
@@ -728,6 +754,7 @@ run_oneshot() {  # $1 = id, $2 = label, $3 = compose service, $4.. = TOP-LEVEL c
       "global ${GLOBAL_BUDGET}s deadline reached before the bootstrap could start — not evaluated is not passed"
     return 1
   fi
+  oneshot_sweep_recreate_debris "$id" "$service"
   # --force-recreate: the one-shot has usually already exited from install; a
   # plain `up -d` would consider it satisfied and do nothing.
   if ! out="$(dc "$t" "$@" up -d --no-deps --force-recreate "$service" 2>&1)"; then
