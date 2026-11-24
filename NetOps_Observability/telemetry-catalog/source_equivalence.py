@@ -161,8 +161,9 @@ def connector_metric_kinds(vendor: str) -> frozenset[str]:
     for name in CONNECTOR_METRIC_FILES.get(vendor, ()):
         with open(os.path.join(NMS_DIR, name), encoding="utf-8") as fh:
             for metric, family in _CANONICAL_METRIC.findall(fh.read()):
-                if CM.METRIC_BUCKET.get(metric) == family and family in CM.EPISODE_KIND:
-                    kinds.add(CM.EPISODE_KIND[family])
+                ep = CM.episode_kind(metric) if CM.METRIC_BUCKET.get(metric) == family else None
+                if ep:
+                    kinds.add(ep)
     return frozenset(kinds)
 
 
@@ -197,7 +198,8 @@ def rule_kinds(source: str) -> frozenset[str]:
 
 
 def poll_kinds() -> frozenset[str]:
-    return frozenset(CM.EPISODE_KIND[b] for b in set(CM.METRIC_BUCKET.values()) if b in CM.EPISODE_KIND)
+    # 3.7.0: per metric (the interface bucket's kind depends on the metric).
+    return frozenset(k for k in map(CM.episode_kind, CM.METRIC_BUCKET) if k)
 
 
 def raw_supply(source: dict) -> frozenset[str]:

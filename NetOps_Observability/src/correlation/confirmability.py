@@ -163,6 +163,11 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     "ipsec_underlay_status": ModalityClass.ACTIVE_PROBE,
     # device-telemetry lane (metric episodes; cloud health)
     "if_metric_anomaly": ModalityClass.DEVICE_TELEMETRY,
+    # 3.7.0 kind split: the interface fault/state episodes (same lane, same class).
+    "if_errors": ModalityClass.DEVICE_TELEMETRY,
+    "if_discards": ModalityClass.DEVICE_TELEMETRY,
+    "if_crc": ModalityClass.DEVICE_TELEMETRY,
+    "if_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "bgp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
     # Polled IGP adjacency state (tracker 222). Same class as the BGP metric
     # episode and deliberately NOT control-plane: it is a device-telemetry
@@ -298,17 +303,6 @@ DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
                              "AP management address, or PoE telemetry from the "
                              "uplink switch, as the second measurement plane",
     },
-    "sig.ent.wireless.capwap-instability": {
-        "reason": "owner D1: the join-flap report is the WLC's (management_plane); "
-                  "of the optional corroborators only probe_loss is produced today "
-                  "(if_util_high / if_errors are normalization gaps), so one "
-                  "measurement plane caps at suspected",
-        "owner": "correlix",
-        "date_added": "2026-11-11",
-        "target_resolution": "if_errors/if_util_high anomaly producer (#73) on the "
-                             "AP uplinks, which with the CAPWAP-path probe gives two "
-                             "measurement planes",
-    },
     "sig.ent.wireless.ap-software-fault": {
         "reason": "this family is diagnosed by the ABSENCE of the second "
                   "witness — the uplink port staying up is what separates an "
@@ -348,16 +342,6 @@ DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
         "target_resolution": "resolve the cloud_health_event vocabulary mismatch "
                              "(NORMALIZATION_PENDING #81) or add a control-plane "
                              "witness kind to the template",
-    },
-    "sig.ent.fabric.spine-leaf-path-degradation": {
-        "reason": "demands device_telemetry + active_probe, but its telemetry "
-                  "witnesses (if_errors/if_crc) are a NORMALIZATION gap — the "
-                  "counters are polled into VictoriaMetrics yet no producer "
-                  "emits the signal kinds, so the verdict caps at suspected",
-        "owner": "correlix",
-        "date_added": "2026-07-09",
-        "target_resolution": "if_errors/if_discards anomaly producer (#73; "
-                             "NORMALIZATION_PENDING entries in coverage.py)",
     },
     "sig.ent.wan-edge.sdwan-control-connection-loss": {
         "reason": "matchable since 2026-11-11 (its mandatory kind used to be the "
@@ -414,6 +398,12 @@ def audit_template(t: Template) -> dict:
     missing = all_kinds - EMITTED_KINDS
 
     matchable = all(clause & EMITTED_KINDS for clause in required)
+    # 3.7.0: a `context` clause's kinds support the rank but are never a verdict
+    # witness (scoring.score_template), so they give no modality / plane here —
+    # unless another, witness-bearing clause also names them.
+    witness_kinds = frozenset().union(*(c.kinds() for c in t.requires if not c.context)) \
+        if t.requires else frozenset()
+    available = available & witness_kinds
     modalities = {KIND_MODALITY[k] for k in available if k in KIND_MODALITY}
 
     # required_modalities is a verdict CAP in the engine (scoring.py →

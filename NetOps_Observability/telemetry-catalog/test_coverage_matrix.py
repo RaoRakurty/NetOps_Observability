@@ -87,18 +87,38 @@ def test_the_episode_kind_mirror_matches_metric_identity():
         src = fh.read()
     start = src.index("def metric_identity(")
     body = src[start:src.index("\ndef ", start + 10)]
-    pairs = {fam: kind for fam, _gap, kind in re.findall(
-        r'if family == "([a-z_]+)":(.*?)"([a-z_]+_anomaly)"', body, re.DOTALL)}
+    # One branch per family; a branch ends where the next `if family ==` starts.
+    branches = re.split(r'\n    if family == ', body)
+    pairs: dict[str, str] = {}
+    for br in branches[1:]:
+        fam = re.match(r'"([a-z_]+)":', br).group(1)
+        if fam == "interface":
+            # 3.7.0: the interface kind is per metric (producers.interface_metric_kind).
+            assert "interface_metric_kind(metric)" in br, "interface branch shape changed"
+            pairs[fam] = M.EPISODE_KIND["interface"]
+            continue
+        kinds = re.findall(r'"([a-z_]+_anomaly)"', br)
+        assert kinds, f"no episode kind in metric_identity's {fam} branch"
+        pairs[fam] = kinds[0]
     assert pairs, "metric_identity no longer has the shape this mirror reads"
     assert pairs == M.EPISODE_KIND, (
         f"coverage_matrix.EPISODE_KIND {M.EPISODE_KIND} has drifted from "
         f"main.metric_identity {pairs}")
 
 
+def test_the_interface_kind_mirror_matches_the_engine_table():
+    """3.7.0 kind split: INTERFACE_EPISODE_KIND / UNSCORED_METRICS mirror producers."""
+    sys.path.insert(0, ENGINE)
+    producers = pytest.importorskip("producers")
+    assert M.INTERFACE_EPISODE_KIND == producers.INTERFACE_METRIC_KINDS
+    assert M.UNSCORED_METRICS == producers.UNSCORED_INTERFACE_METRICS
+    assert producers.interface_metric_kind("x") == M.EPISODE_KIND["interface"]
+
+
 def test_every_episode_kind_is_one_the_producer_declares():
     sys.path.insert(0, ENGINE)
     producers = pytest.importorskip("producers")
-    for kind in M.EPISODE_KIND.values():
+    for kind in set(M.EPISODE_KIND.values()) | set(M.INTERFACE_EPISODE_KIND.values()):
         assert kind in producers.EMITTED_KINDS, kind
 
 

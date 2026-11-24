@@ -5,7 +5,7 @@
     {"kind": "isis_adjacency_change", "entity_type": "device", "entity_id": "spine1",
      "observer_id": "syslog-spine1", "observer_type": "device",
      "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
-    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "spine1:ethernet-1/1",
+    {"kind": "if_errors", "entity_type": "interface", "entity_id": "spine1:ethernet-1/1",
      "observer_id": "snmp-spine1", "observer_type": "device",
      "modality": "device_telemetry", "collection_path": "direct", "deviation": 4.0}
   ],

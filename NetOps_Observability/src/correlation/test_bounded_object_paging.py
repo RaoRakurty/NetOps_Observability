@@ -137,7 +137,16 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # engine) against origin/main 2c780f77: exactly one leaf differs — `engine`. This
 # object carries no control-connection loss and no session row, so its DECISION
 # cannot move, and it did not.
-FIXTURE_GOLDEN = "af0aa0dc8fb43ec2"
+# RE-FROZEN, 2026-11-24, ENGINE_SEMVER 3.6.0 -> 3.7.0 (owner traffic-judgement
+# decisions; was "af0aa0dc8fb43ec2" on main e5bf5928). The catalog moved (anchors,
+# the interface kind split, the `context` clause field). CHECKED by diffing every
+# hashed input (nodes, edges, hypotheses blob) against origin/main e5bf5928: nodes
+# and edges are identical; the DECISION is unchanged (top `undetermined`, tier
+# `undetermined`). Only the blob moved: `catalog_version`; lastmile-circuit-flap's
+# anchor-less partial row left the list, and the ospf/isis flap templates and the
+# two security context stories — whose clauses now read the fault kinds — list
+# this object's `if_errors` episode at 0.05 (below the floor) in its place.
+FIXTURE_GOLDEN = "4046d147df19967b"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

@@ -1,11 +1,11 @@
 {
   "name": "Link state change (syslog) + interface metric anomaly (SNMP) on the same interface: local link fault confirmed",
-  "comment": "P3 seed = link_state_change + if_metric_anomaly co-faults. Two planes on one port confirm.",
+  "comment": "P3 seed = link_state_change + if_errors co-faults (ENGINE_SEMVER 3.7.0 kind split: the counter FAULT, not traffic volume). Two planes on one port confirm.",
   "signals": [
     {"kind": "link_state_change", "entity_type": "interface", "entity_id": "leaf3:Eth1/3",
      "observer_id": "syslog-leaf3", "observer_type": "device",
      "modality": "control_plane", "collection_path": "direct", "deviation": 0.0},
-    {"kind": "if_metric_anomaly", "entity_type": "interface", "entity_id": "leaf3:Eth1/3",
+    {"kind": "if_errors", "entity_type": "interface", "entity_id": "leaf3:Eth1/3",
      "observer_id": "snmp-leaf3", "observer_type": "device",
      "modality": "device_telemetry", "collection_path": "direct", "deviation": 5.0}
   ],

@@ -29,6 +29,13 @@ func Kind(kind string) string {
 		return "Response-time change"
 	case "if_errors":
 		return "Interface errors"
+	case "if_discards":
+		// ENGINE_SEMVER 3.7.0 kind split: the counter faults are their own kinds.
+		return "Interface discards"
+	case "if_crc":
+		return "Interface CRC errors"
+	case "if_state_anomaly":
+		return "Interface state change"
 	case "if_util_high":
 		return "High link utilization"
 	case "if_metric_anomaly":

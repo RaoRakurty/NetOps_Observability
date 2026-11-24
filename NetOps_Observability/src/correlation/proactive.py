@@ -818,7 +818,7 @@ PROACTIVE_TEMPLATES: tuple[dict, ...] = (
         "domain": "ent.access",
         "requires": [
             {"kind": "ospf_adjacency_not_full", "entity_type": "device"},
-            {"kind": "if_metric_anomaly|device_resource_saturation|link_state_change",
+            {"kind": "if_errors|if_discards|if_crc|if_state_anomaly|device_resource_saturation|link_state_change",
              "optional": True},
             {"kind": "device_config_change", "optional": True},
         ],
@@ -847,7 +847,7 @@ PROACTIVE_TEMPLATES: tuple[dict, ...] = (
         "domain": "ent.fabric",
         "requires": [
             {"kind": "isis_adjacency_not_up", "entity_type": "device"},
-            {"kind": "if_metric_anomaly|device_resource_saturation|lldp_neighbor_change|link_state_change",
+            {"kind": "if_errors|if_discards|if_crc|if_state_anomaly|device_resource_saturation|lldp_neighbor_change|link_state_change",
              "optional": True},
             {"kind": "device_config_change", "optional": True},
         ],

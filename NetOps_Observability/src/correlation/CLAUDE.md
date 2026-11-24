@@ -255,7 +255,21 @@ the window filters (e.g. M:8157-8161).
 **Episodes** (episodes.py:37-56).
 - Two-sided CUSUM: H=4σ, K=0.5σ, at least 20 baseline samples; clears after 3 samples
   with |z|<1σ.
-- Severity from peak z: <5 warn, ≥5 high, ≥8 crit (producers.py:77-82).
+- Severity from peak z: <5 warn, ≥5 high, ≥8 crit (`producers.severity_for`).
+- **σ floor (owner 2026-11-24, ENGINE_SEMVER 3.7.0, kill switch `CORR_SIGMA_FLOOR=0`,
+  default ON).** For the counter and resource families the detector divides by
+  `σ_eff = max(σ, SIGMA_FLOOR_REL·|mean|, SIGMA_FLOOR_ABS[metric])` and freezes σ_eff at
+  onset (octets / `flow_bytes_rate` 12,500 B/s = 100 kbit/s; errors / discards / FCS
+  0.1/s, REL 0.10 for both; CPU 2 pts; memory / temperature 1). Before it an idle port's
+  12.8 → 13.9 B/s scored z ≈ 2,366 (crit), and σ = 0 swallowed a clean counter's first
+  error into the baseline. Every RCA family is floored or listed in `SIGMA_FLOOR_EXEMPT`
+  (states, BGP FSM transitions, speed); other metrics keep the legacy z byte for byte.
+- **Interface kind split (3.7.0).** `producers.INTERFACE_METRIC_KINDS`: octets →
+  `if_metric_anomaly` (traffic VOLUME), errors → `if_errors`, discards → `if_discards`,
+  FCS → `if_crc`, oper/admin status → `if_state_anomaly`. `device_if_speed` is collected and
+  counted (`corr_metrics_not_scored_total`, /healthz `ingest.metrics_not_scored`), never
+  scored (vManage flips loopback speed 10 ↔ 1000). Volume kinds (`producers.VOLUME_KINDS`:
+  `if_metric_anomaly`, `flow_volume_anomaly`) are capped at warn in `episode_signal`.
 - **Seasonal SHADOW (N-H6 step 4, flag `CORR_SEASONAL_SHADOW`, default OFF, 2026-11-19).**
   Owner ruling: "the correlation engine's truest intention shouldn't be diverted." A side
   channel beside this stage (`seasonal_shadow.py`, hooked in `main.feed_episode_detector`
@@ -370,6 +384,12 @@ count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
   evidence stays in the window and `corr_signals`, so a grounded network fault later
   folds it in as context. A dated detection (`security_signal`) is not in the set and
   opens as before. Counted (cohort touch): `corr_security_standing_finding_singletons_total`.
+- **Traffic volume is context (owner 2026-11-24, ENGINE_SEMVER 3.7.0).** A component whose
+  EVERY node is a traffic-volume kind (`engine.VOLUME_CONTEXT_KINDS`: `if_metric_anomaly`,
+  `flow_volume_anomaly`) opens NO object, grounded or not — two port episodes on one box
+  ground by containment, and 659 of the lab's 1,186 false "local link fault" objects were
+  volume-only. The evidence stays in the window and `corr_signals`, so a real fault on the
+  port folds it in. Counted (cohort touch): `corr_volume_context_singletons_total`.
 
 **Identity** `cid = uuid5(corrobj|tenant|earliest node key|onset_ms)` (E:3752).
 - A cid that overlaps an open object adopts that object's id: entity Jaccard ≥0.4 +
@@ -441,7 +461,21 @@ M:1420). 151 templates, 105 enabled. The version hash changes on any edit (C:382
   supersets. A verification witness goes through the same predicate.
 - Clause `anchor` (required clauses only): while no signal satisfies it, `rank` omits the
   template from that ranking altogether. Rows tie-break by id, so even a zero row would
-  displace visible competitors and the nearest-template checklist.
+  displace visible competitors and the nearest-template checklist. **Owner option B
+  (2026-11-24, 3.7.0):** `local-link-fault`, `lastmile-circuit-flap` (their
+  `link_state_change`), `private-interconnect-bgp-down` (its BGP clause) and
+  `ap-down-power` (`wireless_ap_down`) are anchored — before it a counter anomaly alone gave
+  local-link-fault "suspected 0.5" (1,184 lab objects in 7 days). Every multi-required
+  template needs an anchor or a row in the shrinking `test_catalog.ANCHOR_PENDING` ledger
+  (`dia-egress-corroborated` is left there for the owner: symptom + cause only together).
+- Clause `context` (optional clauses only, 3.7.0): its hits raise coverage (the optional
+  bonus) but are NEVER a witness at the verdict gate — the E5c rule, declared per clause.
+  `local-link-fault` reads its second plane from `if_errors|if_discards|if_crc|if_state_anomaly`
+  and traffic volume only as an optional context clause, so a link change beside a traffic
+  swing ranks 0.55 and caps at suspected. Storm-type templates (STP, MAC flap, EVPN loop,
+  VTEP, FHRP, DIA egress) keep volume as a normal optional clue (a loop IS a volume event)
+  plus `if_discards`; change-induced, the IGP flaps and the security stories read the fault
+  kinds, not volume.
 - `discriminators{absent, else_prefer, attested}`. `attested` (a structure class) narrows
   one: it fires only when the evidence also attests that structure (SD-WAN controller
   fan-in, 2026-11-11).
@@ -599,7 +633,10 @@ D1 IS in the audit's math (`_kind_may_anchor` mirrors `plane_may_anchor` per kin
 confirmable needs two anchor-eligible modality classes, else status
 `support_plane_only`. The baseline went 32 → 29 by owner decision D1 (recorded in the
 baseline file): `wan-edge.sdwan-tunnel-controller-corroborated`, `wireless.ap-down-power`,
-`wireless.capwap-instability`, each with a `DEMO_CONFIRMABILITY_EXCEPTIONS` entry.
+`wireless.capwap-instability`, each with a `DEMO_CONFIRMABILITY_EXCEPTIONS` entry. It went
+29 → 33 with 3.7.0's kind split (the `if_errors`/`if_discards`/`if_crc` producers exist):
+physical-degradation, spine-leaf-path-degradation, dx-optics-degrade, capwap-instability
+(the last two exceptions removed). A `context` clause's kinds give no plane in the audit.
 
 ## 6. Outputs — [8] persist (M:5792)
 
@@ -807,7 +844,8 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   through the outage it is evidence of; a stale row grounds only a node that names it.
   ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since the
   controller fan-in, 3.5.0 since owner D1–D3, 3.6.0 since the tracker-397 control-session
-  rung); byte-identical when no tunnel rows exist. The verdict tier still
+  rung, 3.7.0 since the 2026-11-24 traffic-judgement decisions); byte-identical when no
+  tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage
   statistics are 30–60 min late, so they are context only, never live corroboration.

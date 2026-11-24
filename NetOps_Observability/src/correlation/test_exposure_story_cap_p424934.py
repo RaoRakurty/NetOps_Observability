@@ -145,7 +145,7 @@ def two_measurement_planes(story_kind: str, control: str) -> list[Signal]:
     measurement planes, so the gate alone confirms and only the cap holds it."""
     return [_security(story_kind, control, 0),
             _measured("bgp_adjacency_change", ModalityClass.CONTROL_PLANE, "syslog-cedge81", 20),
-            _measured("if_metric_anomaly", ModalityClass.DEVICE_TELEMETRY, "snmp-cedge81", 40,
+            _measured("if_errors", ModalityClass.DEVICE_TELEMETRY, "snmp-cedge81", 40,
                       EntityType.INTERFACE, f"{DEVICE}:GigabitEthernet2")]
 
 

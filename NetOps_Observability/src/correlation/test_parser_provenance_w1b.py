@@ -351,6 +351,9 @@ OTHER_LANE_KINDS = frozenset({
     "controller_control_connection_loss", "controller_device_unreachable",
     "controller_policy_change", "controller_tunnel_state",
     "device_resource_anomaly", "flow_volume_anomaly", "if_metric_anomaly",
+    # ENGINE_SEMVER 3.7.0 kind split: the METRIC lane's interface fault / state
+    # episodes (producers.INTERFACE_METRIC_KINDS via main.metric_identity).
+    "if_errors", "if_discards", "if_crc", "if_state_anomaly",
     # tracker 222: the METRIC lane's IGP adjacency episode
     # (device_ospf_nbr_state / device_isis_adj_state → the `igp` signal family
     # → main.metric_identity). Its SIGNAL-lane twins, ospf_adjacency_change and

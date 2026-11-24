@@ -58,6 +58,7 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     # physical (L1)
     "optics_power_low": CausalLayer.PHYSICAL,
     "if_errors": CausalLayer.PHYSICAL,
+    "if_crc": CausalLayer.PHYSICAL,        # 3.7.0: FCS/CRC episode (device_if_fcs_errors)
     "fcs_error": CausalLayer.PHYSICAL,
     # link (L2)
     "link_state_change": CausalLayer.LINK,
@@ -66,7 +67,9 @@ _KIND_LAYER: dict[str, CausalLayer] = {
     "stp_topology_change": CausalLayer.LINK,
     "mac_flap": CausalLayer.LINK,
     "evpn_mac_move": CausalLayer.LINK,   # EVPN MAC mobility (overlay) — an L2 event
-    "if_metric_anomaly": CausalLayer.LINK,
+    "if_metric_anomaly": CausalLayer.LINK,   # 3.7.0: traffic volume only (octets)
+    "if_discards": CausalLayer.LINK,         # 3.7.0 kind split
+    "if_state_anomaly": CausalLayer.LINK,    # 3.7.0: polled oper/admin status
     "if_util_high": CausalLayer.LINK,
     # network (L3)
     "bgp_adjacency_change": CausalLayer.NETWORK,

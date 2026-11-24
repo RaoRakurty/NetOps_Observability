@@ -338,7 +338,9 @@ def score_template(
         hits = _satisfying(clause, evidence)
         if hits:
             satisfied.append(clause.kind)
-            if not (context_only and clause.kinds() <= context_only):
+            # 3.7.0: a `context` clause (e.g. traffic volume beside a link fault)
+            # supports the rank, never the verdict gate — same rule as E5c.
+            if not clause.context and not (context_only and clause.kinds() <= context_only):
                 matched_signals.extend(hits)
             supporting_hit = True
             bonus = min(OPTIONAL_BONUS_CAP, bonus + OPTIONAL_BONUS_PER_CLAUSE)

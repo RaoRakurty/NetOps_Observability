@@ -16,7 +16,15 @@ from datetime import datetime, timedelta, timezone
 
 from catalog import builtin_catalog
 from scoring import CONFIDENCE_FLOOR, rank
-from signals import EntityType, ModalityClass, Observer, ObserverType, Severity, Signal, Source
+from signals import (
+    EntityType,
+    ModalityClass,
+    Observer,
+    ObserverType,
+    Severity,
+    Signal,
+    Source,
+)
 from verdicts import VerdictTier
 
 T0 = datetime(2026, 11, 24, 10, 0, 0, tzinfo=timezone.utc)
