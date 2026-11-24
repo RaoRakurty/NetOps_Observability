@@ -1,0 +1,187 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Correlix
+
+# promtool unit tests for SiteCollectionLost and its fold of DeviceUnreachable
+# (rules.yaml, tracker 368).
+#
+# The distinctions pinned here, each one missing clause away from wrong:
+#   (a) a site with >= 2 polled devices, none answering, is ONE alert naming
+#       the site — and its devices' DeviceUnreachable alerts are folded away;
+#   (b) a site with one device still answering is NOT lost, and the dead
+#       device there still raises its own DeviceUnreachable;
+#   (c) a single-device site is DeviceUnreachable's job, never a "site" alert;
+#   (d) a device with no site keeps its DeviceUnreachable;
+#   (e) a device another collector still reaches counts as answering;
+#   (f) the opportunistic netconf probe is never evidence either way;
+#   (g) the same site key in two tenants is two different sites.
+
+rule_files:
+  - /etc/prometheus/rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ==========================================================================
+  # 1) The 2026-10-20 shape inside a healthy estate.
+  #    t_a/50: two devices, both dead            -> SiteCollectionLost (value 2), no per-device alerts
+  #    t_a/60: two devices, one alive            -> not lost; the dead one alerts
+  #    t_a/40: one device, dead                  -> DeviceUnreachable only
+  #    loose:  dead device with no site          -> DeviceUnreachable
+  #    t_a/80: one dead on snmp, alive on gnmi   -> answering; site not lost
+  #    netconf-only failure on an up device      -> nothing
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      # site membership (the api's own scrape)
+      - series: 'netops_device_site_info{job="netops-api",instance="api:8080",device="vedge-51",tenant_id="t_a",site="t_a/vmanage/50",site_label="Site 50"}'
+        values: "1x10"
+      - series: 'netops_device_site_info{job="netops-api",instance="api:8080",device="vedge-52",tenant_id="t_a",site="t_a/vmanage/50",site_label="Site 50"}'
+        values: "1x10"
+      - series: 'netops_device_site_info{job="netops-api",instance="api:8080",device="cedge-60",tenant_id="t_a",site="t_a/vmanage/60",site_label="Site 60"}'
+        values: "1x10"
+      - series: 'netops_device_site_info{job="netops-api",instance="api:8080",device="cedge-61",tenant_id="t_a",site="t_a/vmanage/60",site_label="Site 60"}'
+        values: "1x10"
+      - series: 'netops_device_site_info{job="netops-api",instance="api:8080",device="cedge-40",tenant_id="t_a",site="t_a/vmanage/40",site_label="Site 40"}'
+        values: "1x10"
+      - series: 'netops_device_site_info{job="netops-api",instance="api:8080",device="cedge-80",tenant_id="t_a",site="t_a/vmanage/80",site_label="Site 80"}'
+        values: "1x10"
+      - series: 'netops_device_site_info{job="netops-api",instance="api:8080",device="cedge-81",tenant_id="t_a",site="t_a/vmanage/80",site_label="Site 80"}'
+        values: "1x10"
+      # reachability
+      - series: 'collector_target_up{collector="snmpv2c",device="vedge-51"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="vedge-52"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="netconf",device="vedge-52"}'
+        values: "1x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="cedge-60"}'
+        values: "1x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="cedge-61"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="cedge-40"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="loose-1"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="cedge-80"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="gnmi",device="cedge-80"}'
+        values: "1x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="cedge-81"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="netconf",device="cedge-60"}'
+        values: "0x10"
+    alert_rule_test:
+      # Pending inside `for: 2m`.
+      - eval_time: 1m
+        alertname: SiteCollectionLost
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: SiteCollectionLost
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              tier: warning
+              tenant_id: t_a
+              site: t_a/vmanage/50
+              site_label: Site 50
+            exp_annotations:
+              summary: "Collection lost for site Site 50: none of its 2 polled devices has answered for 3 minutes"
+              description: "Every device Correlix polls at this site stopped answering at once. This is a loss of COLLECTION — the site may be down, cut off, or unreachable only from Correlix — so its devices' individual unreachable alerts are folded into this one. Check the path from the collector to the site (WAN link, VPN, firewall, management VRF) before the devices themselves."
+              runbook: "docs/runbooks/engine-liveness-matrix.md"
+      # Site 50's two devices are folded away; Site 60's dead device, the
+      # single-device Site 40, the site-less device and cedge-80/81's dead
+      # SNMP legs keep their own alert. (Site 80 is not lost: gNMI still
+      # reaches cedge-80.) The netconf failure on cedge-60 is never an alert.
+      - eval_time: 5m
+        alertname: DeviceUnreachable
+        exp_alerts:
+          - exp_labels: { severity: critical, collector: snmpv2c, device: cedge-61 }
+            exp_annotations: { summary: "cedge-61 unreachable from snmpv2c" }
+          - exp_labels: { severity: critical, collector: snmpv2c, device: cedge-40 }
+            exp_annotations: { summary: "cedge-40 unreachable from snmpv2c" }
+          - exp_labels: { severity: critical, collector: snmpv2c, device: loose-1 }
+            exp_annotations: { summary: "loose-1 unreachable from snmpv2c" }
+          - exp_labels: { severity: critical, collector: snmpv2c, device: cedge-80 }
+            exp_annotations: { summary: "cedge-80 unreachable from snmpv2c" }
+          - exp_labels: { severity: critical, collector: snmpv2c, device: cedge-81 }
+            exp_annotations: { summary: "cedge-81 unreachable from snmpv2c" }
+
+  # ==========================================================================
+  # 2) Recovery: Site 50 comes back at 6m -> the site alert clears and nothing
+  #    is left firing for its devices.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_device_site_info{job="netops-api",device="vedge-51",tenant_id="t_a",site="t_a/vmanage/50",site_label="Site 50"}'
+        values: "1x15"
+      - series: 'netops_device_site_info{job="netops-api",device="vedge-52",tenant_id="t_a",site="t_a/vmanage/50",site_label="Site 50"}'
+        values: "1x15"
+      - series: 'collector_target_up{collector="snmpv2c",device="vedge-51"}'
+        values: "0x5 1x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="vedge-52"}'
+        values: "0x5 1x10"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SiteCollectionLost
+        exp_alerts:
+          - exp_labels: { severity: critical, tier: warning, tenant_id: t_a, site: t_a/vmanage/50, site_label: Site 50 }
+            exp_annotations:
+              summary: "Collection lost for site Site 50: none of its 2 polled devices has answered for 3 minutes"
+              description: "Every device Correlix polls at this site stopped answering at once. This is a loss of COLLECTION — the site may be down, cut off, or unreachable only from Correlix — so its devices' individual unreachable alerts are folded into this one. Check the path from the collector to the site (WAN link, VPN, firewall, management VRF) before the devices themselves."
+              runbook: "docs/runbooks/engine-liveness-matrix.md"
+      - eval_time: 10m
+        alertname: SiteCollectionLost
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeviceUnreachable
+        exp_alerts: []
+
+  # ==========================================================================
+  # 3) Tenant isolation in the arithmetic: the SAME site key under two tenants
+  #    is two sites. t_a's one dead device plus t_b's one dead device must not
+  #    add up to a two-device "lost site".
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'netops_device_site_info{job="netops-api",device="a-1",tenant_id="t_a",site="hq",site_label="HQ"}'
+        values: "1x10"
+      - series: 'netops_device_site_info{job="netops-api",device="b-1",tenant_id="t_b",site="hq",site_label="HQ"}'
+        values: "1x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="a-1"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="b-1"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SiteCollectionLost
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: DeviceUnreachable
+        exp_alerts:
+          - exp_labels: { severity: critical, collector: snmpv2c, device: a-1 }
+            exp_annotations: { summary: "a-1 unreachable from snmpv2c" }
+          - exp_labels: { severity: critical, collector: snmpv2c, device: b-1 }
+            exp_annotations: { summary: "b-1 unreachable from snmpv2c" }
+
+  # ==========================================================================
+  # 4) Without membership (an older api, or the publisher failed before its
+  #    first refresh) nothing changes: DeviceUnreachable fires per device,
+  #    exactly as before, and no site alert can appear.
+  # ==========================================================================
+  - interval: 1m
+    input_series:
+      - series: 'collector_target_up{collector="snmpv2c",device="x-1"}'
+        values: "0x10"
+      - series: 'collector_target_up{collector="snmpv2c",device="x-2"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SiteCollectionLost
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: DeviceUnreachable
+        exp_alerts:
+          - exp_labels: { severity: critical, collector: snmpv2c, device: x-1 }
+            exp_annotations: { summary: "x-1 unreachable from snmpv2c" }
+          - exp_labels: { severity: critical, collector: snmpv2c, device: x-2 }
+            exp_annotations: { summary: "x-2 unreachable from snmpv2c" }

@@ -91,6 +91,12 @@ const experienceRulePrefix = "Experience"
 // to its own controller — not a device, so they carry no `device` label.
 const nmsRulePrefix = "NMS"
 
+// siteCollectionRulePrefix marks the device-less site-collection rules
+// (SiteCollectionLost, tracker 368) whose owner is the (tenant_id, site) label
+// PAIR — believed only when the api itself published that pair in its last
+// device-site snapshot (internal/sitecollect.Publisher.Owns).
+const siteCollectionRulePrefix = "SiteCollection"
+
 // alertTenant is the owning tenant of an alert, as the episode store and the
 // incident bridge record it. It is s.alertOwner — the SAME derivation the alert
 // visibility chokepoint (alertVisibility) applies — so an episode can never be
@@ -130,6 +136,10 @@ func (s *server) alertDeviceNames() map[string]string {
 //     an id enabled only in another tenant, a disabled or deleted integration,
 //     or NMS switched off all resolve to "" (platform-only). Integration ids are
 //     unique only per tenant, so the id is never matched without its tenant.
+//   - SiteCollection* rules (tracker 368) → the (tenant_id, site) label PAIR,
+//     believed ONLY when the api itself published that pair in its last
+//     device-site snapshot; a forged tenant, another tenant's site or a site
+//     that no longer exists resolve to "" (platform-only).
 //   - everything else device-less → "" (the platform's own stack alerts).
 //
 // Both label exceptions are keyed on the RULE NAME, never on the mere presence
@@ -145,7 +155,22 @@ func (s *server) alertOwner(a models.Alert) string {
 	if strings.HasPrefix(a.Rule, nmsRulePrefix) {
 		return s.nmsAlertOwner(a)
 	}
+	if strings.HasPrefix(a.Rule, siteCollectionRulePrefix) {
+		return s.siteCollectionAlertOwner(a)
+	}
 	return alertOwnerLabel(a)
+}
+
+// siteCollectionAlertOwner resolves a device-less SiteCollection* alert to the
+// tenant whose site it names, or "" when the api did not publish that exact
+// (tenant, site) pair. No store call: the snapshot is in memory.
+func (s *server) siteCollectionAlertOwner(a models.Alert) string {
+	tenant := strings.ToLower(strings.TrimSpace(a.Labels["tenant_id"]))
+	site := strings.TrimSpace(a.Labels["site"])
+	if site == "" || !s.siteCollect.Owns(tenant, site) {
+		return ""
+	}
+	return tenant
 }
 
 // nmsAlertOwner resolves a device-less NMS connector alert to the tenant that
