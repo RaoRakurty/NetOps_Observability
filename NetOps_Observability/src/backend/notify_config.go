@@ -948,6 +948,6 @@ func testAlert() models.Alert {
 	return models.Alert{
 		Rule:     "NotificationTest",
 		Severity: "critical",
-		Summary:  "NetOps test notification — your channel is configured correctly.",
+		Summary:  "Correlix test notification — your channel is configured correctly.",
 	}
 }
