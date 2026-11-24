@@ -441,11 +441,11 @@ func topoCausalLine(b *strings.Builder, x1, y1, x2, y2 float64, rel string, dire
 	}
 }
 
-// topoEgoSVG draws the 1-hop ego-graph: anchors on the centre line, their
-// neighbours on an ellipse around them, known links grey (dotted when stale),
-// faulted devices amber/red, cross-device causal marks overlaid.
+// topoEgoSVG draws the 1-hop ego-graph: anchors on the centre row, their
+// neighbours on an ellipse around a single anchor when it is clean, otherwise
+// in packed rows above and below (topoEgoGeometry); known links grey (dotted
+// when stale), faulted devices amber/red, cross-device causal marks overlaid.
 func topoEgoSVG(b *strings.Builder, tc TopologyContext) {
-	const w = 760.0
 	var anchors, neigh []TopoCtxNode
 	for _, n := range tc.Nodes {
 		if n.Anchor {
@@ -454,47 +454,9 @@ func topoEgoSVG(b *strings.Builder, tc TopologyContext) {
 			neigh = append(neigh, n)
 		}
 	}
-	h := 250.0
-	if len(neigh) > 8 {
-		h = 330
-	}
-	cx, cy := w/2, h/2
-	pos := map[string][2]float64{}
-	spacing := math.Min(140, 560/math.Max(1, float64(len(anchors))))
-	for i, a := range anchors {
-		x := cx + (float64(i)-float64(len(anchors)-1)/2)*spacing
-		pos[a.ID] = [2]float64{x, cy}
-	}
-	if len(anchors) <= 1 {
-		// one centre: neighbours on an ellipse around it.
-		rx, ry := w/2-70, h/2-38
-		for i, n := range neigh {
-			ang := -math.Pi/2 + 2*math.Pi*float64(i)/float64(len(neigh))
-			if len(neigh) == 1 {
-				ang = 0
-			}
-			pos[n.ID] = [2]float64{cx + rx*math.Cos(ang), cy + ry*math.Sin(ang)}
-		}
-	} else {
-		// several anchors share the centre line: neighbours go to a row above
-		// and a row below, so no link is drawn through another anchor.
-		var top, bottom []TopoCtxNode
-		for i, n := range neigh {
-			if i%2 == 0 {
-				top = append(top, n)
-			} else {
-				bottom = append(bottom, n)
-			}
-		}
-		for _, row := range []struct {
-			nodes []TopoCtxNode
-			y     float64
-		}{{top, 40}, {bottom, h - 52}} {
-			for j, n := range row.nodes {
-				pos[n.ID] = [2]float64{50 + (w-100)*(float64(j)+0.5)/float64(len(row.nodes)), row.y}
-			}
-		}
-	}
+	// Text-aware geometry shared with the screen (rca_report_topology_layout.go,
+	// P-7EE84E): clean at this document's text size and at the screen's.
+	w, h, pos := topoEgoGeometry(tc)
 	fmt.Fprintf(b, `<svg viewBox="0 0 %.0f %.0f" width="100%%" style="max-width:760px;display:block;margin:8px auto 2px" role="img" aria-label="Known topology around the affected devices with fault and causal overlays">`, w, h)
 	// known links under everything.
 	causalOnLink := map[string]bool{}
@@ -576,20 +538,12 @@ func topoEgoSVG(b *strings.Builder, tc TopologyContext) {
 			fmt.Fprintf(b, `<text x="%.1f" y="%.1f" text-anchor="middle" font-size="7.5" fill="%s">stale</text>`, p[0], p[1]+3, topoMuted)
 		}
 		fmt.Fprintf(b, `<text x="%.1f" y="%.1f" text-anchor="middle" font-size="9" font-weight="700" fill="%s">%s</text>`, p[0], p[1]+r+11, topoInk, topoEsc(topoShort(n.Label, 22)))
-		sub := strings.ReplaceAll(n.Role, "_", " ")
-		if !n.Managed && sub == "" {
-			sub = "not in inventory"
-		}
-		if sub != "" {
+		if sub := topoEgoRole(n); sub != "" {
 			fmt.Fprintf(b, `<text x="%.1f" y="%.1f" text-anchor="middle" font-size="7.5" fill="%s">%s</text>`, p[0], p[1]+r+21, topoMuted, topoEsc(topoShort(sub, 26)))
 		}
-		if ports := topoIfaceFaults(tc, n.ID); len(ports) > 0 {
-			names := make([]string, 0, len(ports))
-			for _, f := range ports {
-				names = append(names, f.Port)
-			}
+		if mark := topoEgoMarkText(tc, n.ID); mark != "" {
 			_, pc := topoFaultColours(topoDevicePeak(tc, n.ID))
-			fmt.Fprintf(b, `<text x="%.1f" y="%.1f" text-anchor="middle" font-size="7.5" font-weight="700" fill="%s">anomalous: %s</text>`, p[0], p[1]-r-5, pc, topoEsc(topoShort(strings.Join(names, " · "), 40)))
+			fmt.Fprintf(b, `<text x="%.1f" y="%.1f" text-anchor="middle" font-size="7.5" font-weight="700" fill="%s">%s</text>`, p[0], p[1]-r-5, pc, topoEsc(topoShort(mark, 40+len([]rune("anomalous: ")))))
 		}
 	}
 	b.WriteString(`</svg>`)
@@ -610,7 +564,9 @@ func topoDeviceSVG(b *strings.Builder, tc TopologyContext, n TopoCtxNode) {
 	}
 	const w = 760.0
 	h := math.Max(110, 40+30*float64(len(ports)))
-	devX, devW := 40.0, 220.0
+	// devW 240 (was 220): the screen twin draws the device name at 14px bold,
+	// up to 24 characters plus padding (P-7EE84E).
+	devX, devW := 40.0, 240.0
 	portX, portW := 470.0, 190.0
 	devY := h / 2
 	portY := func(i int) float64 {
