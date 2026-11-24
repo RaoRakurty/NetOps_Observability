@@ -95,6 +95,17 @@ func boundedEnvInt(key string, def, min, max int) int {
 
 // setDefaultParam sets a libpq runtime parameter unless the operator already
 // pinned it in DATABASE_URL — an explicit setting in the DSN always wins.
+// tenantGUC is the RLS session variable every tenant_iso policy reads.
+const tenantGUC = "app.tenant_id"
+
+// UnscopedTenant is app.tenant_id on a pooled connection outside WithTenant
+// (tracker 312). It can never be a tenant id: tenant ids are normalized
+// lowercase identifiers and never contain '!' or start with it, and it is not
+// the '*' platform sentinel or the 'global' Provider scope. A tenant_iso
+// policy therefore matches no row for it, and its WITH CHECK refuses any write
+// that names a real tenant (or the blank installation tenant).
+const UnscopedTenant = "!no-tenant-scope"
+
 func setDefaultParam(rp map[string]string, key, val string) {
 	if strings.TrimSpace(val) == "" {
 		return
@@ -164,6 +175,19 @@ func NewDB(ctx context.Context, dsn string) (*DB, error) {
 	// A transaction left idle holds its snapshot and its locks; withTenant opens
 	// one per request, so a wedged handler must not be able to park one forever.
 	setDefaultParam(rp, "idle_in_transaction_session_timeout", envOr("PG_IDLE_TX_TIMEOUT", "60s"))
+	// Tracker 312: the RLS scope a pooled connection falls back to OUTSIDE
+	// WithTenant. WithTenant sets app.tenant_id with set_config(..., true) —
+	// transaction-local — but once a custom GUC has been defined on a session,
+	// Postgres reports it as '' (not NULL) after the transaction ends. Every
+	// tenant_iso policy reads `tenant_id = current_setting('app.tenant_id', true)`,
+	// so a query that forgot WithTenant on a REUSED connection matched every
+	// tenant_id = '' row (installation meters, platform rows) instead of nothing.
+	// A session-level default that no tenant id can equal makes that path read
+	// ZERO rows and refuse writes; WithTenant's transaction-local value still
+	// wins inside the transaction (including an explicit "" scope), and the
+	// connection reverts to this sentinel when it ends. FORCED, not defaulted:
+	// a DATABASE_URL option must not be able to switch the fail-closed off.
+	rp[tenantGUC] = UnscopedTenant
 
 	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
