@@ -10,30 +10,16 @@ import { api, AuthUser, type ElevationStatus } from "../services/api";
 import { operatorError } from "../lib/errors";
 import Icon from "./Icon";
 import NavFlyout from "./NavFlyout";
+import NavTree from "./NavTree";
 import { Modal } from "./ui";
 import AppearanceControls from "./AppearanceControls";
 import ScopeBadge from "./ScopeBadge";
 
-// Per-module accent hue (design spec §9.1 taxonomy), keyed by section id. This
-// only tints the active indicator + the flyout header; severity colours stay
-// separate and sacred. Falls back to periwinkle for any unmapped section.
-// Per-section hue — vivid, saturated tones at Alert-pink intensity so hovering
-// any item gives a clear contrast colour (the mild set read too flat on the
-// dark rail). Alerts (pink) and Copilot/ChatGPT (violet) are kept; the rest are
-// spread across the wheel: blue · cyan · green · teal · orange · amber · slate.
-const MOD_HUE: Record<string, string> = {
-  overview: "#3B82F6", // Overview — vivid blue (was Dashboards)
-  operations: "#EC4899", // Operations — pink (kept from Monitoring/Alerts)
-  investigate: "#F97316", // Investigate — vivid orange (the RCA heart)
-  infrastructure: "#22C55E", // Fleet — vivid leafy green
-  explore: "#0EA5E9", // Explore (raw telemetry planes) — vivid sky
-  security: "#EF4444", // Security — vivid red
-  analytics: "#EAB308", // Analytics — vivid amber/gold
-  copilot: "#8B5CF6", // Iris AI — violet (kept)
-  admin: "#6366F1", // Admin — royal indigo (owner 2026-10-18: no longer slate grey)
-  platform: "#64748B", // Platform (provider-only) — deeper slate than Admin
-};
-const hueFor = (id: string) => MOD_HUE[id] ?? "#818CF8";
+// ONE accent colour for the whole menu (visual language, owner 2026-11-24).
+// The per-section hues that used to tint each rail item, its hover and its
+// flyout header are gone: colour in the menu now means one thing only, "you
+// are here". Every state reads --rail-accent from the theme (the CSS falls
+// back to it wherever --mod is unset), so the chrome presets restyle it.
 
 // countdown renders the time left on an elevated grant as something an operator
 // reads at a glance. Under a minute it says so rather than showing "0m", and an
@@ -152,11 +138,24 @@ type OpenState = { id: string; top: number; focus?: boolean } | null;
 // localStorage key, read once, written on toggle, never a hard requirement
 // (private-mode storage failures just mean the choice doesn't stick).
 const RAIL_EXPANDED_KEY = "netops.railExpanded";
+// Default: EXPANDED on a desktop-width screen (owner 2026-11-24 approved the
+// labelled menu with icons on every item as the primary look); on a narrow
+// screen the 248px menu would squeeze the page, so it starts as the icon rail.
+// The stored choice — either way — always wins.
+export const RAIL_EXPANDED_MIN_WIDTH = 900;
 function readRailExpanded(): boolean {
+  let stored: string | null = null;
   try {
-    return localStorage.getItem(RAIL_EXPANDED_KEY) === "1";
+    stored = localStorage.getItem(RAIL_EXPANDED_KEY);
   } catch {
-    return false;
+    /* no storage: fall back to the width default */
+  }
+  if (stored === "1") return true;
+  if (stored === "0") return false;
+  try {
+    return window.matchMedia(`(min-width: ${RAIL_EXPANDED_MIN_WIDTH}px)`).matches;
+  } catch {
+    return true;
   }
 }
 
@@ -257,11 +256,11 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         key={s.id}
         type="button"
         className={`rail-item${active ? " active" : ""}`}
-        style={{ ["--mod" as string]: hueFor(s.id) } as React.CSSProperties}
         aria-current={active ? "page" : undefined}
         aria-haspopup={hasFlyout ? "menu" : undefined}
         aria-expanded={hasFlyout ? open?.id === s.id : undefined}
         title={s.label}
+        data-testid={isCopilot ? "nav-iris" : undefined}
         onClick={onActivate}
         onKeyDown={(e) => {
           if (hasFlyout && e.key === "ArrowRight") {
@@ -304,20 +303,36 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
           retired — the BLOGO5 wordmark in the topbar is the shell's one and
           only brand mark. The nav groups start at the top of the pane. */}
 
-      {/* Segregated groups with thin dividers (Monitoring · Infra & Logs · Admin). */}
-      <nav className="rail-main" aria-label="Primary">
-        {groups.map((g) => (
-          <div className="rail-group" key={g.label}>
-            <div className="rail-group-label">{g.label}</div>
-            {g.sections.map(railItem)}
-          </div>
-        ))}
-      </nav>
+      {/* Expanded: the full menu — every page with its icon, sections folding
+          under a left chevron, zones split by thin dividers (NavTree).
+          Collapsed: the icon-only section rail with hover flyouts. */}
+      {expanded ? (
+        <div className="rail-main rail-main-tree">
+          <NavTree
+            nav={nav}
+            activeSection={activeSection}
+            activeLeaf={activeLeaf}
+            copilotOpen={copilotOpen}
+            onToggleCopilot={() => setCopilotOpen(!copilotOpen)}
+            onNavigate={navigate}
+          />
+        </div>
+      ) : (
+        <nav className="rail-main" aria-label="Primary">
+          {groups.map((g) => (
+            <div className="rail-group" key={g.label}>
+              <div className="rail-group-label">{g.label}</div>
+              {g.sections.map(railItem)}
+            </div>
+          ))}
+        </nav>
+      )}
 
       {/* Foot cluster, thin-line separated zones:
           (5) admin zone = Stack + Administration · (6) Support/Help · account. */}
       <div className="rail-util">
-        <div className="rail-foot-zone">{adminZone.map(railItem)}</div>
+        {/* Administration + Platform live in the tree when expanded. */}
+        {!expanded && <div className="rail-foot-zone">{adminZone.map(railItem)}</div>}
 
         <div className="rail-foot-zone">
           <div className="rail-util-row">
@@ -407,7 +422,6 @@ export default function IconRail({ nav, activeSection, activeLeaf, user, onLogou
         <NavFlyout
           section={openSection}
           top={open.top}
-          hue={hueFor(openSection.id)}
           activeSection={activeSection}
           activeLeaf={activeLeaf}
           autoFocus={open.focus}

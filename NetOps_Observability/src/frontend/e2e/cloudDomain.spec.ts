@@ -242,7 +242,10 @@ test("the canvas fills the window, and the network fills the canvas", async ({ p
   // 1. THE STAGE FILLS THE WINDOW. Only the shell chrome above it and a small
   //    gutter may be spent — no dead band underneath (the old
   //    `min-height: calc(100vh - 96px)` guess left 30px of nothing).
-  expect(stage.width).toBeGreaterThan(vp.width * 0.9);
+  // The shell's own menu column is chrome too: the expanded menu (248px, the
+  // default on a desktop since 2026-11-24) or the 44px icon rail.
+  const menu = await page.locator(".shell > .rail").first().boundingBox();
+  expect(stage.width).toBeGreaterThan((vp.width - (menu?.width ?? 0)) * 0.9);
   const gapBelow = vp.height - (stage.y + stage.height);
   expect(gapBelow, "dead space under the canvas").toBeLessThanOrEqual(12);
 

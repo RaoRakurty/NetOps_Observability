@@ -179,7 +179,11 @@ export default function Incidents() {
     return [
       { key: "severity", header: "Severity", width: 104, sortable: true,
         text: (i) => i.severity, sortValue: (i) => severityRank(i.severity), render: sevCell },
-      { key: "what", header: "Incident", sortable: true, text: (i) => `${incidentTitle(i, places)} ${friendlyIncidentId(i.id)}`, render: whatCell },
+      // A floor on the one flexible column: the six fixed columns total 966px,
+      // so at a ~1000px content width (a 1280px window with the menu open)
+      // minmax(0,1fr) squeezed the incident TITLE to zero. The table scrolls
+      // sideways instead (.dtv is overflow:auto).
+      { key: "what", header: "Incident", width: "minmax(240px, 1fr)", sortable: true, text: (i) => `${incidentTitle(i, places)} ${friendlyIncidentId(i.id)}`, render: whatCell },
       { key: "where", header: "Where", width: 190, sortable: true,
         text: (i) => whereText(incidentWhere(i, places)),
         sortValue: (i) => whereText(incidentWhere(i, places)).toLowerCase(),

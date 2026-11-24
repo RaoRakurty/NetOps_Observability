@@ -3,11 +3,14 @@
 
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavSection, routeFor } from "../nav";
+import Icon from "./Icon";
 
 type Props = {
   section: NavSection;
   top: number;
-  hue: string;
+  /** Retired (one accent for the menu, owner 2026-11-24); kept optional so old
+   *  callers compile. The flyout takes --rail-accent from the theme. */
+  hue?: string;
   activeSection: string;
   activeLeaf?: string;
   /** Opened via keyboard (ArrowRight on the rail item): focus the first item. */
@@ -25,7 +28,6 @@ type Props = {
 export default function NavFlyout({
   section,
   top,
-  hue,
   activeSection,
   activeLeaf,
   autoFocus,
@@ -103,7 +105,7 @@ export default function NavFlyout({
       className="nav-flyout"
       role="menu"
       aria-label={section.label}
-      style={{ top: topPx, ["--mod" as string]: hue } as React.CSSProperties}
+      style={{ top: topPx }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onKeyDown={onMenuKeyDown}
@@ -149,7 +151,8 @@ export default function NavFlyout({
                         : onNavigate(`${section.id}/${leaf.id}`)
                     }
                   >
-                    {leaf.label}
+                    <Icon name={leaf.icon} size={16} className="nav-flyout-icon" />
+                    <span className="nav-flyout-label">{leaf.label}</span>
                     {collapsible && <span className="nav-flyout-chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>}
                   </button>
                   {(!collapsible || open) && (leaf.subItems ?? []).map((sub) => {

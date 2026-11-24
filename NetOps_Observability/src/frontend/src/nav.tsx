@@ -188,6 +188,10 @@ const CorsOrigins = lazy(ROUTE_CHUNKS["CorsOrigins"] as () => Promise<{ default:
 export type NavLeaf = {
   id: string;
   label: string;
+  // icon: the leaf's menu glyph (a key of components/Icon.tsx). REQUIRED — the
+  // visual language (owner 2026-11-24) puts an icon beside every menu item;
+  // nav.icons.test.ts checks each one exists.
+  icon: string;
   render: (c: SectionCtx) => JSX.Element;
   platformOnly?: boolean; // visible only to the cross-tenant platform owner
   requiresGrafana?: boolean; // shown only when the self-monitoring add-on runs
@@ -250,14 +254,14 @@ export const NAV: NavSection[] = [
     children: [
       // Home IS the operational control plane (Command Center) — consistently, on
       // first load, in-app navigation, and refresh alike (UI-7).
-      { id: "home", label: "Home", render: () => <CommandCenter /> },
+      { id: "home", label: "Home", icon: "home", render: () => <CommandCenter /> },
       // Overview (owner, 2026-11-22): Operations Overview and My Dashboard merged
       // into ONE default page. The id stays `operations` so saved landings and
       // links keep resolving; the old My Dashboard route aliases here.
-      { id: "operations", label: "Overview", render: () => <Overview /> },
+      { id: "operations", label: "Overview", icon: "dashboards", render: () => <Overview /> },
       // The tenant's own dashboards: #/overview/dashboards[/new | /<id>]. Each
       // dashboard has its own address (the third segment), read by the page.
-      { id: "dashboards", label: "My dashboards", render: () => <MyDashboards /> },
+      { id: "dashboards", label: "My dashboards", icon: "board", render: () => <MyDashboards /> },
     ],
   },
   // ── Operations — what is happening right now ────────────────────────────────
@@ -269,12 +273,12 @@ export const NAV: NavSection[] = [
       // Problems: the correlated cases that need action (the Command Center's
       // triage queue as a routed page; id `queue` kept, so every link and
       // bookmark still resolves). Ordered most-aggregated first (owner, 2026-11-22).
-      { id: "queue", label: "Problems", render: () => <ActionQueue /> },
-      { id: "incidents", label: "Incidents", render: () => <Incidents /> },
-      { id: "alerts", label: "Active Alerts", render: () => <Alerts /> },
+      { id: "queue", label: "Problems", icon: "alert-triangle", render: () => <ActionQueue /> },
+      { id: "incidents", label: "Incidents", icon: "incident", render: () => <Incidents /> },
+      { id: "alerts", label: "Active Alerts", icon: "bell", render: () => <Alerts /> },
       // Digital Experience (DEM). Sub-items mirror the page's seven tabs, and
       // each one is a real deep link: #/operations/digital-experience/<tab>.
-      { id: "digital-experience", label: "Digital Experience", render: () => <DigitalExperience />, collapsible: true, subItems: [
+      { id: "digital-experience", label: "Digital Experience", icon: "globe", render: () => <DigitalExperience />, collapsible: true, subItems: [
         { id: "experience", label: "Experience" }, { id: "incidents", label: "Incidents" },
         { id: "journeys", label: "Journeys" }, { id: "paths", label: "Service Paths" },
         { id: "synthetics", label: "Synthetics" }, { id: "changes", label: "Changes" },
@@ -284,18 +288,18 @@ export const NAV: NavSection[] = [
       // that. The application layer left for Infrastructure → Applications, so
       // the old "Services → Services" repetition is gone. Cloud Logs moved in
       // from Explore → Logs and deep-links to the log plane it still renders on.
-      { id: "cloud", label: "Cloud", render: () => <CloudObservability />, collapsible: true, subItems: [
+      { id: "cloud", label: "Cloud", icon: "cloud", render: () => <CloudObservability />, collapsible: true, subItems: [
         { id: "overview", label: "Overview" }, { id: "resources", label: "Resources" },
         { id: "logs", label: "Cloud Logs", route: "explore/logs/cloud" },
         { id: "datasources", label: "Data Sources" }, { id: "security", label: "Security" },
         { id: "investigations", label: "Investigations" }, { id: "settings", label: "Settings" },
       ] },
-      { id: "network-health", label: "Network Health", render: (c) => <Quality rangeMinutes={c.rangeMinutes} /> },
-      { id: "rules", label: "Monitor Rules", group: "Monitors", render: () => <Rules /> },
-      { id: "new", label: "Create Monitor", group: "Monitors", render: () => <NewMonitor /> },
+      { id: "network-health", label: "Network Health", icon: "activity", render: (c) => <Quality rangeMinutes={c.rangeMinutes} /> },
+      { id: "rules", label: "Monitor Rules", icon: "sliders", group: "Monitors", render: () => <Rules /> },
+      { id: "new", label: "Create Monitor", icon: "plus", group: "Monitors", render: () => <NewMonitor /> },
       // Item 121: planned-work windows — pause notifications, stamp reliability
       // rollups as planned maintenance. Sits with the alert surface it governs.
-      { id: "maintenance", label: "Maintenance Windows", group: "Monitors", render: () => <MaintenanceWindows /> },
+      { id: "maintenance", label: "Maintenance Windows", icon: "calendar", group: "Monitors", render: () => <MaintenanceWindows /> },
     ],
   },
   // ── Investigate — why is it happening (the RCA heart) ───────────────────────
@@ -306,25 +310,25 @@ export const NAV: NavSection[] = [
     children: [
       // The full engineer surface (every candidate); the promoted-outage library
       // lives under Analytics → RCA Reports (#113).
-      { id: "rca", label: "RCA", render: () => <Correlations /> },
+      { id: "rca", label: "RCA", icon: "target", render: () => <Correlations /> },
       // Troubleshooting is the case workbench (pick a case, read the answer,
       // open the evidence) — it sits beside RCA, not under the Paths header it
       // used to inherit by following the Paths leaves without a group of its
       // own (Paths redesign P0, 2026-11-20).
-      { id: "troubleshooting", label: "Troubleshooting", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
+      { id: "troubleshooting", label: "Troubleshooting", icon: "tool", render: (c) => <Troubleshooting rangeMinutes={c.rangeMinutes} /> },
       // Label unified to "Findings" (the component was Findings.tsx all along;
       // the old nav called it "Anomalies" — two names for one view).
-      { id: "findings", label: "Findings", render: () => <Findings /> },
+      { id: "findings", label: "Findings", icon: "flag", render: () => <Findings /> },
       // Correlix Topology Operating Canvas (React Flow + ELK) — the SINGLE
       // topology view; Capacity/Change-Review/Executive stay in-canvas modes.
-      { id: "topology", label: "Topology", render: () => <TopologyCanvas /> },
+      { id: "topology", label: "Topology", icon: "topology", render: () => <TopologyCanvas /> },
       // Paths — how traffic actually traverses the network (the measurement
       // plane). ONE leaf since Paths redesign P5 (2026-11-21): Tunnels and WAN
       // circuits share one header (site filter, the "Path data" drawer). The
       // Measured paths tab was retired on 2026-11-22: each measured path is on
       // the row it measures. The old leaves (flowtrace, tunnels, wan-paths) and
       // the measured tab are aliases below, so every bookmark lands on a tab.
-      { id: "paths", label: "Paths", render: () => <PathsPage />, subItems: [
+      { id: "paths", label: "Paths", icon: "route", render: () => <PathsPage />, subItems: [
         { id: "tunnels", label: "Tunnels" },
         { id: "wan-circuits", label: "WAN circuits" },
       ] },
@@ -336,19 +340,19 @@ export const NAV: NavSection[] = [
     label: "Infrastructure",
     icon: "infrastructure",
     children: [
-      { id: "devices", label: "Devices", render: () => <Devices /> },
+      { id: "devices", label: "Devices", icon: "server", render: () => <Devices /> },
       // Applications (owner IA, 2026-09-07) — the provider-neutral application
       // layer the identity engine and the catalogues fill, sitting beside the
       // device inventory because it answers the same question: what do I own.
-      { id: "applications", label: "Applications", render: () => <ApplicationsObservability />, subItems: [
+      { id: "applications", label: "Applications", icon: "app-window", render: () => <ApplicationsObservability />, subItems: [
         { id: "catalog", label: "Catalog" }, { id: "appmap", label: "Application Map" },
         { id: "registries", label: "Registries" }, { id: "business", label: "Business Services" },
       ] },
       // Port Intelligence workbench (#94) — fleet interfaces/ports/optics/DDM.
-      { id: "interfaces", label: "Interfaces & Optics", render: () => <PortsWorkbench /> },
+      { id: "interfaces", label: "Interfaces & Optics", icon: "plug", render: () => <PortsWorkbench /> },
       // Sites — the promoted sites surface; the Device Geomap is folded in as
       // its Map tab (deep links: #/infrastructure/sites/{map|sites|locations}).
-      { id: "sites", label: "Sites", render: () => <Sites />, subItems: [
+      { id: "sites", label: "Sites", icon: "map-pin", render: () => <Sites />, subItems: [
         { id: "map", label: "Map" },
         { id: "sites", label: "Manage Sites" },
         { id: "locations", label: "Set Locations" },
@@ -356,17 +360,17 @@ export const NAV: NavSection[] = [
       // Wireless canonical inventory (#128): controllers, APs + radios, WLANs.
       // Wired + wireless are ONE LAN domain (owner ruling) — this is the
       // wireless VIEW of it, filled by controller connectors (Catalyst 9800).
-      { id: "wireless", label: "Wireless", render: () => <Wireless /> },
+      { id: "wireless", label: "Wireless", icon: "wireless", render: () => <Wireless /> },
       // NMS vendor-controller integrations (#95, dormant unless
       // FEATURE_NMS_INTEGRATIONS). Subnet discovery left this section for
       // Administration → Data sources (SNMP credentials live in ONE place,
       // SNMP Profiles, and discovery sits beside them).
-      { id: "nms", label: "NMS Integrations", render: () => <NmsIntegrations /> },
+      { id: "nms", label: "NMS Integrations", icon: "link", render: () => <NmsIntegrations /> },
       // Config drift — fleet configuration state; each row deep-links to the
       // device's Configuration panel. Dormant (renders "not enabled") unless
       // FEATURE_CONFIG_BACKUP is set on the backend.
-      { id: "config-drift", label: "Config Drift", render: () => <ConfigDrift /> },
-      { id: "sot", label: "Source of Truth", platformOnly: true, render: () => <SourceOfTruth /> },
+      { id: "config-drift", label: "Config Drift", icon: "git-compare", render: () => <ConfigDrift /> },
+      { id: "sot", label: "Source of Truth", icon: "datasets", platformOnly: true, render: () => <SourceOfTruth /> },
     ],
   },
   // ── Explore — the raw telemetry planes ──────────────────────────────────────
@@ -375,18 +379,18 @@ export const NAV: NavSection[] = [
     label: "Explore",
     icon: "datasets",
     children: [
-      { id: "metrics", label: "Metrics", render: (c) => <MetricsExplorer rangeMinutes={c.rangeMinutes} /> },
+      { id: "metrics", label: "Metrics", icon: "metrics", render: (c) => <MetricsExplorer rangeMinutes={c.rangeMinutes} /> },
       // Log Search + Cloud Logs in one leaf; #/explore/logs/cloud deep-links the
       // cloud plane (see pages/LogsExplore.tsx). The Cloud Logs NAV entry moved
       // to Operations → Cloud (owner IA, 2026-09-07) and routes back here.
-      { id: "logs", label: "Logs", render: (c) => <LogsExplore initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
+      { id: "logs", label: "Logs", icon: "logs", render: (c) => <LogsExplore initialQuery={c.query} rangeMinutes={c.rangeMinutes} /> },
       // Flows (redesigned 2026-11-12, P1): links first, the flow records explain
       // them — Right now / Who is talking / Capacity (tabs/Flows.tsx).
-      { id: "flows", label: "Flows", render: (c) => <Flows rangeMinutes={c.rangeMinutes} /> },
+      { id: "flows", label: "Flows", icon: "flows", render: (c) => <Flows rangeMinutes={c.rangeMinutes} /> },
       // The separate Events leaf was removed (owner 2026-11-11): the Logs page's
       // Events tab (the default) shows every store, and active alerts have their
       // own page, Operations → Active Alerts. Old links alias to Logs below.
-      { id: "saved", label: "Saved Searches", render: () => <SavedSearches /> },
+      { id: "saved", label: "Saved Searches", icon: "bookmark", render: () => <SavedSearches /> },
     ],
   },
   // ── Security — the CTEM section (P3-T8) ─────────────────────────────────────
@@ -399,12 +403,12 @@ export const NAV: NavSection[] = [
     label: "Security",
     icon: "shield",
     children: [
-      { id: "overview", label: "Security Overview", render: () => <SecurityOverview /> },
-      { id: "exposures", label: "Exposures", render: () => <SecurityExposures /> },
-      { id: "stories", label: "Exposure Stories", render: () => <SecurityExposureStories /> },
-      { id: "vuln", label: "Vulnerabilities", render: () => <VulnerabilityManagement /> },
+      { id: "overview", label: "Security Overview", icon: "shield", render: () => <SecurityOverview /> },
+      { id: "exposures", label: "Exposures", icon: "eye", render: () => <SecurityExposures /> },
+      { id: "stories", label: "Exposure Stories", icon: "book", render: () => <SecurityExposureStories /> },
+      { id: "vuln", label: "Vulnerabilities", icon: "bug", render: () => <VulnerabilityManagement /> },
       {
-        id: "threat", label: "Threat Detection",
+        id: "threat", label: "Threat Detection", icon: "radar",
         render: (c) => <SecurityThreatDetection sinceSeconds={c.rangeMinutes * 60} />,
         subItems: [
           { id: "detections", label: "Detections" },
@@ -412,14 +416,14 @@ export const NAV: NavSection[] = [
         ],
       },
       {
-        id: "compliance", label: "Compliance", render: () => <SecurityCompliance />,
+        id: "compliance", label: "Compliance", icon: "clipboard-check", render: () => <SecurityCompliance />,
         subItems: [
           { id: "controls", label: "Control set" },
           { id: "drift", label: "Drift & baselines" },
         ],
       },
-      { id: "rules", label: "Detection Rules", group: "Configuration", render: () => <SecurityRules /> },
-      { id: "views", label: "Saved Views", group: "Configuration", render: () => <SecuritySavedViews /> },
+      { id: "rules", label: "Detection Rules", icon: "sliders", group: "Configuration", render: () => <SecurityRules /> },
+      { id: "views", label: "Saved Views", icon: "bookmark", group: "Configuration", render: () => <SecuritySavedViews /> },
     ],
   },
   // ── Analytics — boards, reports and management trend views ──────────────────
@@ -432,20 +436,20 @@ export const NAV: NavSection[] = [
       // flashier chrome — a sales surface, so for a NOC it repeats Overview and
       // My dashboards. Platform owner only (2026-11-22, owner: "no duplicates
       // under Analytics"); tenants never see it.
-      { id: "demo", label: "Demo Showcase", group: "Dashboards", platformOnly: true, render: () => <DemoShowcase /> },
+      { id: "demo", label: "Demo Showcase", icon: "play", group: "Dashboards", platformOnly: true, render: () => <DemoShowcase /> },
       // The device-monitoring board suite (docs/design/device-monitoring-dashboards.md).
-      { id: "device-monitoring", label: "Device Monitoring", group: "Metric Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
-      { id: "interface-performance", label: "Interface Performance", group: "Metric Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
+      { id: "device-monitoring", label: "Device Monitoring", icon: "model", group: "Metric Dashboards", render: (c) => <DeviceMonitoring rangeMinutes={c.rangeMinutes} /> },
+      { id: "interface-performance", label: "Interface Performance", icon: "gauge", group: "Metric Dashboards", render: (c) => <InterfacePerformance rangeMinutes={c.rangeMinutes} /> },
       // One leaf, three tabs (2026-11-22). The BGP tab is the consolidated BGP
       // outage screen (item 10, 2026-08-25), formerly its own "BGP Operations"
       // leaf: its "sessions down or flapping" duplicated this page's BGP charts.
-      { id: "protocols", label: "Protocol Monitoring", group: "Metric Dashboards", render: (c) => <ProtocolsPage rangeMinutes={c.rangeMinutes} />, subItems: [
+      { id: "protocols", label: "Protocol Monitoring", icon: "share", group: "Metric Dashboards", render: (c) => <ProtocolsPage rangeMinutes={c.rangeMinutes} />, subItems: [
         { id: "bgp", label: "BGP" }, { id: "ospf", label: "OSPF" }, { id: "isis", label: "IS-IS" },
       ] },
-      { id: "reports", label: "Reports", render: () => <Reports /> },
+      { id: "reports", label: "Reports", icon: "file-text", render: () => <Reports /> },
       // #113: the management library — ONLY promoted real outages + documents.
-      { id: "rca-reports", label: "RCA Reports", render: () => <RcaReports /> },
-      { id: "scorecard", label: "Recovery Scorecard", render: () => <ReliabilityScorecard /> },
+      { id: "rca-reports", label: "RCA Reports", icon: "docs", render: () => <RcaReports /> },
+      { id: "scorecard", label: "Recovery Scorecard", icon: "award", render: () => <ReliabilityScorecard /> },
     ],
   },
   // Iris is an ACTION: clicking it opens the ask slide-over. It carries no
@@ -485,7 +489,7 @@ export const NAV: NavSection[] = [
       // SNMP profiles, collection coverage and the tenant's unrecognized
       // shapes are tenant-scoped (requirePerm + tenant filter).
       {
-        id: "discovery", label: "Discovery", group: "Data sources", render: () => <DiscoveryHub />,
+        id: "discovery", label: "Discovery", icon: "radio-tower", group: "Data sources", render: () => <DiscoveryHub />,
         subItems: [
           { id: "snmp", label: "SNMP Profiles" },
           { id: "scan", label: "Network Scan" },
@@ -497,8 +501,8 @@ export const NAV: NavSection[] = [
       },
       // Incident response plumbing — configuration, not operations (the old
       // Incident Response rail section dissolved into here).
-      { id: "integrations", label: "Integrations", group: "Incident response", render: () => <IntegrationsAdmin /> },
-      { id: "notifications", label: "Notifications", group: "Incident response", render: () => <NotificationsAdmin /> },
+      { id: "integrations", label: "Integrations", icon: "webhook", group: "Incident response", render: () => <IntegrationsAdmin /> },
+      { id: "notifications", label: "Notifications", icon: "mail", group: "Incident response", render: () => <NotificationsAdmin /> },
       // RCA Tickets (owner 2026-10-18): "Ticketing & Automation" and "Ticket
       // Delivery" are ONE numbered, prerequisite-gated flow — connect
       // destinations → ticket rules → vendor case routing (optional) →
@@ -507,7 +511,7 @@ export const NAV: NavSection[] = [
       // and audit + principalTenant), so the merged leaf is tenant-level.
       // The old #/admin/ticket-delivery is an alias to its Deliveries step.
       {
-        id: "ticketing", label: "RCA Tickets", group: "Incident response", render: () => <RcaTickets />,
+        id: "ticketing", label: "RCA Tickets", icon: "ticket", group: "Incident response", render: () => <RcaTickets />,
         subItems: [
           { id: "deliveries", label: "Deliveries" },
           { id: "cases", label: "Vendor case routing" },
@@ -517,8 +521,8 @@ export const NAV: NavSection[] = [
       // allowed to look at what it hid. Owner IA (2026-09-05): Processors and
       // Sensitive Data Access are ONE group; both are tenant-scoped on the
       // server (requireAdmin + tenant filter · sensitive_data:admin).
-      { id: "processors", label: "Processors", group: "Data handling", render: () => <ProcessorsAdmin /> },
-      { id: "sensitive-data-access", label: "Sensitive Data Access", group: "Data handling", render: () => <SensitiveDataAccess /> },
+      { id: "processors", label: "Processors", icon: "automation", group: "Data handling", render: () => <ProcessorsAdmin /> },
+      { id: "sensitive-data-access", label: "Sensitive Data Access", icon: "eye-off", group: "Data handling", render: () => <SensitiveDataAccess /> },
       // Identity & Access — consolidates Users · Roles · Security Settings.
       // Sub-items deep-link its internal views via the #/admin/identity/<sub>
       // suffix (read by IdentityAccess, same mechanism as admin/api).
@@ -530,7 +534,7 @@ export const NAV: NavSection[] = [
       // the workspace's own admin) — tenant-level, not platform-stamped. The old
       // leaves (network-context, iris-runbooks, iris-learning) are aliases below.
       {
-        id: "iris", label: "Iris", group: "Iris", render: () => <IrisAdmin />,
+        id: "iris", label: "Iris", icon: "copilot", group: "Iris", render: () => <IrisAdmin />,
         subItems: [
           { id: "ai-models", label: "AI models" },
           { id: "knowledge", label: "Knowledge" },
@@ -538,9 +542,9 @@ export const NAV: NavSection[] = [
           { id: "investigations", label: "Investigations" },
         ],
       },
-      { id: "identity", label: "Identity & Access", group: "People & access", render: () => <IdentityAccess /> },
+      { id: "identity", label: "Identity & Access", icon: "users", group: "People & access", render: () => <IdentityAccess /> },
       {
-        id: "api", label: "API Access", group: "People & access", render: () => <ApiAccessAdmin />,
+        id: "api", label: "API Access", icon: "key", group: "People & access", render: () => <ApiAccessAdmin />,
         subItems: [
           { id: "keys", label: "Generate API key" },
           { id: "token", label: "Token Policy" },
@@ -551,7 +555,7 @@ export const NAV: NavSection[] = [
       // handleSessions, requireAdmin + sameTenant() filter (a tenant admin sees
       // only its own tenant's sessions; 2026-09-05 IA: not platform-stamped,
       // because the data already is scoped). People & access since 2026-10-18.
-      { id: "sessions", label: "Sessions", group: "People & access", render: () => <SessionsAdmin /> },
+      { id: "sessions", label: "Sessions", icon: "laptop", group: "People & access", render: () => <SessionsAdmin /> },
       // Audit & security — who can reach what, what was done, and how the
       // transport carrying it is secured. Every route behind this group is
       // requireAdmin + tenant-filtered on the server, so the whole group is
@@ -564,10 +568,10 @@ export const NAV: NavSection[] = [
       // Authentication providers moved OUT of this group to Platform → Security
       // in the same change: OIDC/LDAP/TACACS/token-policy are all
       // requirePlatformAdmin, i.e. provider-level plumbing.
-      { id: "access", label: "Access Explorer", group: "Audit & security", render: () => <AccessExplorer /> },
-      { id: "audit", label: "Audit Log", group: "Audit & security", render: () => <AuditLog /> },
-      { id: "transport", label: "Transport Security", group: "Audit & security", render: () => <TransportSecurity /> },
-      { id: "settings", label: "Settings", group: "Workspace", render: () => <Settings /> },
+      { id: "access", label: "Access Explorer", icon: "directory", group: "Audit & security", render: () => <AccessExplorer /> },
+      { id: "audit", label: "Audit Log", icon: "list", group: "Audit & security", render: () => <AuditLog /> },
+      { id: "transport", label: "Transport Security", icon: "lock", group: "Audit & security", render: () => <TransportSecurity /> },
+      { id: "settings", label: "Settings", icon: "settings", group: "Workspace", render: () => <Settings /> },
       // Licence — what this installation is licensed to run and where this
       // tenant stands against every ceiling. TENANT-LEVEL since the 2026-09-05
       // read split: GET /api/system/licence is licenceReadGate → requireAdmin
@@ -578,7 +582,7 @@ export const NAV: NavSection[] = [
       // installing or replacing it remains the provider's action — the page
       // branches on the PAYLOAD's scope, not on who is looking, and hides the
       // install controls for a tenant admin instead of 403ing them.
-      { id: "licence", label: "License", group: "Workspace", render: () => <Licence /> },
+      { id: "licence", label: "License", icon: "badge-check", group: "Workspace", render: () => <Licence /> },
     ],
   },
   // ── Platform — the PROVIDER's own section (owner IA, 2026-09-05) ────────────
@@ -606,21 +610,21 @@ export const NAV: NavSection[] = [
       //                   every route requirePlatformAdmin
       // data-protection → internal/dataprotect via dataProtectGate →
       //                   requirePlatformAdmin, uniformly on all six routes
-      { id: "auth", label: "Authentication", group: "Security", render: () => <AuthenticationAdmin /> },
-      { id: "data-protection", label: "Data Protection", group: "Security", render: () => <DataProtection /> },
+      { id: "auth", label: "Authentication", icon: "user-check", group: "Security", render: () => <AuthenticationAdmin /> },
+      { id: "data-protection", label: "Data Protection", icon: "lock", group: "Security", render: () => <DataProtection /> },
       // Configuration — what this installation runs (tracker 348, 2026-10-11).
       // features → feature_flags.go handlePlatformFeatures / handlePlatformRestart,
       //            requirePlatformAdmin (the switches are platform-global)
-      { id: "features", label: "Features", group: "Configuration", render: () => <Features /> },
+      { id: "features", label: "Features", icon: "toggle", group: "Configuration", render: () => <Features /> },
       // platform-alerts → internal/platformalert via platformAlertAPI,
       //                   requirePlatformAdmin on GET/PUT and the test send
       //                   (where Correlix's OWN alerts go; owner 2026-11-11:
       //                   GUI, not env)
-      { id: "platform-alerts", label: "Platform alerts", group: "Configuration", render: () => <PlatformAlerts /> },
+      { id: "platform-alerts", label: "Platform alerts", icon: "bell", group: "Configuration", render: () => <PlatformAlerts /> },
       // cors-origins → internal/corsallow via corsAPI, requirePlatformAdmin on
       //                GET/PUT (tracker 439: the real-user tag's cross-origin
       //                allowlist; a saved list wins over CORS_ALLOWED_ORIGINS)
-      { id: "cors-origins", label: "Cross-origin access", group: "Configuration", render: () => <CorsOrigins /> },
+      { id: "cors-origins", label: "Cross-origin access", icon: "globe", group: "Configuration", render: () => <CorsOrigins /> },
       // Tools — the provider's operational instruments and the raw-backend
       // escape hatches.
       // health     → stack_health.go, requireCrossTenant
@@ -631,21 +635,21 @@ export const NAV: NavSection[] = [
       //              keeps it provider-only, which is STRICTER than the route,
       //              i.e. fail-closed. Unhiding it would be a new exposure and
       //              is not part of this change.
-      { id: "health", label: "Stack Health", group: "Tools", render: () => <StackHealth /> },
-      { id: "grafana", label: "Self-Monitoring", group: "Tools", requiresGrafana: true, render: () => <GrafanaTab /> },
-      { id: "opensearch", label: "Search Dashboards", group: "Tools", render: () => <SearchDashboardsTab /> },
+      { id: "health", label: "Stack Health", icon: "activity", group: "Tools", render: () => <StackHealth /> },
+      { id: "grafana", label: "Self-Monitoring", icon: "metrics", group: "Tools", requiresGrafana: true, render: () => <GrafanaTab /> },
+      { id: "opensearch", label: "Search Dashboards", icon: "search", group: "Tools", render: () => <SearchDashboardsTab /> },
       // pipeline-debugger → internal/pipedebug via debugAuthz →
       // requirePlatformAdmin on all five /api/debug/* routes. The agreed route
       // id names the group as well as the leaf; the two-part router has no room
       // for that, so "platform/tools/pipeline-debugger" is aliased onto this
       // leaf below (LEGACY_ROUTE_ALIAS) and resolves to the same page.
-      { id: "pipeline-debugger", label: "Pipeline Debugger", group: "Tools", render: () => <PipelineDebugger /> },
-      { id: "regions", label: "Regions", group: "Tools", render: () => <RegionsAdmin /> },
-      { id: "graphql", label: "GraphQL Explorer", group: "Tools", render: () => <GraphQLExplorer /> },
+      { id: "pipeline-debugger", label: "Pipeline Debugger", icon: "bug", group: "Tools", render: () => <PipelineDebugger /> },
+      { id: "regions", label: "Regions", icon: "map", group: "Tools", render: () => <RegionsAdmin /> },
+      { id: "graphql", label: "GraphQL Explorer", icon: "code", group: "Tools", render: () => <GraphQLExplorer /> },
       // quarantine → pipeline_processors.go handleQuarantineList,
       // requirePlatformAdmin: the index holds events that could not be
       // attributed to ANY tenant, so it is provider-only by construction.
-      { id: "quarantine", label: "Quarantine", group: "Tools", render: () => <Quarantine /> },
+      { id: "quarantine", label: "Quarantine", icon: "archive", group: "Tools", render: () => <Quarantine /> },
     ],
   },
 ];
