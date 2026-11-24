@@ -14,10 +14,11 @@
 import { describe, it, expect } from "vitest";
 import {
   LABEL_BAND, GROUP_PAD, ELK_GROUP_PADDING, GROUP_MIN_W, GROUP_MIN_H, radiusForDepth,
+  labelChipWidth, groupMinWidth,
 } from "./groupGeometry";
 import { NODE_SIZE } from "./layoutTypes";
 import { CARD_W, CARD_H } from "../renderers/react-flow/nodes/DeviceNode";
-import { layoutView } from "./elkLayout";
+import { layoutView, minSize } from "./elkLayout";
 
 describe("one geometry source", () => {
   it("lays out with the size it actually draws", () => {
@@ -84,5 +85,51 @@ describe("ELK returns container rectangles", () => {
 
     // And the child must clear the parent's label band.
     expect(v.y - r.y).toBeGreaterThanOrEqual(LABEL_BAND);
+  });
+});
+
+
+// Owner, 2026-11-24: the site name went to 14px (secondary text 12px), and the
+// chip used to hang past a one-device box onto its neighbour. A box is never
+// narrower than its own chip.
+describe("a site box fits its label chip", () => {
+  it("the chip estimate grows with the name and is capped like the chip caps it", () => {
+    expect(labelChipWidth("Site 50 · from vManage", 2)).toBeGreaterThan(labelChipWidth("Site 5", 2));
+    expect(labelChipWidth("x".repeat(80), 2)).toBe(labelChipWidth("x".repeat(38), 2));
+    expect(labelChipWidth("Site 1", 1000)).toBeGreaterThan(labelChipWidth("Site 1", 1));
+  });
+
+  it("a box is at least the card minimum and at least chip + its 10px insets", () => {
+    for (const label of ["", "Site 1", "Site 50 · from vManage", "x".repeat(60)]) {
+      const w = groupMinWidth(label, 1);
+      expect(w).toBeGreaterThanOrEqual(GROUP_MIN_W);
+      expect(w).toBeGreaterThanOrEqual(labelChipWidth(label, 1) + 20);
+    }
+  });
+
+  it("ELK lays a one-device site out at least as wide as its chip", async () => {
+    const label = "Site 50 · from vManage";
+    const view = {
+      // Unique ids: layoutView caches by view id + node/edge ids.
+      view_id: "chip-fit", mode: "explore", scope: {}, layout_type: "hierarchical", generated_at: "",
+      nodes: [{ id: "chip-fit-a", label: "a", kind: "router", health: "ok", confidence: 1, evidence: [] }],
+      edges: [], overlays: [],
+      groups: [{ id: "site:chip-fit", label, group_type: "site", children: ["chip-fit-a"], health: "ok", collapsed: false }],
+    } as unknown as Parameters<typeof layoutView>[0];
+    const out = await layoutView(view);
+    const r = out["site:chip-fit"] as { w?: number };
+    expect(r.w ?? 0).toBeGreaterThanOrEqual(labelChipWidth(label, 1) + 20);
+  });
+});
+
+// elkjs, hierarchyHandling INCLUDE_CHILDREN: a compound node's minimum is
+// applied transposed in a vertical flow (measured 2026-11-24: (413,148) came
+// back 168×413 with DOWN). minSize passes it the way ELK reads it.
+describe("ELK container minimum is passed the way ELK reads it", () => {
+  it("vertical flows transpose, horizontal flows do not", () => {
+    expect(minSize(413, 148, "DOWN")).toBe("(148,413)");
+    expect(minSize(413, 148, "UP")).toBe("(148,413)");
+    expect(minSize(413, 148, "RIGHT")).toBe("(413,148)");
+    expect(minSize(413, 148, "LEFT")).toBe("(413,148)");
   });
 });

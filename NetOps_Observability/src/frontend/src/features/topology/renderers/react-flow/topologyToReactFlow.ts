@@ -13,7 +13,7 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { TopologyView, OverlayKind, TopologySelection, Health } from "../../api/topologyTypes";
 import type { LayoutResult } from "../../layout/layoutTypes";
-import { GROUP_PAD, LABEL_BAND } from "../../layout/groupGeometry";
+import { GROUP_PAD, LABEL_BAND, groupMinWidth } from "../../layout/groupGeometry";
 import { NODE_SIZE } from "../../layout/layoutTypes";
 import type { RFNodeData, RFEdgeData, RFGroupData, NodeEmphasis, EdgeEmphasis } from "./rfTypes";
 import { NODE_TYPE_FOR_KIND, EDGE_TYPE_FOR_VARIANT, CLOUD_RESOURCE_NODE_TYPE, GROUP_LABEL_PREFIX } from "./rfTypes";
@@ -344,7 +344,9 @@ export function topologyToReactFlow(
       const rect = rectOf.get(g.id) ?? solvedRect ?? {
         x: (bbox as BBox).minX - GROUP_PAD,
         y: (bbox as BBox).minY - GROUP_PAD - LABEL_BAND,
-        w: (bbox as BBox).w + GROUP_PAD * 2,
+        // Never narrower than its own label chip (redrawn around members after
+        // a drag): the chip must not hang past the box onto a neighbour.
+        w: Math.max((bbox as BBox).w + GROUP_PAD * 2, groupMinWidth(g.label || g.id, counts.total)),
         h: (bbox as BBox).h + GROUP_PAD * 2 + LABEL_BAND,
       };
       groupNodes.push({

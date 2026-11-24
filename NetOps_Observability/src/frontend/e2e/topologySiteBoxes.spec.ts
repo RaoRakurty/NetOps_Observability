@@ -105,6 +105,13 @@ test("each reported site is its own box — Auto does not draw the mesh as a cir
   for (const other of ["vEdge-20", "cEDGE-40", "cEDGE-60", "cEDGE-80", "cEDGE-81", "vEdge-100"]) {
     expect(inside(await box(page, `rf__node-${other}`), site50), `${other} drawn inside Site 50`).toBe(false);
   }
+  // Each site's label chip (name 14px, secondary 12px — owner 2026-11-24) sits
+  // inside its own box: it used to hang past a one-device box onto a neighbour.
+  for (const s of ["20", "40", "50", "60", "80", "81", "100"]) {
+    const chipBox = await box(page, `rf__node-group-label:site:${key(s)}`);
+    const siteBox = await box(page, `rf__node-site:${key(s)}`);
+    expect(inside(chipBox, siteBox), `Site ${s}'s label chip hangs outside its box`).toBe(true);
+  }
   // Seven separate sites read as seven separate boxes: no two boxes overlap.
   // (The circle Auto used to draw packed single-device sites so tightly that
   // their boxes ran into one another.)

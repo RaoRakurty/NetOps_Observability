@@ -22,7 +22,7 @@
 import type { TopologyView } from "../api/topologyTypes";
 import type { LayoutResult } from "./layoutTypes";
 import { CARD_W, CARD_H } from "../renderers/react-flow/nodes/DeviceNode";
-import { GROUP_GAP, GROUP_PAD, LABEL_BAND, GROUP_MIN_W, GROUP_MIN_H } from "./groupGeometry";
+import { GROUP_GAP, GROUP_PAD, LABEL_BAND, GROUP_MIN_H, groupMinWidth } from "./groupGeometry";
 
 const CELL_GAP_X = 28; // between cards inside a site box
 const CELL_GAP_Y = 24;
@@ -57,7 +57,7 @@ export function wanOverlayLayout(view: TopologyView): LayoutResult {
     members.forEach((m) => claimed.add(m));
     const cols = gridCols(members.length);
     const rows = Math.ceil(members.length / cols);
-    const w = Math.max(GROUP_MIN_W, 2 * GROUP_PAD + cols * CARD_W + (cols - 1) * CELL_GAP_X);
+    const w = Math.max(groupMinWidth(g.label || g.id, members.length), 2 * GROUP_PAD + cols * CARD_W + (cols - 1) * CELL_GAP_X);
     const h = Math.max(GROUP_MIN_H, LABEL_BAND + 2 * GROUP_PAD + rows * CARD_H + (rows - 1) * CELL_GAP_Y);
     boxes.push({ id: g.id, w, h, container: true, members });
   }

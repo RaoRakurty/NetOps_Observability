@@ -13,7 +13,7 @@ import type { LayoutResult } from "./layoutTypes";
 import { NODE_SIZE } from "./layoutTypes";
 import { presetFor } from "./layoutPresets";
 import { wanOverlayLayout } from "./wanOverlayLayout";
-import { ELK_GROUP_PADDING, GROUP_GAP, GROUP_ASPECT, GROUP_MIN_W, GROUP_MIN_H } from "./groupGeometry";
+import { ELK_GROUP_PADDING, GROUP_GAP, GROUP_ASPECT, GROUP_MIN_H, groupMinWidth } from "./groupGeometry";
 
 // elkjs is ~1.6 MB — dynamic-import it on first layout so it never rides in
 // the initial bundle. Memoized: one in-flight/loaded instance per session.
@@ -222,6 +222,12 @@ type ElkChild = {
  * container, via Group.parent_id), which is what makes ELK pack each region's
  * VPCs inside one boundary instead of scattering them.
  */
+/** ELK's nodeSize.minimum for a container, corrected for ELK transposing a
+ *  compound node's minimum in a vertical (DOWN/UP) hierarchical layout. */
+export function minSize(w: number, h: number, direction: string): string {
+  return direction === "DOWN" || direction === "UP" ? `(${h},${w})` : `(${w},${h})`;
+}
+
 function buildChildren(view: TopologyView, preset: ReturnType<typeof presetFor>): ElkChild[] {
   const leaf = (n: TopologyView["nodes"][number]): ElkChild => ({
     id: n.id,
@@ -256,7 +262,13 @@ function buildChildren(view: TopologyView, preset: ReturnType<typeof presetFor>)
         "elk.padding": ELK_GROUP_PADDING,
         "elk.spacing.nodeNode": String(GROUP_GAP),
         "elk.aspectRatio": String(GROUP_ASPECT),
-        "elk.nodeSize.minimum": `(${GROUP_MIN_W},${GROUP_MIN_H})`,
+        // A box is never narrower than its own label chip (owner 2026-11-24).
+        // Two ELK facts, both measured (elkjs, hierarchyHandling INCLUDE_CHILDREN):
+        // the minimum needs the MINIMUM_SIZE constraint, and for a vertical
+        // flow (DOWN/UP) ELK applies a compound node's minimum TRANSPOSED —
+        // (w,h) came back as h×w. So a vertical preset passes it as (h,w).
+        "elk.nodeSize.constraints": "MINIMUM_SIZE",
+        "elk.nodeSize.minimum": minSize(groupMinWidth(g.label || g.id, (g.children ?? []).length), GROUP_MIN_H, preset.direction),
         "elk.algorithm": "layered",
         "elk.direction": preset.direction,
       },
