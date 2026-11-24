@@ -102,6 +102,7 @@ import (
 	"netops/backend/internal/flowsampling"
 	"netops/backend/internal/loginguard"
 	"netops/backend/internal/seriesroll"
+	"netops/backend/internal/sitecollect"
 	// METERING-BEGIN — usage metering (tracker 258). A SEPARATE data contract
 	// from the licence: entitlement answers "what may this customer do", this
 	// answers "what did they use". Deleting this import, the METERING marker
@@ -682,6 +683,10 @@ type server struct {
 	ifBridge        *ifbridge.Store                      // tracker 387 PR 13a: the interface bridge's NMS rows (if_bridge.go)
 	ifBridgeMetrics *ifbridge.Metrics                    // tracker 387 PR 13a: netops_nms_iface_bridge_*
 	invFacts        *invfacts.Store                      // tracker 387 PR 13a: NMS model/site/role votes for the registry
+	// siteCollect publishes netops_device_site_info (device → tenant → site) so
+	// SiteCollectionLost can name a site whose every polled device went quiet,
+	// and answers that alert's owner (tracker 368, internal/sitecollect).
+	siteCollect *sitecollect.Publisher
 	// devIdentityMetrics: netops_tenant_registry_* — the controller-derived
 	// registry rows of tracker 371 and the export ticks held back.
 	devIdentityMetrics *devidentity.Metrics
@@ -1922,6 +1927,9 @@ func newServer() *server {
 	// 2026-09-03 produced exactly that burst. Tenant derivation is the same
 	// device→tenant rule the episode fold uses (§3a): never the alert's labels.
 	engine.TenantOf = srv.alertTenant
+	// Tracker 368: the device→site membership SiteCollectionLost joins, and the
+	// snapshot that alert's owner is checked against.
+	srv.siteCollect = sitecollect.New(srv.siteMemberships, nil)
 	// Alert summaries name a device by its hostname, never its internal id.
 	engine.DeviceNames = srv.alertDeviceNames
 	if st, err := alerts.NewNotifyStateStore(envOr("ALERT_NOTIFY_STATE_FILE", "/data/alert_notify_state.json")); err != nil {
@@ -3040,6 +3048,11 @@ func Run() {
 	// corr_current projection drift repair (#101): detect + re-seed hot-read rows
 	// whose dual-write was lost. No-op when ClickHouse is not configured.
 	workers.start("corr-current-reconcile", func() { srv.corrCurrentReconcileLoop(ctx) })
+	workers.start("site-collection-membership", func() {
+		srv.siteCollect.Run(ctx, time.Minute, func(err error) {
+			logWarn("sitecollect", "device-site membership not refreshed — SiteCollectionLost reads the previous snapshot", map[string]any{"error": err.Error()})
+		})
+	})
 	// ITSM drift reconciler (#43 enhancement). No-op unless FEATURE_ITSM_RECONCILE.
 	srv.startDriftReconciler(ctx)
 	// App-identity catalog hot-reload (#81 P1b). No-op unless APPID_FEEDS_DIR set.
@@ -5244,6 +5257,8 @@ func (s *server) handlePromMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.nmsResolver != nil {
 		s.nmsResolver.WriteMetrics(w)
 	}
+	// Tracker 368: device → site membership for SiteCollectionLost (rules.yaml).
+	s.siteCollect.WriteMetrics(w)
 	if s.nms != nil {
 		// Connector health (nms/health.go): on THIS scrape, never the
 		// /api/v1/import push, so an api death makes the series go stale

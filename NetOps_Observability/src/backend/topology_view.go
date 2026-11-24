@@ -15,6 +15,7 @@ import (
 	"netops/backend/collectors"
 	"netops/backend/internal/ctloverlay"
 	"netops/backend/internal/discovery"
+	"netops/backend/internal/sitecollect"
 	"netops/backend/internal/siteres"
 	"netops/backend/models"
 	"netops/backend/topology"
@@ -495,6 +496,61 @@ func (s *server) siteContextFor(claims jwtClaims, snap *sdwanOverlaySnapshot) si
 		}
 	}
 	return sc
+}
+
+// siteContextForTenant is siteContextFor for a caller-less platform job that
+// works ONE tenant at a time (tracker 368's site membership): the same maps,
+// scoped to exactly that tenant — never cross-tenant, so one tenant's bindings
+// and site names can never resolve another tenant's device. A platform-owned
+// device (tenant "") reads through the Provider scope, which includes the
+// platform's untagged rows (tenant.Collection.All).
+func (s *server) siteContextForTenant(tenant string, snap *sdwanOverlaySnapshot) siteContext {
+	scope := normTenant(tenant)
+	if scope == "" {
+		scope = TenantGlobal
+	}
+	sc := siteContext{assign: s.geoAssignments(scope, false), names: map[string]map[string]string{}, snap: snap}
+	if s.sites != nil {
+		for _, st := range s.sites.All(scope, false) {
+			t := normTenant(st.TenantID)
+			if sc.names[t] == nil {
+				sc.names[t] = map[string]string{}
+			}
+			sc.names[t][st.Slug] = st.Name
+		}
+	}
+	return sc
+}
+
+// siteMemberships is internal/sitecollect's Resolver: every inventory device's
+// site under the ONE site rule the Topology canvas uses, resolved per tenant
+// (siteContextForTenant), so SiteCollectionLost groups devices exactly as the
+// operator sees them boxed. A device with no site is left out.
+func (s *server) siteMemberships(ctx context.Context) ([]sitecollect.Membership, error) {
+	if s.discovery == nil {
+		return nil, errors.New("no device inventory")
+	}
+	byTenant := map[string][]models.Device{}
+	for _, d := range s.discovery.Devices() {
+		t := deviceTenant(d)
+		byTenant[t] = append(byTenant[t], d)
+	}
+	snap := s.sdwanOverlay.Load()
+	out := make([]sitecollect.Membership, 0, len(byTenant))
+	for t, devs := range byTenant {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		resolved := s.siteContextForTenant(t, snap).resolveAll(devs)
+		for _, d := range devs {
+			st, ok := resolved[d.ID]
+			if !ok || st.Key == "" {
+				continue
+			}
+			out = append(out, sitecollect.Membership{Device: d.ID, Tenant: t, Site: st.Key, SiteLabel: firstNonEmpty(st.Label, st.Key)})
+		}
+	}
+	return out, nil
 }
 
 // resolve applies the ONE site rule to a device: operator binding → discovery

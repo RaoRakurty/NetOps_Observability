@@ -243,9 +243,12 @@ func TestDiscoveryScopesMigrationDownUpPG(t *testing.T) {
 	if _, err := tx.Exec(ctx, string(down)); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
+	// The script must hand the connection back to its session default — on the
+	// api pool that is the unscoped sentinel (tracker 312), never '' (which would
+	// read the blank tenant's rows) and never the '*' it widened to.
 	var after string
-	if err := tx.QueryRow(ctx, `SELECT coalesce(current_setting('app.tenant_id', true), '')`).Scan(&after); err != nil || after != "" {
-		t.Fatalf("the rollback must leave app.tenant_id cleared, got %q (%v)", after, err)
+	if err := tx.QueryRow(ctx, `SELECT coalesce(current_setting('app.tenant_id', true), '')`).Scan(&after); err != nil || after != platformdb.UnscopedTenant {
+		t.Fatalf("the rollback must reset app.tenant_id to the session default %q, got %q (%v)", platformdb.UnscopedTenant, after, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)

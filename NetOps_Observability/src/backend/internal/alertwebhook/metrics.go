@@ -51,6 +51,8 @@ type Metrics struct {
 	hostQueueFull      atomic.Int64 // bounded queue full: the push was dropped
 	hostRouteEnabled   atomic.Int64 // 0/1 — does the PAGE tier reach any channel
 	hostUnrouted       atomic.Int64 // tier routed nowhere by the administrator's choice
+	hostReleased       atomic.Int64 // an immediate push reached no channel: its cool-down was released (tracker 314)
+	hostRedelivered    atomic.Int64 // a resend retried the host route alone after such a release
 
 	// Noise + rate-limit control (2026-09-03, digest.go / pushbudget.go).
 	hostRateLimited     atomic.Int64 // the server answered 429: budget, not fault
@@ -236,6 +238,8 @@ func (m *Metrics) Write(w io.Writer) {
 	}
 	g("netops_alert_webhook_host_route_enabled", "1 when page-tier platform alerts reach at least one host-monitoring channel, 0 when none is configured for pages (set it up in Platform → Platform alerts).", m.hostRouteEnabled.Load())
 	c("netops_alert_webhook_host_unrouted_total", "Platform alerts not pushed because the administrator routed their tier to no channel (a choice, not a failure).", m.hostUnrouted.Load())
+	c("netops_alert_webhook_host_released_total", "Page or resolution pushes that reached no host-monitoring channel, so their cool-down was released for a resend to retry (after 2 min).", m.hostReleased.Load())
+	c("netops_alert_webhook_host_redelivered_total", "Resent platform alerts retried on the host route alone after their previous push reached no channel; product channels were not re-sent.", m.hostRedelivered.Load())
 
 	// ── noise + rate-limit control (digest.go / pushbudget.go) ──────────────
 	c("netops_alert_webhook_push_retries_total", "Page-tier host-route pushes re-sent after a transient failure (429/5xx/transport), with capped backoff.", m.hostRetries.Load())
