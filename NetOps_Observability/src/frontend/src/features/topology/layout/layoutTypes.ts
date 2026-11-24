@@ -46,4 +46,40 @@ export type LayoutPreset = {
 //  computed from cells while the eye measures from cards, the box looks
 //  mis-padded on every side by the difference. See layout/groupGeometry.ts.
 export const NODE_SIZE = { width: 120, height: 56 };
+
+/** Longest hostname a card shows in full; beyond it the name ellipsizes and the
+ *  full name stays in the card's tooltip and the side drawer. */
+export const CARD_LABEL_MAX = 24;
+
+/**
+ * A node's FOOTPRINT width: wide enough for its hostname at 14px (owner,
+ * 2026-11-24: "keep hostname as it is", shown in full — "cEDGE-40", not
+ * "cEDG…"), never below NODE_SIZE.width, capped at CARD_LABEL_MAX characters.
+ *
+ * Still a FIXED size per node — it depends only on the label, so hover,
+ * spotlight and the zoom tier never change it (a card that resized on hover
+ * shook; see DeviceNode). Every layout and the renderer read THIS, so a cell,
+ * a box and the card drawn in it cannot disagree. Deliberately a little
+ * generous per character (mixed-case hostnames with digits at 14px/500 run
+ * ~7.4–8.6px a glyph): a card a few pixels wide is fine, a clipped name is not.
+ */
+export function cardWidth(label?: string): number {
+  const chars = Math.min((label ?? "").length, CARD_LABEL_MAX);
+  // 76 = padding 10+10, accent border 3, border 1.5, icon 18, two 6px gaps,
+  //      health ring 16, rounding.
+  return Math.max(NODE_SIZE.width, Math.round(76 + chars * 8.4));
+}
+
+/**
+ * The footprint width of ANY node on the canvas — the one function the card,
+ * the adapter and every layout use. A DEVICE (router, switch, firewall, server,
+ * unresolved neighbour, …) is as wide as its hostname (cardWidth). A cloud
+ * resource or WAN transport (kind `cloud` / `wan`) keeps the base card: its
+ * label is a resource descriptor ("Subnet · subnet-0dc1… · 172.31.48.0/20"),
+ * not a hostname, and widening every cloud card would re-shape the cloud
+ * layout for a request that was about hostnames.
+ */
+export function nodeWidth(n: { label?: string; kind?: string }): number {
+  return n.kind === "cloud" || n.kind === "wan" ? NODE_SIZE.width : cardWidth(n.label);
+}
 export const GROUP_PAD = 28;

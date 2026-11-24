@@ -9,7 +9,8 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 import type { RFNodeData } from "../rfTypes";
-import { CARD_W, CARD_H } from "./DeviceNode";
+import { CARD_H } from "./DeviceNode";
+import { nodeWidth } from "../../../layout/layoutTypes";
 import { HEALTH_COLOR, confidencePct, unresolvedReason } from "../../../utils/topologyHealth";
 
 const SLATE = HEALTH_COLOR.unknown;
@@ -60,9 +61,9 @@ function UnresolvedNodeBase(props: NodeProps) {
         // an intrinsically-sized box — or one matching a stale card width —
         // makes React Flow's hit-boxes and floating-edge anchors wrong for
         // every boundary node. Imported so the two can never drift again.
-        width: CARD_W,
+        width: nodeWidth(node),
         minHeight: CARD_H,
-        maxWidth: CARD_W,
+        maxWidth: nodeWidth(node),
         boxSizing: "border-box",
         padding: "8px 12px",
         borderRadius: 14,

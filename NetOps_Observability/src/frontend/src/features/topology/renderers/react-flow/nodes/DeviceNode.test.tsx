@@ -13,6 +13,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { NodeCard, DeviceIcon } from "./DeviceNode";
 import type { RFNodeData } from "../rfTypes";
 import type { RcaOverlayState } from "../../../api/topologyTypes";
+import { cardWidth } from "../../../layout/layoutTypes";
 
 afterEach(cleanup);
 
@@ -67,5 +68,33 @@ describe("DeviceNode — RCA marker visual contract", () => {
     renderCard(undefined);
     expect(screen.queryByLabelText(/^RCA:/)).toBeNull();
     expect(screen.getByLabelText("Warning")).toBeTruthy();
+  });
+});
+
+// Owner, 2026-11-24: "keep hostname as it is" — the card is as wide as its
+// hostname (layout/layoutTypes cardWidth) and the name reads at 14px.
+describe("DeviceNode — the hostname is shown in full", () => {
+  function renderNamed(label: string) {
+    const d: RFNodeData = { ...data(), node: { ...data().node, label } };
+    return render(
+      <ReactFlowProvider>
+        <NodeCard data={d} icon={<DeviceIcon />} accent="#64748b" />
+      </ReactFlowProvider>,
+    );
+  }
+
+  it("the card's fixed width comes from the hostname, and the name is 14px", () => {
+    const { container } = renderNamed("cEDGE-40");
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.style.width).toBe(String(cardWidth("cEDGE-40")) + "px");
+    expect(screen.getByText("cEDGE-40").style.fontSize).toBe("14px");
+  });
+
+  it("a longer hostname gets a wider card, up to the cap", () => {
+    const short = renderNamed("e1").container.firstElementChild as HTMLElement;
+    const sw = parseFloat(short.style.width);
+    cleanup();
+    const long = renderNamed("edge-router-paris-01").container.firstElementChild as HTMLElement;
+    expect(parseFloat(long.style.width)).toBeGreaterThan(sw);
   });
 });

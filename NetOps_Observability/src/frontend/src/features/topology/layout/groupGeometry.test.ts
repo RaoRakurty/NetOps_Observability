@@ -14,10 +14,11 @@
 import { describe, it, expect } from "vitest";
 import {
   LABEL_BAND, GROUP_PAD, ELK_GROUP_PADDING, GROUP_MIN_W, GROUP_MIN_H, radiusForDepth,
+  labelChipWidth, groupMinWidth,
 } from "./groupGeometry";
-import { NODE_SIZE } from "./layoutTypes";
+import { NODE_SIZE, cardWidth, CARD_LABEL_MAX } from "./layoutTypes";
 import { CARD_W, CARD_H } from "../renderers/react-flow/nodes/DeviceNode";
-import { layoutView } from "./elkLayout";
+import { layoutView, minSize } from "./elkLayout";
 
 describe("one geometry source", () => {
   it("lays out with the size it actually draws", () => {
@@ -84,5 +85,85 @@ describe("ELK returns container rectangles", () => {
 
     // And the child must clear the parent's label band.
     expect(v.y - r.y).toBeGreaterThanOrEqual(LABEL_BAND);
+  });
+});
+
+
+// Owner, 2026-11-24: the site name went to 14px (secondary text 12px), and the
+// chip used to hang past a one-device box onto its neighbour. A box is never
+// narrower than its own chip.
+describe("a site box fits its label chip", () => {
+  it("the chip estimate grows with the name and is capped like the chip caps it", () => {
+    expect(labelChipWidth("Site 50 · from vManage", 2)).toBeGreaterThan(labelChipWidth("Site 5", 2));
+    expect(labelChipWidth("x".repeat(80), 2)).toBe(labelChipWidth("x".repeat(38), 2));
+    expect(labelChipWidth("Site 1", 1000)).toBeGreaterThan(labelChipWidth("Site 1", 1));
+  });
+
+  it("a box is at least the card minimum and at least chip + its 10px insets", () => {
+    for (const label of ["", "Site 1", "Site 50 · from vManage", "x".repeat(60)]) {
+      const w = groupMinWidth(label, 1);
+      expect(w).toBeGreaterThanOrEqual(GROUP_MIN_W);
+      expect(w).toBeGreaterThanOrEqual(labelChipWidth(label, 1) + 20);
+    }
+  });
+
+  it("ELK lays a one-device site out at least as wide as its chip", async () => {
+    const label = "Site 50 · from vManage";
+    const view = {
+      // Unique ids: layoutView caches by view id + node/edge ids.
+      view_id: "chip-fit", mode: "explore", scope: {}, layout_type: "hierarchical", generated_at: "",
+      nodes: [{ id: "chip-fit-a", label: "a", kind: "router", health: "ok", confidence: 1, evidence: [] }],
+      edges: [], overlays: [],
+      groups: [{ id: "site:chip-fit", label, group_type: "site", children: ["chip-fit-a"], health: "ok", collapsed: false }],
+    } as unknown as Parameters<typeof layoutView>[0];
+    const out = await layoutView(view);
+    const r = out["site:chip-fit"] as { w?: number };
+    expect(r.w ?? 0).toBeGreaterThanOrEqual(labelChipWidth(label, 1) + 20);
+  });
+});
+
+// elkjs, hierarchyHandling INCLUDE_CHILDREN: a compound node's minimum is
+// applied transposed in a vertical flow (measured 2026-11-24: (413,148) came
+// back 168×413 with DOWN). minSize passes it the way ELK reads it.
+describe("ELK container minimum is passed the way ELK reads it", () => {
+  it("vertical flows transpose, horizontal flows do not", () => {
+    expect(minSize(413, 148, "DOWN")).toBe("(148,413)");
+    expect(minSize(413, 148, "UP")).toBe("(148,413)");
+    expect(minSize(413, 148, "RIGHT")).toBe("(413,148)");
+    expect(minSize(413, 148, "LEFT")).toBe("(413,148)");
+  });
+});
+
+// Owner, 2026-11-24: hostnames shown in full ("cEDGE-40", never "cEDG…"). A
+// card's footprint comes from its hostname, and every layout reserves it.
+describe("a card is as wide as its hostname", () => {
+  it("never below the base card, grows per character, capped at CARD_LABEL_MAX", () => {
+    expect(cardWidth("")).toBe(NODE_SIZE.width);
+    expect(cardWidth("cEDGE-40")).toBeGreaterThan(NODE_SIZE.width);
+    expect(cardWidth("edge-router-paris-01")).toBeGreaterThan(cardWidth("cEDGE-40"));
+    expect(cardWidth("x".repeat(80))).toBe(cardWidth("x".repeat(CARD_LABEL_MAX)));
+  });
+
+  it("the WAN layout gives each card its own width — no two cards in a box overlap", async () => {
+    const ids = ["edge-router-paris-01", "e2", "edge-router-lyon-0002", "e4"];
+    const view = {
+      view_id: "card-fit", mode: "explore", scope: {}, layout_type: "wan_overlay", generated_at: "",
+      nodes: ids.map((id) => ({ id, label: id, kind: "router", health: "ok", confidence: 1, evidence: [] })),
+      edges: [], overlays: [],
+      groups: [{ id: "site:cf", label: "Site 1", group_type: "site", children: ids, health: "ok", collapsed: false }],
+    } as unknown as Parameters<typeof layoutView>[0];
+    const pos = await layoutView(view);
+    const r = (id: string) => ({ x: pos[id].x, y: pos[id].y, w: cardWidth(id), h: CARD_H });
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+      const a = r(ids[i]), b = r(ids[j]);
+      const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+      expect(overlap, `${ids[i]} overlaps ${ids[j]}`).toBe(false);
+    }
+    // …and the box encloses every card.
+    const box = pos["site:cf"] as { x: number; y: number; w: number; h: number };
+    for (const id of ids) {
+      const c = r(id);
+      expect(c.x >= box.x && c.x + c.w <= box.x + box.w, `${id} outside its box`).toBe(true);
+    }
   });
 });

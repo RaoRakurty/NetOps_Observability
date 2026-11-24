@@ -23,10 +23,11 @@
 
 import { CARD_W, CARD_H } from "../renderers/react-flow/nodes/DeviceNode";
 
-/** Height reserved for the container's label chip. The chip is ~26px; this is
- *  the FULL band including breathing room, and ELK reserves exactly this at the
- *  top so a member can never be laid out under the label. */
-export const LABEL_BAND = 36;
+/** Height reserved for the container's label chip. The chip is ~30px since
+ *  the site name went to 14px (2026-11-24) and it sits 8px below the box top;
+ *  this is the FULL band including breathing room, and ELK reserves exactly
+ *  this at the top so a member can never be laid out under the label. */
+export const LABEL_BAND = 44;
 
 /** Inner padding on the other three sides. Roughly half a card height, which
  *  reads as deliberate space rather than a tight sleeve. */
@@ -43,6 +44,26 @@ export const ELK_GROUP_PADDING =
 /** Minimum container size, so a one-child group is not a tight sleeve. */
 export const GROUP_MIN_W = CARD_W + 2 * GROUP_PAD;
 export const GROUP_MIN_H = CARD_H + LABEL_BAND + 2 * GROUP_PAD;
+
+/** Estimated width of a box's label chip (GroupLabelNode): dot · kind ·
+ *  name · count · collapse button, with the site NAME at 14px and the rest at
+ *  12px (owner, 2026-11-24). Deliberately a little generous — the kind is sized
+ *  as "Discovered site", the longest one — so a box is never narrower than its
+ *  own chip (the chip used to hang past a one-device box's right edge and over
+ *  its neighbour). The name is capped like the chip caps it (maxWidth 280). */
+export function labelChipWidth(label: string, count: number): number {
+  const KIND = 15 * 7.6;                              // "DISCOVERED SITE", 12px caps
+  const NAME = Math.min((label || "").length, 38) * 7.4; // 14px semibold
+  const COUNT = 7 * (2 + String(Math.max(0, count)).length); // "· 12"
+  const CHROME = 17 + 8 + 4 * 7 + 22;                 // padding+border, dot, gaps, button
+  return Math.round(CHROME + KIND + NAME + COUNT);
+}
+
+/** Minimum width of a site box: the card minimum, or its chip plus the chip's
+ *  10px inset on each side, whichever is wider. */
+export function groupMinWidth(label: string, count: number): number {
+  return Math.max(GROUP_MIN_W, labelChipWidth(label, count) + 20);
+}
 
 /** Target width:height for packing. A screen-shaped ratio stops ELK producing
  *  tall-skinny towers or single long rows. ELK's own default is 1.6. */
