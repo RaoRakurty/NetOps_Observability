@@ -154,7 +154,7 @@ from engine import (
     volume_context_metric_lines,
 )
 from entity_resolver import EntityResolver, identity_resolver_for
-from episodes import EpisodeDetector
+from episodes import EpisodeDetector, sigma_floor, sigma_floor_enabled
 from evidence_plane import (
     EVIDENCE_CLASS_DECISION,
     EVIDENCE_CLASS_HEARTBEAT,
@@ -788,6 +788,14 @@ def verified_tenant(claimed: str, identity: str, lane: str, *,
 
 WINDOW_SIZE = 200
 Z_THRESHOLD = 3.0
+# Tracker 488 (owner σ-floor ruling 2026-11-24, applied to this lane too): the
+# legacy z-score lane divides by σ_eff = max(σ, episodes.sigma_floor(metric, mean))
+# for the floored families, exactly like the episode detector — same constants,
+# same CORR_SIGMA_FLOOR kill switch, read once at import (a test flips this flag).
+# Before it, an idle port's octet rate wrote CRITICAL netops.findings rows at
+# z up to ~20,000 (lab, 7 days), which Iris "detected anomalies", reports and
+# the flows view read. Metrics with no floor keep the legacy z byte for byte.
+SCORE_SIGMA_FLOOR = sigma_floor_enabled()
 
 # O(1) rolling-stats drift guard (perf defect #4): mean/stddev are maintained as
 # shifted running sums (sum, sum-of-squares around a pivot) instead of a full
@@ -8627,10 +8635,17 @@ def score(tenant: str, device: str, metric: str, value: float) -> float | None:
         s.push(value)
         return None
     sigma = s.stddev()
+    mean = s.mean()
+    if SCORE_SIGMA_FLOOR:
+        # BEFORE the σ == 0 guard, so a clean counter's first real error is
+        # scored instead of swallowed into the baseline (same as episodes.py).
+        floor = sigma_floor(metric, mean)
+        if floor is not None:
+            sigma = max(sigma, floor)
     if sigma == 0:
         s.push(value)
         return None
-    z = abs((value - s.mean()) / sigma)
+    z = abs((value - mean) / sigma)
     s.push(value)
     if z >= Z_THRESHOLD:
         return z

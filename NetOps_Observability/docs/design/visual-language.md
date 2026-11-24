@@ -58,10 +58,39 @@ All menu colours come from the theme's `--rail-*` tokens, so every theme
 restyles the menu without rules of its own. `nav.icons.test.ts` fails if a menu
 component hard-codes a colour.
 
+## Components
+
+The shared kit lives in `src/frontend/src/components/kit/` (import from
+`components/kit`). Every colour in `kit.css` is a theme token, so all five
+themes restyle the kit; `kit.test.tsx` fails on a literal colour in that file.
+**Infrastructure → Devices is the reference page** that uses all of it.
+
+| Component | Use it for | Do not use it for |
+|---|---|---|
+| `StatusChip` | Any state: up/down, allow/deny, healthy/degraded/critical, confirmed/suspected, in sync/drifted. Pass a `kind` and the word; it picks the icon and the semantic colour. | Descriptive values (vendor, site, type, source, tags). Those are plain text or a neutral chip. |
+| `PageHeader` | The top of a page: icon tile (the page's menu icon), title, count badge, actions on the right. | Section headings inside a page. |
+| `OutlinedButton` | Page and row actions ("Add device", "Open ›", "Back up now"). `chevron` for a row action that navigates; `label` names an icon-only button. | The one primary action of a form (that keeps the accent button). |
+| `PillSelect` | Compact toolbar filters and sort ("Health ⌄", "Site ⌄"), with a quiet lead word or icon. Options show their counts. | Choices inside a form (use a form field). |
+| `FieldSelect` | A full-width selector in a panel ("All sites ⌄"), borderless until hovered. | Toolbars. |
+| `SortLabel` | The "Sort by ⇅" word in front of a sort pill. | — |
+| `FilterSection` | A collapsible filter group: left chevron, checkbox rows, right-aligned counts, optional accent action ("Clear"). | Navigation (that is the menu). |
+
+Rules the kit enforces:
+
+- **A state is never colour alone.** `StatusChip` always renders an icon and
+  the word; the icon is hidden from screen readers and the word is the text.
+  It is not a live region, so a table of chips stays quiet.
+- **Dropdowns are native selects.** Keyboard, screen readers and phone pickers
+  work without custom code; the kit only dresses them.
+- **Tables never collapse a column.** `DataTable` gives every flexible column a
+  floor from its header text (at least 80px) and puts the summed floor on the
+  table, so a narrow window scrolls sideways instead of squeezing a column to
+  zero.
+- **Descriptive distributions use shades of one neutral.** Where slices must be
+  told apart (a stacked bar of vendors or types), use falling strengths of the
+  muted text colour, not hues: a hue reads as a state.
+
 ## Still to do
 
-- Shared components: one dropdown (full-width selector and compact pill), one
-  collapsible filter section, one page header (icon tile, title, count) and one
-  status chip (icon plus semantic colour).
-- A sweep of every screen against these rules, with a guard test against
-  decorative colour.
+- A sweep of every screen against these rules, moving each page onto the kit,
+  with a guard test against decorative colour.

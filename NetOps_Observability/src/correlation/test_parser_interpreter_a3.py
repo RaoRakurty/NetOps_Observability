@@ -749,11 +749,24 @@ def _bench(fns, events, repeats: int = 5, reps: int = 1) -> float:
 class LaneCost:
     """One lane's measured A/B, and everything a reader needs to judge it."""
 
-    __slots__ = ("count", "lane", "ratio", "ratios", "us_new", "us_old")
+    __slots__ = ("count", "lane", "ratio", "ratios", "reps", "slowest_warm",
+                 "us_new", "us_old")
 
-    def __init__(self, lane, ratio, ratios, us_new, us_old, count):
+    def __init__(self, lane, ratio, ratios, us_new, us_old, count,
+                 reps=1, slowest_warm=0.0):
         self.lane, self.ratio, self.ratios = lane, ratio, ratios
         self.us_new, self.us_old, self.count = us_new, us_old, count
+        # The sample sizing `_measure` actually used, recorded so the gate on
+        # the gate checks it against the SAME timing it was derived from
+        # (tracker 490) instead of against a fresh pass taken at a different
+        # moment, under a different load.
+        self.reps, self.slowest_warm = reps, slowest_warm
+
+    @property
+    def old_seconds(self) -> float:
+        """The branch code's cost over this lane's corpus (median, seconds) —
+        the weight this lane carries in the corpus-wide ratio."""
+        return self.us_old * self.count / 1e6
 
     @property
     def spread(self) -> float:
@@ -812,7 +825,8 @@ def _measure(golden, lane: str) -> LaneCost:
         olds.append(o)
     return LaneCost(lane, statistics.median(ratios), ratios,
                     statistics.median(news) * 1e6 / len(events),
-                    statistics.median(olds) * 1e6 / len(events), len(events))
+                    statistics.median(olds) * 1e6 / len(events), len(events),
+                    reps=reps, slowest_warm=slowest)
 
 
 @pytest.fixture(scope="module")
@@ -874,6 +888,41 @@ def _report(label: str, ratio: float, budget: float, detail: str) -> None:
           f"(budget {budget:.2f}x) — {detail}")
 
 
+def _corpus_ratio(cost: dict[str, LaneCost]) -> float:
+    """The corpus-wide ratio, built from the DRIFT-CANCELLED lane ratios.
+
+    Tracker 490. This used to be `sum(median(new)) / sum(median(old))`: medians
+    of each side taken independently across the rounds, which throws away the
+    round pairing the whole harness exists to keep — the new side's median and
+    the old side's median can come from different rounds, i.e. from different
+    load. Measured at load 12 it printed 1.197x for a corpus whose two lanes
+    were 1.26x and 1.68x: a figure below BOTH lanes, which a real weighted ratio
+    can never be, so under another load pattern it could equally land above
+    the budget while both lanes pass.
+
+    It is now each lane's median PAIRED ratio, weighted by that lane's share of
+    the branch code's cost — the same quantity (new/old over the corpus) when
+    nothing moves, and always between the lane ratios.
+    """
+    weight = sum(c.old_seconds for c in cost.values())
+    return sum(c.ratio * c.old_seconds for c in cost.values()) / weight
+
+
+def test_the_corpus_ratio_is_a_weighted_mean_of_the_lane_ratios():
+    """Deterministic pin for `_corpus_ratio`: bounded by the lanes, weighted by
+    the branch code's cost, and exactly new/old when every round agrees."""
+    a = LaneCost("syslog", 1.2, [1.2], us_new=120.0, us_old=100.0, count=1000)
+    b = LaneCost("trap", 1.8, [1.8], us_new=90.0, us_old=50.0, count=200)
+    r = _corpus_ratio({"syslog": a, "trap": b})
+    assert 1.2 < r < 1.8
+    want = (120.0 * 1000 + 90.0 * 200) / (100.0 * 1000 + 50.0 * 200)
+    assert r == pytest.approx(want)
+    # The 490 failure shape: per-side medians from different rounds can no
+    # longer push the corpus figure outside the lanes it is made of.
+    skew = LaneCost("trap", 1.8, [1.8], us_new=10.0, us_old=50.0, count=200)
+    assert 1.2 <= _corpus_ratio({"syslog": a, "trap": skew}) <= 1.8
+
+
 def test_the_interpreter_is_within_1_5x_of_the_branch_code(cost):
     """THE COST GATE, over the whole corpus — both lanes, every event.
 
@@ -882,9 +931,7 @@ def test_the_interpreter_is_within_1_5x_of_the_branch_code(cost):
     running the catalog cost materially more than running the hand-written
     chain it replaced?
     """
-    t_new = sum(c.us_new * c.count for c in cost.values())
-    t_old = sum(c.us_old * c.count for c in cost.values())
-    ratio = t_new / t_old
+    ratio = _corpus_ratio(cost)
     per_lane = {lane: f"{c.ratio:.2f}x over {c.count}" for lane, c in cost.items()}
     _report("corpus", ratio, BENCH_RATIO, str(per_lane))
     assert ratio <= BENCH_RATIO, (
@@ -952,12 +999,13 @@ def test_the_cost_harness_is_drift_cancelling_by_construction(golden):
       4. the reported figure is the MEDIAN of the per-round ratios, so one bad
          round cannot decide the verdict.
     """
-    calls: list[tuple[int, int, int]] = []      # (side, repeats, reps)
+    calls: list[tuple[int, int, int, float]] = []   # (side, repeats, reps, seconds)
     real = _bench
 
     def recording(fns, events, repeats: int = 5, reps: int = 1) -> float:
-        calls.append((id(fns[0]), repeats, reps))
-        return real(fns, events, repeats, reps)
+        took = real(fns, events, repeats, reps)
+        calls.append((id(fns[0]), repeats, reps, took))
+        return took
 
     trap_events = [e["ev"] for e in golden if e["lane"] == "trap"]
     new_first = id(LANE_FNS["trap"][0][1])
@@ -966,7 +1014,8 @@ def test_the_cost_harness_is_drift_cancelling_by_construction(golden):
     with mock.patch.object(sys.modules[__name__], "_bench", recording):
         cost = _measure(golden, "trap")
 
-    timed = [c for c in calls if c[1] != 1]     # drop the single warm-up/sizing passes
+    warm = [c for c in calls if c[1] == 1]      # the single warm-up/sizing passes
+    timed = [c for c in calls if c[1] != 1]
     assert len(timed) == BENCH_ROUNDS * 2, (
         f"{len(timed)} timed samples for {BENCH_ROUNDS} rounds — a round must "
         "time BOTH sides or a machine drift lands on one of them")
@@ -983,11 +1032,23 @@ def test_the_cost_harness_is_drift_cancelling_by_construction(golden):
     assert {p[1] for p in timed} == {BENCH_INNER} and BENCH_INNER > 1
     reps = {p[2] for p in timed}
     assert len(reps) == 1, f"the two sides were timed over different work: {reps}"
-    one_pass = min(_bench(f, trap_events, repeats=1)
-                   for f in ([x[1] for x in LANE_FNS["trap"]],
-                             [x[2] for x in LANE_FNS["trap"]]))
-    assert reps.pop() * one_pass >= BENCH_SAMPLE_SECONDS * 0.5, (
+    # The sample is sized from warm passes of BOTH sides, BENCH_WARM each...
+    assert len(warm) == 2 * BENCH_WARM and {w[0] for w in warm} == {new_first, old_first}
+    # ...and holds at least BENCH_SAMPLE_SECONDS of work by the SAME timing the
+    # size was derived from. Tracker 490: this used to compare `reps` against a
+    # fresh pass timed after the measurement, i.e. at a different moment under a
+    # different load — two process_time samples on a loaded box differ by more
+    # than 2x, so the 0.5 floor tripped on a harness that was correct. Checking
+    # the harness's own arithmetic is deterministic and loses nothing: a harness
+    # that stopped sizing (reps=1 on a 15 ms pass) still fails here.
+    best_warm = max(min(w[3] for w in warm if w[0] == side) for side in (new_first, old_first))
+    assert cost.slowest_warm == max(best_warm, 1e-6), (
+        "the sample was not sized off the slower side's best warm pass")
+    assert reps.pop() == cost.reps == max(
+        1, math.ceil(BENCH_SAMPLE_SECONDS / cost.slowest_warm))
+    assert cost.reps * cost.slowest_warm >= BENCH_SAMPLE_SECONDS * (1 - 1e-9), (
         "a timed sample is too short to measure through the scheduler")
+    assert trap_events, "the trap corpus is empty — nothing was measured"
     # 4. the reported figure is the median of the rounds, not one of them.
     assert len(cost.ratios) == BENCH_ROUNDS
     assert cost.ratio == pytest.approx(statistics.median(cost.ratios))

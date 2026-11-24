@@ -289,6 +289,10 @@ the window filters (e.g. M:8157-8161).
   12.8 → 13.9 B/s scored z ≈ 2,366 (crit), and σ = 0 swallowed a clean counter's first
   error into the baseline. Every RCA family is floored or listed in `SIGMA_FLOOR_EXEMPT`
   (states, BGP FSM transitions, speed); other metrics keep the legacy z byte for byte.
+  The legacy z-score lane (`main.score`, `netops.findings` kind `anomaly`, read by Iris,
+  reports and the flows view) divides by the same σ_eff (`main.SCORE_SIGMA_FLOOR`, same
+  constants and switch, tracker 488): before it the lab wrote 5,222 critical findings in 7
+  days from octet rates at z up to ~20,000. Findings are not objects, so no hash moves.
 - **Interface kind split (3.7.0).** `producers.INTERFACE_METRIC_KINDS`: octets →
   `if_metric_anomaly` (traffic VOLUME), errors → `if_errors`, discards → `if_discards`,
   FCS → `if_crc`, oper/admin status → `if_state_anomaly`. `device_if_speed` is collected and

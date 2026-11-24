@@ -7,7 +7,7 @@ sidebar_position: 2
 
 # Work with the device inventory
 
-**Infrastructure → Devices** is the fleet of record: every discovered and declared device with live reachability health, type and discovery source. The page is headed **Inventory & Devices** and refreshes itself every 30 seconds.
+**Infrastructure → Devices** is the fleet of record: every discovered and declared device with live reachability health, type and discovery source. The page is headed **Devices**, with the number of devices beside the title, and refreshes itself every 30 seconds.
 
 ## Before you begin
 
@@ -23,27 +23,32 @@ sidebar_position: 2
 2. Read the four **Fleet composition** bars: **By type**, **By manufacturer**, **By discovery source**, and **Site placement**. Hover a segment for its exact count.
 3. Read the grid. Health is three-state, computed from the last successful poll plus the device's active alerts.
 
-| State | Dot | What it means |
-|---|---|---|
-| Up | green | Heartbeat fresher than 5 minutes and no active warning or critical alert. |
-| Degraded | amber | Heartbeat 5 to 15 minutes stale, or reachable while carrying an active warning or critical alert. |
-| Down | red | No heartbeat for more than 15 minutes. |
+Each row's **Health** column shows one chip with an icon and a word:
+
+| Chip | What it means |
+|---|---|
+| ✓ **Up** (green) | Heartbeat fresher than 5 minutes and no active warning or critical alert. |
+| ⓘ **Degraded** (amber) | Heartbeat 5 to 15 minutes stale, or reachable while carrying an active warning or critical alert. |
+| ⊘ **Down** (red) | No heartbeat for more than 15 minutes. |
+| ○ **Not polled** (grey) | No collector has polled the device recently. Never shown as down. |
+
+A device past the licence limit also shows an amber **Over limit** chip. Hover the health chip to see whether the device is monitored and by which telemetry.
 
 A reachable device that is alerting reads as *Degraded*, never as healthy. When the alert read itself fails, the **Degraded** tile says `stale heartbeat only` instead of `stale or alerting`, so a partial answer is never presented as a whole one.
 
 ### Step 2 - Filter and sort
 
-1. Select a health chip above the grid: **All**, **Up**, **Degraded** or **Down**. Each chip carries its live count.
-2. Type in the **Filter devices…** box. The filter matches device id, name, address, type, manufacturer, site, description and source.
+1. Pick from the dropdowns above the grid: **Health** (all, up, degraded, down, not polled), **Site** and **Vendor**. Each option carries its live count, and only sites and vendors your fleet has are offered.
+2. Type in the **Search devices…** box. The search matches the device name, id and address, and every column's text.
 3. Select a sortable column header to sort, and select it again to reverse.
 
-The columns are **Device**, **Name**, **IP address**, **Type**, **Manufacturer**, **Site**, **Description**, **Source** and **Polled**. **Type** is inferred from SNMP. **Source** is how the device entered the inventory: SNMP discovery, static configuration, a manual entry, or a connector. Controllers and access points discovered by a wireless connector appear here too, with type `wlc` or `ap` and source `wireless`.
+The columns are **Device** (the hostname, with its management address under it), **Site**, **Vendor · model**, **Health**, **Version**, **Serial**, **Sync**, **Config backup**, **SSH** and **Source**, and an **Open** action on each row. **Type** is inferred from SNMP. **Source** is how the device entered the inventory: SNMP discovery, static configuration, a manual entry, or a connector. Controllers and access points discovered by a wireless connector appear here too, with type `wlc` or `ap` and source `wireless`.
 
 ### Step 3 - Add a device by hand {#add-a-device-manually}
 
 Discovery is the normal way in. To declare one directly:
 
-1. Select **+ Add device**.
+1. Select **Add device**.
 2. On the identity step, enter a **Device ID** and an **Address**. Both are required.
 3. On the classification step, optionally set a display name and a vendor. Both can be changed later.
 4. Select **Add device**. The row appears with source **Manual**.
@@ -52,7 +57,7 @@ To remove a device, use the row's **Delete** action and confirm.
 
 ### Step 4 - Open the device workspace {#open-the-device-workspace}
 
-Select any row. The workspace opens with an identity header and three tabs:
+Select any row, or its **Open** action. The workspace opens with an identity header and three tabs:
 
 - **Overview**: a KPI strip (reachability, interfaces up, interfaces down, BGP peers established, traffic in, traffic out) over live CPU, memory and traffic charts.
 - **Interfaces**: the Interface Performance board pre-scoped to this device.

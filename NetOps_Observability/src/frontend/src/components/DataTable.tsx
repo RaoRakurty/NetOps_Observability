@@ -154,21 +154,14 @@ export default function DataTable<T>({
   // The grid track template — shared verbatim by the header and every body row so
   // columns stay pixel-aligned. An extra zero-width track is NOT needed; row
   // actions overlay absolutely on the right.
-  const template = useMemo(
-    () =>
-      columns
-        .map((c) =>
-          colW[c.key] != null
-            ? `${colW[c.key]}px`
-            : c.width === undefined
-              ? "minmax(0,1fr)"
-              : typeof c.width === "number"
-                ? `${c.width}px`
-                : c.width,
-        )
-        .join(" "),
-    [columns, colW],
-  );
+  //
+  // No column may collapse to nothing (visual language phase 2, after #408 found
+  // the Incidents title column at 0px with the menu open at 1280px): a flexible
+  // track (no width, a percentage or an `fr`) gets a floor from its header
+  // (columnMinPx), and the header + body carry the summed floor as min-width, so
+  // a narrow table scrolls sideways instead of squeezing a column to zero.
+  const template = useMemo(() => columns.map((c) => columnTrack(c, colW[c.key])).join(" "), [columns, colW]);
+  const minTotal = useMemo(() => columns.reduce((s, c) => s + (colW[c.key] ?? trackMinPx(c)), 0), [columns, colW]);
 
   // Global filter, then sort. Both derive from column accessors so the consumer
   // declares behaviour once in the column defs.
@@ -300,7 +293,7 @@ export default function DataTable<T>({
       onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
       onKeyDown={onKeyDown}
     >
-      <div className="dtv-head" role="row" style={{ gridTemplateColumns: template }}>
+      <div className="dtv-head" role="row" style={{ gridTemplateColumns: template, minWidth: minTotal }}>
         {columns.map((c) => {
           const sorted = sort?.key === c.key;
           // A column is sortable if it opted in, OR (default) if it declares a
@@ -356,7 +349,7 @@ export default function DataTable<T>({
       {view.length === 0 ? (
         <div className="dtv-empty">{empty ?? "No rows."}</div>
       ) : (
-        <div className="dtv-body" style={{ height: total }}>
+        <div className="dtv-body" style={{ height: total, minWidth: minTotal }}>
           {windowed.map((row, i) => {
             const idx = first + i;
             const accent = rowAccent?.(row);
@@ -415,6 +408,34 @@ export default function DataTable<T>({
       )}
     </div>
   );
+}
+
+/** The smallest a flexible column may get, in px: room for its header text
+ *  (uppercase 12.5px ≈ 8px a character), the sort arrow and the cell padding,
+ *  never under 80px. A header that is not plain text gets 96px. */
+export function columnMinPx<T>(c: Pick<Column<T>, "header">): number {
+  if (typeof c.header === "string") return Math.max(80, Math.ceil(c.header.length * 8 + 34));
+  return 96;
+}
+
+/** One grid track for a column. A user-dragged width wins; a px width is fixed;
+ *  every flexible track (none, "N%", "Nfr") gets columnMinPx as its floor. */
+export function columnTrack<T>(c: Pick<Column<T>, "header" | "width">, dragged?: number): string {
+  if (dragged != null) return `${dragged}px`;
+  if (typeof c.width === "number") return `${c.width}px`;
+  const floor = `${columnMinPx(c)}px`;
+  if (c.width === undefined) return `minmax(${floor},1fr)`;
+  const w = c.width.trim();
+  if (/^[\d.]+(fr|%)$/.test(w)) return `minmax(${floor},${w})`;
+  return w; // an explicit track ("minmax(...)", "auto", "12rem") is the caller's call
+}
+
+/** The px a column needs at least: a px width, the floor of an explicit
+ *  `minmax(Npx, …)`, or the header-based floor of a flexible track. */
+export function trackMinPx<T>(c: Pick<Column<T>, "header" | "width">): number {
+  if (typeof c.width === "number") return c.width;
+  const m = typeof c.width === "string" ? /^minmax\(\s*([\d.]+)px/.exec(c.width.trim()) : null;
+  return m ? Number(m[1]) : columnMinPx(c);
 }
 
 function align(a?: Align): string {
