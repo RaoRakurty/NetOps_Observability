@@ -798,6 +798,7 @@ def test_every_field_the_pipeline_stamps_is_declared_or_deliberately_not():
     not_indexed = {
         "__topic", "__key",                      # kafka_bus routing, stripped at encode
         "tenant_registry",                       # F-11 hit/miss discriminator — routing scaffolding, never a search field
+        "__cloud_registry",                      # tracker 392 cloud-lane hit/miss marker: metrics lane only (no OpenSearch sink), gates cloud_metrics_only, stripped by the netops.metrics sink
         "cx_quarantine", "cx_event_id",          # F-11 envelope fields — declared in the netops-quarantine template, not the lane templates
         "cloud_body", "cloud_provider",          # intermediate; replaced before the sink
         "proto", "tcp_flags", "flow_type",       # clickhouse flows columns (also declared)
