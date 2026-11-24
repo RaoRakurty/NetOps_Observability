@@ -85,6 +85,9 @@ describe("sidebar mode", () => {
 });
 
 describe("icon-rail mode", () => {
+  // The rail opens EXPANDED by default since 2026-11-24 (NavTree); these cases
+  // are about the collapsed icon rail, so they pin that preference.
+  beforeEach(() => localStorage.setItem("netops.railExpanded", "0"));
   it("opens the slide-over on click and advertises no menu", () => {
     const st = shell();
     withShell(<IconRail nav={filteredNav(false)} activeSection="overview" user={USER} onLogout={vi.fn()} />, st);

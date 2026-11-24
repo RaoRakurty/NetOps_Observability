@@ -261,7 +261,7 @@ test("close and reopen restore the preferred mode, from every entry point, in ON
 
   const reopenings: [string, () => Promise<void>][] = [
     ["the ✦ Iris header control", () => irisLauncher(page).click()],
-    ["the rail's Iris AI item", () => page.locator('button.rail-item[title="Iris AI"]').click()],
+    ["the menu's Iris AI item", () => page.getByTestId("nav-iris").click()],
     ["the command palette", async () => {
       await page.keyboard.press("Control+k");
       const box = page.getByRole("combobox", { name: /Jump to a section/ });
@@ -551,7 +551,7 @@ test("with Iris closed, the shell is exactly as before: no reserved column, head
   await expect(topbar(page).getByRole("combobox", { name: /Search devices/ })).toBeVisible();
   await expect(topbar(page).getByRole("combobox", { name: "Time range" })).toBeVisible();
   await expect(topbar(page).getByRole("button", { name: "Open documentation" })).toBeVisible();
-  await expect(page.locator('button.rail-item[title="Iris AI"]')).toBeVisible();
+  await expect(page.getByTestId("nav-iris")).toBeVisible();
   expect(await panelEl(page).evaluate((el) => getComputedStyle(el).visibility)).toBe("hidden");
 });
 
@@ -745,7 +745,7 @@ test("on a phone-width screen Iris is a full-width sheet that traps focus and Es
   // At 390 px the global header's wordmark alone is ~320 px wide, so the
   // header cluster (✦ Iris included) runs off-screen — a header-wide layout
   // issue outside the Iris panel. The rail's Iris item is the way in here.
-  await page.locator('button.rail-item[title="Iris AI"]').click();
+  await page.getByTestId("nav-iris").click();
   await settle(page);
   await expect(panelEl(page)).toHaveClass(/is-sheet/);
   const sheet = await rect(panelEl(page));
