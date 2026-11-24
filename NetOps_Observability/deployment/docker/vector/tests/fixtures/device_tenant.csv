@@ -9,3 +9,7 @@ victim-box,victim,victim-id,cisco,VICTIM-MODEL,victim-site,victim-role
 web-1,t_b,,,,,
 cloud:i-a,t_a,,,,,
 cloud:i-p,,,,,,
+cloud:i-dup,t_a,,,,,
+cloud:i-dup,t_b,,,,,
+cloud:i-twice,t_a,,,,,
+cloud:i-twice,t_a,,,,,

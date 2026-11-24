@@ -578,6 +578,12 @@ def _tenant_registry() -> dict[str, str]:
                         prev = fresh.get(ident)
                         if prev is not None and canon_tenant(prev) != canon_tenant(tid):
                             conflicted.add(ident)  # §3a: two owners → neither
+                        elif prev is not None and ident.startswith(CLOUD_IDENTITY_PREFIX):
+                            # Tracker 392: a cloud key attributes only from EXACTLY
+                            # one row — the same rule as the aggregator
+                            # (metrics_normalized `length(crows) == 1`). The writer
+                            # never repeats one, so a repeat means another writer.
+                            conflicted.add(ident)
                         fresh.setdefault(ident, tid)
             for ident in conflicted:
                 del fresh[ident]

@@ -2590,7 +2590,10 @@ transforms:
         rid = string(.index) ?? ""
         if rid != "" {
           crows = find_enrichment_table_records("device_tenant", { "identity": "cloud:" + rid }, select: ["tenant_id"]) ?? []
-          if length(crows) > 0 {
+          # Exactly ONE row attributes. The writer never emits two (an id two
+          # tenants list is omitted), so two or more means the file was not
+          # written by it — stay "miss" (unattributable), never first-row-wins.
+          if length(crows) == 1 {
             .tenant_id = to_string(crows[0].tenant_id) ?? ""
             .__cloud_registry = "hit"
           }

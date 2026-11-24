@@ -63,6 +63,56 @@ tests:
     no_outputs_from:
       - cloud_metrics_only
 
+  - name: "a cloud id listed under two tenants is unattributable and never reaches VictoriaMetrics"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "cloud_provider"
+          collection_path: "cloudwatch_api"
+          device: "dup-1"
+          vendor: "aws"
+          index: "i-dup"
+          signal_family: "cloud_resource"
+          metric: "cloud_cpu_utilization"
+          value: 97.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: metrics_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "")
+              assert_eq!(.__cloud_registry, "miss")
+    no_outputs_from:
+      - cloud_metrics_only
+
+  - name: "a cloud id listed twice — even under one tenant — attributes nothing (exactly one row attributes)"
+    inputs:
+      - insert_at: metrics_normalized
+        type: log
+        log_fields:
+          observer_type: "cloud_provider"
+          collection_path: "cloudwatch_api"
+          device: "twice-1"
+          vendor: "aws"
+          index: "i-twice"
+          signal_family: "cloud_resource"
+          metric: "cloud_cpu_utilization"
+          value: 97.0
+          unit: "percent"
+          ts: "2026-11-24T10:00:00Z"
+    outputs:
+      - extract_from: metrics_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "")
+              assert_eq!(.__cloud_registry, "miss")
+    no_outputs_from:
+      - cloud_metrics_only
+
   - name: "a platform-owned cloud resource is attributed to the platform and still reaches VictoriaMetrics"
     inputs:
       - insert_at: metrics_normalized

@@ -141,7 +141,10 @@ event states nothing. EOS and SR OS syslog and the Viptela interface trap carry 
   two tenants list) is refused, never "global". The api writes those rows from the cloud
   inventory into the same registry file (`internal/cloudtenant`; a device identity can
   never enter the namespace), and the aggregator stamps by the same key and keeps a miss
-  out of VictoriaMetrics. Every other metric is unchanged (unanchored, by `device`).
+  out of VictoriaMetrics. A cloud key attributes from EXACTLY one row in both readers
+  (aggregator `length(crows) == 1`; `_tenant_registry` treats any repeated `cloud:` row as
+  a miss, even under one tenant) — defence in depth, the writer never repeats one. Every
+  other metric is unchanged (unanchored, by `device`).
   Stage [1] admission only: no template, gate or constant moved.
   The registry (`device_tenant.csv`, `telemetry_enrichment.go`) has one row per
   inventory device **id**, **name** and **address**. `identity` and `tenant_id` are the

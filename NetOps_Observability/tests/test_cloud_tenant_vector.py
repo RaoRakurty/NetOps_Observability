@@ -61,6 +61,8 @@ def test_the_cloud_branch_never_reads_the_device_identity(path: Path) -> None:
     assert "dev" not in re.findall(r"\b\w+\b", cloud_branch), \
         "the cloud branch must never key on the device NAME"
     assert '.__cloud_registry = "miss"' in cloud_branch  # a miss is explicit, never platform
+    # Exactly one row attributes; two or more stay a miss (never first-row-wins).
+    assert "length(crows) == 1" in cloud_branch and "length(crows) > 0" not in cloud_branch
 
 
 @pytest.mark.parametrize("path", [AGG, HELM], ids=["compose", "helm"])

@@ -150,6 +150,34 @@ def test_device_metrics_still_resolve_through_the_device_registry(registry, lane
     assert lane == ["t_b"]
 
 
+@pytest.mark.parametrize("rows", [
+    "cloud:i-dup,t_a\ncloud:i-dup,t_b\n",   # two tenants
+    "cloud:i-dup,t_a\ncloud:i-dup,t_a\n",   # one tenant, listed twice
+], ids=["two-tenants", "repeated"])
+def test_a_cloud_key_attributes_only_from_exactly_one_row(tmp_path, monkeypatch, lane, rows):
+    # Defence in depth, mirroring the aggregator's `length(crows) == 1`: the
+    # writer never repeats a cloud key, so any repeat is unattributable.
+    csv_path = tmp_path / "device_tenant.csv"
+    csv_path.write_text("identity,tenant_id\n" + rows)
+    monkeypatch.setattr(main, "TENANT_ENRICHMENT_FILE", str(csv_path))
+    monkeypatch.setattr(main, "_tenant_map", {})
+    monkeypatch.setattr(main, "_tenant_mtime", -1.0)
+    run(main.handle_metric(cloud_sample(index="i-dup", tenant_id="t_a")))
+    assert lane == []
+    assert main.METRICS_DROPPED == 1
+
+
+def test_a_repeated_device_identity_under_one_tenant_still_resolves(tmp_path, monkeypatch):
+    # The exactly-one rule is the cloud namespace's only: device rows keep the
+    # existing rule (two OWNERS → neither; a same-owner repeat stays that owner).
+    csv_path = tmp_path / "device_tenant.csv"
+    csv_path.write_text("identity,tenant_id\nleaf1,acme\nleaf1,acme\n")
+    monkeypatch.setattr(main, "TENANT_ENRICHMENT_FILE", str(csv_path))
+    monkeypatch.setattr(main, "_tenant_map", {})
+    monkeypatch.setattr(main, "_tenant_mtime", -1.0)
+    assert main.tenant_lookup("leaf1") == "acme"
+
+
 def test_the_cloud_key_matches_the_go_and_vector_spelling():
     assert main.CLOUD_IDENTITY_PREFIX == "cloud:"
     assert main.CLOUD_SIGNAL_FAMILY == "cloud_resource"
