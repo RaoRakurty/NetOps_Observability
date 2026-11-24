@@ -996,8 +996,11 @@ BUILTIN_TEMPLATES: list[dict] = [
         "title": "DIA egress fault — probe + control-plane corroborated",
         "domain": "ent.middle-mile",
         "requires": [
-            {"kind": "probe_rtt_anomaly|probe_loss", "entity_type": "path"},
-            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device"},
+            # Owner 2026-11-24: BOTH halves are the template — the probe symptom
+            # AND the BGP cause. Each is an anchor, so either alone leaves the
+            # template out of the ranking (no half-coverage "suspected").
+            {"kind": "probe_rtt_anomaly|probe_loss", "entity_type": "path", "anchor": True},
+            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device", "anchor": True},
         ],
         "required_modalities": ["active_probe", "control_plane"],
         "direction_expect": "path-egress -> control-plane -> service",

@@ -466,8 +466,9 @@ M:1420). 151 templates, 105 enabled. The version hash changes on any edit (C:382
   `link_state_change`), `private-interconnect-bgp-down` (its BGP clause) and
   `ap-down-power` (`wireless_ap_down`) are anchored — before it a counter anomaly alone gave
   local-link-fault "suspected 0.5" (1,184 lab objects in 7 days). Every multi-required
-  template needs an anchor or a row in the shrinking `test_catalog.ANCHOR_PENDING` ledger
-  (`dia-egress-corroborated` is left there for the owner: symptom + cause only together).
+  template needs an anchor or a row in the shrinking `test_catalog.ANCHOR_PENDING` ledger.
+  `dia-egress-corroborated` anchors BOTH clauses (owner 2026-11-24: the probe symptom AND
+  the BGP cause, never either alone).
 - Clause `context` (optional clauses only, 3.7.0): its hits raise coverage (the optional
   bonus) but are NEVER a witness at the verdict gate — the E5c rule, declared per clause.
   `local-link-fault` reads its second plane from `if_errors|if_discards|if_crc|if_state_anomaly`
@@ -501,7 +502,12 @@ M:1420). 151 templates, 105 enabled. The version hash changes on any edit (C:382
 4. A discriminator `absent` hit (or a healthy active-verification refute) multiplies by
    **×0.2** and force-lists the `else_prefer` competitor (SC:300-351).
 5. **confidence_rank = coverage × penalty**: a heuristic rank, not a probability.
-6. Sort by (context-behind-causal, −confidence, −#satisfied, id). Show **TOP_K=4**
+6. Sort by (context-behind-causal, −confidence, **confirmable-first**, −#satisfied, id).
+   Confirmable-first (owner 2026-11-24, 3.7.0): at EXACTLY equal confidence a hypothesis
+   whose own verdict gate is CONFIRMED sorts ahead of one capped below it, before the
+   specificity key — link down + same-port errors + a BGP drop headlines local-link-fault
+   CONFIRMED with lastmile-circuit-flap (1.0 too, 3 clauses, needs a probe) beneath. It
+   reorders only exact ties (the below-floor tail included); no number moves. Show **TOP_K=4**
    plus forced and contradicted competitors, plus every MATCHED context story.
    Owner D2: while any causal template is viable (≥ CONFIDENCE_FLOOR), a
    `context_story` sorts after all of them whatever its own confidence, so it never

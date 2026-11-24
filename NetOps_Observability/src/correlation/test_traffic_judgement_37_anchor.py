@@ -84,6 +84,27 @@ def test_lab_case_shape_no_longer_headlines_a_link_fault():
     assert LOCAL not in _ids(res)
 
 
+DIA = "sig.ent.middle-mile.dia-egress-corroborated"
+
+
+def _probe() -> Signal:
+    return _sig("probe_loss", "hq->br09", EntityType.PATH, modality=ModalityClass.ACTIVE_PROBE,
+                source=Source.PROBE, observer="probe-agent-hq")
+
+
+def _bgp_down() -> Signal:
+    return _sig("bgp_adjacency_change", "br09-edge", EntityType.DEVICE, off=5,
+                modality=ModalityClass.CONTROL_PLANE, source=Source.SYSLOG, observer="syslog-br09")
+
+
+def test_dia_egress_needs_both_halves_owner_2026_11_24():
+    assert DIA not in _ids(rank(builtin_catalog(), [_probe()]))       # probe only: not ranked
+    assert DIA not in _ids(rank(builtin_catalog(), [_bgp_down()]))    # BGP only: not ranked
+    res = rank(builtin_catalog(), [_probe(), _bgp_down()])            # both: ranked
+    dia = {h.template_id: h for h in res.hypotheses}.get(DIA)
+    assert dia is not None and dia.confidence_rank == 1.0
+
+
 def test_audited_anchors_gate_their_templates():
     # lastmile-circuit-flap: probe loss / BGP drop alone is generic evidence.
     res = rank(builtin_catalog(), [_sig("probe_loss", "p1", EntityType.PATH,

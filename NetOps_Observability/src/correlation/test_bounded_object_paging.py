@@ -146,7 +146,13 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # anchor-less partial row left the list, and the ospf/isis flap templates and the
 # two security context stories — whose clauses now read the fault kinds — list
 # this object's `if_errors` episode at 0.05 (below the floor) in its place.
-FIXTURE_GOLDEN = "4046d147df19967b"
+# RE-FROZEN, same day, owner rulings on #406 (was "4046d147df19967b" at 358750d0):
+# dia-egress-corroborated's anchors moved the catalog (the confirmable-first tie
+# key is in the scorer and reordered nothing here). CHECKED by diffing every hashed input against 358750d0: nodes,
+# edges, engine and grounding_context identical; ranking order, every hypothesis
+# row and evidence_missing identical; the ONLY differing leaf is
+# `ranking/catalog_version`.
+FIXTURE_GOLDEN = "512e7460b9882afd"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

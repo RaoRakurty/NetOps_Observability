@@ -85,9 +85,9 @@ def test_config_constants_documented():
 # Every multi-required template needs an anchor or a row here. This ledger only
 # SHRINKS: anchoring a template means deleting its row (the stale check fails
 # otherwise), and a new multi-required template must ship with an anchor.
-# Audited 2026-11-24 and deliberately left pending (no single defining clause):
-# sig.ent.middle-mile.dia-egress-corroborated (probe symptom + BGP cause are the
-# story only together) — owner decision.
+# Audited 2026-11-24: sig.ent.middle-mile.dia-egress-corroborated has no single
+# defining clause, so the owner ruled that BOTH are anchors (probe symptom AND BGP
+# cause); it left this ledger.
 ANCHOR_PENDING = frozenset({
     "sig.ent.access.dns-local-resolver-failure",
     "sig.ent.access.pmtud-blackhole",
@@ -113,7 +113,6 @@ ANCHOR_PENDING = frozenset({
     "sig.ent.cloud.route-table-blackhole",
     "sig.ent.cloud.sg-nacl-block",
     "sig.ent.fabric.spine-leaf-path-degradation",
-    "sig.ent.middle-mile.dia-egress-corroborated",
     "sig.ent.middle-mile.dx-optics-degrade",
     "sig.ent.middle-mile.expressroute-arp-unresolved",
     "sig.ent.middle-mile.interconnect-jumbo-mtu-mismatch",
@@ -184,3 +183,7 @@ def test_owner_audited_anchors_2026_11_24():
     for tid, kind in expect.items():
         anchored = [c.kind for c in by_id[tid].requires if c.anchor]
         assert anchored == [kind], (tid, anchored)
+    # Owner 2026-11-24: DIA egress needs BOTH halves — each clause is an anchor.
+    dia = by_id["sig.ent.middle-mile.dia-egress-corroborated"]
+    assert [c.kind for c in dia.requires if c.anchor] == [
+        "probe_rtt_anomaly|probe_loss", "bgp_adjacency_change|bgp_state_anomaly"]

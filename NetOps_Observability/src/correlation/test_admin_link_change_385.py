@@ -456,7 +456,14 @@ STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
 # ground without path topology) headlines `local-link-fault` CONFIRMED instead of
 # `lastmile-circuit-flap` 0.55 — the errors episode finally satisfies the link
 # fault's counter clause. bgp-peer-flap-confirmed's top is unchanged.
-STEP0_DIGEST = "14c56ccdc3b4a0ad"
+# Re-frozen again the same day for the two owner rulings on #406 (diffed blob by
+# blob against 358750d0): every top, tier and evidence_missing is unchanged and no
+# existing row's content moved. dia-egress-corroborated (both clauses now
+# anchors) left bgp-peer-flap-confirmed's list (it had only the BGP half), and the
+# confirmable-first tie key reorders EXACTLY-tied rows — here the 0.05 tail, so a
+# confirmable-gate row (threat-signal-story / controller-change-induced) takes
+# the last TOP_K slot from portsecurity-errdisable / dns-local-resolver-failure.
+STEP0_DIGEST = "084a3ea9cce8d545"
 PINNED_RULE_COUNT = 103  # parser_rules.RULES since tracker 387 wave 2 (Comware PHY_UPDOWN row)
 
 
