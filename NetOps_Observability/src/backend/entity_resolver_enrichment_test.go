@@ -54,6 +54,26 @@ func TestEntityResolverExportStampsTheCurrentTenant(t *testing.T) {
 	}
 }
 
+// Tracker 489: each device row carries its registry model (the engine's busy-poll
+// rule reads it), under the device's own tenant; a device with no model omits it.
+func TestEntityResolverExportCarriesTheModel(t *testing.T) {
+	devs := []models.Device{
+		{ID: "vedge-100-3efc4148", TenantID: "acme", Name: "vEdge-100", Model: "vedge-cloud"},
+		{ID: "cedge-40", TenantID: "bravo", Name: "cEDGE-40"},
+	}
+	out := buildEntityResolverExport(devs, nil, nil)
+	got := map[string]erDevice{}
+	for _, d := range out.Devices {
+		got[d.Device] = d
+	}
+	if d := got["vedge-100-3efc4148"]; d.Model != "vedge-cloud" || d.TenantID != "acme" {
+		t.Fatalf("vEdge row: %+v", d)
+	}
+	if d := got["cedge-40"]; d.Model != "" || d.TenantID != "bravo" {
+		t.Fatalf("cEdge row: %+v", d)
+	}
+}
+
 // A device no longer in the inventory has no tenant to stamp. "" would be GLOBAL: the
 // row would enter every tenant's resolver.
 func TestEntityResolverExportOmitsARowWithNoInventoryDevice(t *testing.T) {

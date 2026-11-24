@@ -171,6 +171,31 @@ its observer, which `Node.tokens()` drops: the bare node shares no token with vM
 with canonicalisation off it grounds to NOTHING (an island; tracker 430). The canon
 `tunnel` axis (§1) makes it the controller's node.
 
+**Resource-threshold dwell and busy-poll CPU (tracker 489, owner 2026-11-24, ENGINE_SEMVER
+3.8.0).** Stage [1], at the window entry (`main.buffer_signal`, after the tenant and identity
+canonicalisation; `resource_dwell.py`). A device's own CPU / memory THRESHOLD alarm — a trap or
+syslog row of kind `device_resource_anomaly` with `attrs.resource` ∈ {cpu, memory}
+(`trap.sdwan.cpu_threshold`, `trap.sdwan.memory_threshold`, `trap.resource.cpu_threshold`
+(CISCO-PROCESS-MIB), `syslog.sdwan.cpu_high.*`; Juniper and Nokia have no such row) — is held
+for `CORR_RESOURCE_DWELL_S` (300 s) per (tenant, tenant-canonical device, resource): a clear
+inside it suppresses every held raise (counted `corr_resource_flap_suppressed_total`; the raw
+rows are already in `corr_signals`), expiry releases ONE signal (the highest-severity raise,
+earliest on a tie, own ts / signal_id) from the engine loop (`main.release_resource_dwell`,
+after the proactive sweep). The device key goes through the tenant's resolver
+(`canonical_device`), so the trap (`vedge-20-…`) and its syslog twin (`vEdge-20`) are one
+condition. While a released condition stands, further raises pass; a clear ends it and always
+passes (never a node). Bounded (`CORR_RESOURCE_DWELL_MAX`, 10k groups; overflow releases the
+oldest early, counted); per-process and not persisted (a raise pending at a restart is not
+released); `CORR_RESOURCE_DWELL_S=0` = 3.7.0. Lab, 7 days: 40,729 trap + syslog raises (10,697
+crit) → 13 reach the window (4 crit); the vEdges flap across the line every ~66 s. **Busy-poll:**
+a CPU signal (that threshold alarm, or the metric lane's `device_cpu_*` episode) from a model in
+`catalog.BUSY_POLL_PLATFORMS` (registry model from `entity_resolver.json` `devices[].model`,
+`EntityResolver.model_of`; today `vedge-cloud`) is recast to `device_cpu_context` capped at warn
+(kind is not part of signal_id). No template reads it (`coverage.INTENTIONAL_BLIND`); stage [5]
+drops a component made only of context kinds with it in (§2). Residual: a CPU that hovers across
+a threshold line on an ordinary box never stands 300 s and so never surfaces through the alarm;
+the metric lane's CPU episode still sees a sustained level change.
+
 **BGP transition semantics (tracker 387, 2026-11-10).** Owner rule: only an ESTABLISHED
 session going down is a session failure. The receiver decodes the peer from the row index
 (gen_index.py writes each column's INDEX clause into the OID index; IOS-XE's bare
@@ -394,6 +419,11 @@ count, so replica k owns partition k of every topic (scale-correlation.md:9-22).
   ground by containment, and 659 of the lab's 1,186 false "local link fault" objects were
   volume-only. The evidence stays in the window and `corr_signals`, so a real fault on the
   port folds it in. Counted (cohort touch): `corr_volume_context_singletons_total`.
+- **Busy-poll CPU is context (owner 2026-11-24, tracker 489, ENGINE_SEMVER 3.8.0).** A
+  component made only of context kinds (`engine.CONTEXT_ONLY_KINDS` = volume ∪
+  `CPU_CONTEXT_KINDS` {`device_cpu_context`}) with busy-poll CPU in it opens NO object. A real
+  fault on the box grounds to it by containment and folds it in; no template reads it, so it is
+  never the headline. Counted (cohort touch): `corr_cpu_context_singletons_total`.
 
 **Identity** `cid = uuid5(corrobj|tenant|earliest node key|onset_ms)` (E:3752).
 - A cid that overlaps an open object adopts that object's id: entity Jaccard ≥0.4 +
@@ -854,7 +884,8 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   through the outage it is evidence of; a stale row grounds only a node that names it.
   ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since the
   controller fan-in, 3.5.0 since owner D1–D3, 3.6.0 since the tracker-397 control-session
-  rung, 3.7.0 since the 2026-11-24 traffic-judgement decisions); byte-identical when no
+  rung, 3.7.0 since the 2026-11-24 traffic-judgement decisions, 3.8.0 since the tracker-489
+  resource-threshold dwell and busy-poll CPU context); byte-identical when no
   tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage

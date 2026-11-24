@@ -152,7 +152,13 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # edges, engine and grounding_context identical; ranking order, every hypothesis
 # row and evidence_missing identical; the ONLY differing leaf is
 # `ranking/catalog_version`.
-FIXTURE_GOLDEN = "512e7460b9882afd"
+# RE-FROZEN, 2026-11-24, tracker 489, ENGINE_SEMVER 3.7.0 -> 3.8.0 (was
+# "512e7460b9882afd" on main acc48abc8). The catalog did not move (no template
+# reads `device_cpu_context`). CHECKED by recomputing this snapshot with
+# ENGINE_SEMVER patched back to "3.7.0": it reproduces "512e7460b9882afd" exactly,
+# so `engine` is the ONLY moved input. This object has no threshold alarm and no
+# busy-poll device, and run_window never passes through the dwell.
+FIXTURE_GOLDEN = "b858f8f799a7c861"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

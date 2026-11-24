@@ -48,6 +48,10 @@ EMITTED_KINDS: frozenset[str] = PRODUCER_EMITTED_KINDS | EVIDENCE_BUS_KINDS
 # Emitted-but-unconsumed kinds that are INTENTIONALLY required by no signature.
 # Structured: every entry says why it is allowed to stay unconsumed.
 INTENTIONAL_BLIND: dict[str, dict] = {
+    "device_cpu_context": {
+        "reason": "tracker 489 (owner 2026-11-24, ENGINE_SEMVER 3.8.0) — CPU on a platform whose data plane busy-polls by design (catalog.BUSY_POLL_PLATFORMS). Context by decision: it joins a real fault's component and is shown in its evidence, but a component of context kinds alone opens no object (engine stage [5]) and no template reads it, so it is never a cause",
+        "owner": "correlix", "date_added": "2026-11-24",
+    },
     "wireless_ap_down_clear": {
         "reason": "tracker 442 — a wireless recovery, reported as a clear like every other lane's (the retired wireless_ap_up / wireless_radio_up spellings were live nodes). build_nodes skips every *_clear kind, so it closes and never becomes fault evidence or a template input",
         "owner": "correlix", "date_added": "2026-11-23",

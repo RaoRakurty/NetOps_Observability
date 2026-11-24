@@ -175,6 +175,8 @@ KIND_MODALITY: dict[str, ModalityClass] = {
     # the same transition, so the two can co-confirm.
     "igp_state_anomaly": ModalityClass.DEVICE_TELEMETRY,
     "device_resource_anomaly": ModalityClass.DEVICE_TELEMETRY,
+    # 3.8.0: busy-poll CPU context (resource_dwell); no template reads it.
+    "device_cpu_context": ModalityClass.DEVICE_TELEMETRY,
     # Tracker 387: trap recoveries and the standard BFD session kind. A clear is
     # never a node (build_nodes), so it adds nothing to a template's reachability.
     "device_resource_anomaly_clear": ModalityClass.DEVICE_TELEMETRY,

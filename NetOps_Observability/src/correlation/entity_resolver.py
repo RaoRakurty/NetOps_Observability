@@ -123,6 +123,13 @@ class EntityResolver:
     iface_key_to_name: Mapping[tuple, str] = field(default_factory=dict)
     ambiguous_iface_keys: frozenset = frozenset()
     ifnames_by_device: Mapping[str, frozenset] = field(default_factory=dict)
+    # Tracker 489 (3.8.0, additive): device id → registry model, lower-cased, from
+    # `devices[].model` — read only by the busy-poll CPU rule (catalog.BUSY_POLL_PLATFORMS).
+    device_model: Mapping[str, str] = field(default_factory=dict)
+
+    def model_of(self, device: str | None) -> str:
+        """The registry model of `device` (lower-cased), or "" when unknown."""
+        return self.device_model.get(device or "", "")
 
     def device_for_ip(self, ip: str | None) -> str | None:
         """The device that owns this IP (mgmt or interface), or None."""
@@ -225,8 +232,12 @@ class EntityResolver:
         name_pairs: list[tuple] = []
         canon_ip_pairs: list[tuple] = []
         port_names: list[tuple[str, str]] = []
+        models: dict[str, str] = {}
         for d in devices:
             dev = d.get("device") or ""
+            model = str(d.get("model") or "").strip().lower()
+            if dev and model:
+                models[dev] = model
             if d.get("mgmt_ip"):
                 ip_dev_pairs.append((d["mgmt_ip"], dev))
                 canon_ip_pairs.append((canonical_peer(d["mgmt_ip"]), dev))
@@ -274,6 +285,7 @@ class EntityResolver:
             iface_key_to_name=key_map,
             ambiguous_iface_keys=ambiguous_keys,
             ifnames_by_device={d: frozenset(n) for d, n in names_by_dev.items()},
+            device_model=models,
         )
 
     def coverage(self) -> dict:

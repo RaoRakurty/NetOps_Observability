@@ -593,6 +593,18 @@ SDWAN_CONTROLLER_UNREACHABLE_TEMPLATE_ID = "sig.ent.wan-edge.sdwan-controller-un
 
 # tracker 385: the change-induced sibling for an operator's interface shutdown.
 ADMIN_LINK_CHANGE_TEMPLATE_ID = "sig.ent.access.admin-link-change-induced"
+
+# Platforms whose data plane busy-polls by design, so their CPU reads ~100 % while
+# healthy (owner 2026-11-24, tracker 489, ENGINE_SEMVER 3.8.0). Matched,
+# case-insensitively, against the REGISTRY model the api exports in
+# entity_resolver.json (`devices[].model`), never a vendor name, so any vendor's
+# poll-mode platform joins by adding its model string here. Their CPU signals are
+# recast to `device_cpu_context` (resource_dwell.recast_busy_poll): visible, never a
+# cause on their own. Add a model only with evidence that its CPU is pinned by design
+# (vendor documentation or a lab capture), never to quiet a noisy box.
+#   vedge-cloud — Cisco (Viptela) vEdge Cloud, a DPDK poll-mode data plane: the lab's
+#   four report cpu_idle 0 % with system 74–96 % continuously (2026-11-24).
+BUSY_POLL_PLATFORMS: frozenset[str] = frozenset({"vedge-cloud"})
 # The same faults, less igp_state_anomaly: coverage.INTENTIONAL_BLIND declares that
 # kind consumed by no signature, and authoring its consumer is its own change. E5c
 # only escapes this because the static gate reads the flag-off catalog.

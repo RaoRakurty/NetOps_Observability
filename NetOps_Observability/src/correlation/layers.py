@@ -50,6 +50,7 @@ _OSI_LABEL = {
 _KIND_LAYER: dict[str, CausalLayer] = {
     # device / infra health
     "device_resource_anomaly": CausalLayer.DEVICE,
+    "device_cpu_context": CausalLayer.DEVICE,  # 3.8.0: busy-poll CPU, context only
     "metric_anomaly": CausalLayer.DEVICE,
     # A configuration change is an act on the BOX, not on a link or a protocol,
     # and it can cause a symptom at any layer above — which is exactly what
