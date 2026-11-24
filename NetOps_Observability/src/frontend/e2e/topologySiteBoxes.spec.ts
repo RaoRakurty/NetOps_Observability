@@ -12,6 +12,11 @@
 
 import { test, expect, type Page, type Route } from "@playwright/test";
 
+// First paint after a navigation compiles the lazy page chunk on the cold dev
+// server: the repo-wide 30 s first-paint wait. Only the FIRST assertion after
+// each goto takes it; every later assertion keeps the default, tight wait.
+const FIRST_PAINT = 30_000;
+
 const ME = { username: "alice", role: "operator", tenant_id: "t_acme", platform_admin: false, accessible_tenants: ["t_acme"], all_tenants: false };
 const SCOPES = { scopes: [{ tenant_id: "t_acme", tenant_name: "Acme", org_id: "o", org_name: "Acme", region: "us" }], all_tenants: false };
 
@@ -89,7 +94,7 @@ test("each reported site is its own box — Auto does not draw the mesh as a cir
   await page.setViewportSize({ width: 1600, height: 950 });
   await mockApi(page);
   await page.goto("/#/investigate/topology");
-  await expect(page.getByTestId("rf__node-vEdge-51")).toBeVisible();
+  await expect(page.getByTestId("rf__node-vEdge-51")).toBeVisible({ timeout: FIRST_PAINT });
   await settled(page, `rf__node-site:${key("50")}`);
   // Auto names no shape on a grouped view.
   await expect(page.getByLabel("Arrange by topology shape").locator("option[value=auto]")).toHaveText("Auto");
@@ -118,7 +123,7 @@ test("dragging a site box moves its devices with it, and only its devices", asyn
   await page.setViewportSize({ width: 1600, height: 950 });
   await mockApi(page);
   await page.goto("/#/investigate/topology");
-  await expect(page.getByTestId("rf__node-vEdge-51")).toBeVisible();
+  await expect(page.getByTestId("rf__node-vEdge-51")).toBeVisible({ timeout: FIRST_PAINT });
   const boxId = `rf__node-site:${key("50")}`;
   await settled(page, boxId);
   const b0 = await box(page, boxId);
