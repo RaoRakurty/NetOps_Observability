@@ -19,7 +19,7 @@
       "ts_offset_s": 20
     },
     {
-      "kind": "if_metric_anomaly",
+      "kind": "if_errors",
       "entity_type": "interface",
       "entity_id": "r1:Gi0/1",
       "observer_id": "r1-snmp",

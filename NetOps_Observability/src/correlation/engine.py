@@ -70,7 +70,24 @@ from signals import (
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.6.0"  # 3.6.0 = tracker 397 control-session rung on top of 3.5.0.
+ENGINE_SEMVER = "3.7.0"  # 3.7.0 = traffic-judgement fixes (owner 2026-11-24) on top of 3.6.0.
+# 3.7.0: owner decisions 2026-11-24 — "how does a traffic-volume change become a
+# critical suspect?" (lab: 1,185 of 4,079 objects in 7 days headlined
+# local-link-fault "suspected 0.5" with ZERO link_state_change signals).
+#   stage [2] σ floor: σ_eff = max(σ, REL·|mean|, ABS[metric]) for the counter and
+#     resource families (episodes.SIGMA_FLOOR_*), frozen at onset; kill switch
+#     CORR_SIGMA_FLOOR=0. An idle port's 12.8 -> 13.9 B/s no longer scores z≈2,366.
+#   stage [1] interface kind split: octets -> if_metric_anomaly (traffic VOLUME),
+#     errors -> if_errors, discards -> if_discards, FCS -> if_crc, oper/admin
+#     status -> if_state_anomaly; device_if_speed is collected, counted, never scored.
+#     Volume episodes are capped at warn (producers.episode_signal).
+#   stage [5] volume = context: a component made only of traffic-volume kinds
+#     (VOLUME_CONTEXT_KINDS) opens no object (counted).
+#   stage [6] option B: local-link-fault's link_state_change is its `anchor` (also
+#     lastmile-circuit-flap, private-interconnect-bgp-down, ap-down-power); its
+#     second plane is a fault/state kind, volume an optional `context` clause (a
+#     context clause supports the rank, never the verdict gate). Templates re-mapped
+#     per the split (catalog.py, proactive.py). Confirmability 29 -> 33.
 # 3.6.0: tracker 397 — stage [4] rank-3 CONTROL-SESSION rung. The API exports the
 # controller's own edge↔controller control sessions as `proto: "sdwan_control"`
 # topology_links rows; TopologyAdjacency keeps them apart from `pairs` and grounds a
@@ -3681,6 +3698,46 @@ def standing_finding_metric_lines() -> tuple[str, ...]:
     )
 
 
+# Owner 2026-11-24 (ENGINE_SEMVER 3.7.0, "volume = context"): a traffic-volume
+# change — an interface octet-rate episode, a flow-volume episode — is LOAD, not a
+# fault (backups, an app push, an idle link waking up). The episode is capped at
+# warn (producers.episode_signal), and a component made of nothing else opens no
+# object even when its nodes ground to each other (two port episodes on one box
+# ground by containment, and any edge would otherwise open one: 659 of the 1,186
+# lab "local link fault" objects were volume-only). The evidence stays in the
+# window and corr_signals, so a grounded real fault later folds it in as context.
+VOLUME_CONTEXT_KINDS: frozenset[str] = frozenset({"if_metric_anomaly", "flow_volume_anomaly"})
+
+
+def _volume_context_only(comp: tuple[Node, ...]) -> bool:
+    """True when every node of the component is a traffic-volume episode."""
+    return bool(comp) and all(n.kind in VOLUME_CONTEXT_KINDS for n in comp)
+
+
+_VOLUME_CONTEXT_SINGLETONS_TOTAL = 0
+
+
+def _count_volume_context_singleton() -> None:
+    global _VOLUME_CONTEXT_SINGLETONS_TOTAL
+    _VOLUME_CONTEXT_SINGLETONS_TOTAL += 1
+
+
+def volume_context_singletons_total() -> int:
+    return _VOLUME_CONTEXT_SINGLETONS_TOTAL
+
+
+def volume_context_metric_lines() -> tuple[str, ...]:
+    """The counter's exposition lines; the name is owned by the module that counts."""
+    return (
+        ("# HELP corr_volume_context_singletons_total Cohort touches of a component "
+         "made only of traffic-volume episodes (interface octets / flow volume), which "
+         "opens no object by itself (owner 2026-11-24, ENGINE_SEMVER 3.7.0). The "
+         "evidence is kept."),
+        "# TYPE corr_volume_context_singletons_total counter",
+        f"corr_volume_context_singletons_total {_VOLUME_CONTEXT_SINGLETONS_TOTAL}",
+    )
+
+
 def _storm_dedup_node(node: Node) -> tuple[Node, int]:
     """§1 dedup: collapse a node's repeated signals to ONE representative per grounding
     identity + an occurrences count. Returns (possibly-rewritten node, collapsed count).
@@ -3924,6 +3981,12 @@ def run_window(
             # touches it; the signals stay in the window and corr_signals.
             if cohort_keys is None or not cohort_keys.isdisjoint(comp_keys):
                 _count_standing_finding_singleton()
+            continue
+        if _volume_context_only(comp):
+            # 3.7.0: traffic volume is context, not an incident. Counted where a
+            # cohort touches it; the signals stay in the window and corr_signals.
+            if cohort_keys is None or not cohort_keys.isdisjoint(comp_keys):
+                _count_volume_context_singleton()
             continue
         admin_only = not comp_edges and _admin_change_only(comp[0], open_floor)
         if admin_only and (cohort_keys is None or comp[0].key in cohort_keys):

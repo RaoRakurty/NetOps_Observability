@@ -88,6 +88,38 @@ EPISODE_KIND: dict[str, str] = {
     "cloud_resource": "cloud_resource_anomaly",
 }
 
+#: ENGINE_SEMVER 3.7.0 interface kind split: the interface bucket's kind depends on
+#: the METRIC (`producers.INTERFACE_METRIC_KINDS`, called from `metric_identity`):
+#: octets are traffic volume, the counters and the port state are fault kinds.
+#: MIRRORED here (pinned by `test_coverage_matrix.py` against the engine table);
+#: an interface metric absent from it keeps the bucket default above.
+INTERFACE_EPISODE_KIND: dict[str, str] = {
+    "device_if_in_octets": "if_metric_anomaly",
+    "device_if_out_octets": "if_metric_anomaly",
+    "device_if_in_errors": "if_errors",
+    "device_if_out_errors": "if_errors",
+    "device_if_in_discards": "if_discards",
+    "device_if_out_discards": "if_discards",
+    "device_if_fcs_errors": "if_crc",
+    "device_if_oper_status": "if_state_anomaly",
+    "device_if_admin_status": "if_state_anomaly",
+}
+#: Collected and counted, never scored (`producers.UNSCORED_INTERFACE_METRICS`).
+UNSCORED_METRICS: frozenset[str] = frozenset({"device_if_speed"})
+
+
+def episode_kind(metric: str) -> str | None:
+    """The episode kind the engine emits for a canonical metric, or None (not on
+    the bus, or collected but never scored)."""
+    if metric in UNSCORED_METRICS:
+        return None
+    bucket = METRIC_BUCKET.get(metric)
+    if bucket is None:
+        return None
+    if bucket == "interface":
+        return INTERFACE_EPISODE_KIND.get(metric, EPISODE_KIND["interface"])
+    return EPISODE_KIND.get(bucket)
+
 #: The A9 audit's verdicts on symptoms that were NOT promoted. Each is a symptom
 #: a real trap exists for; the reason is why a trap rule for it would be worse
 #: than the generic alarm it already becomes. Data, so the matrix states them
@@ -218,9 +250,9 @@ def build(rows: list[dict], families: dict) -> dict:
     for row in rows:
         fam = families.get(row.get("family") or "", {})
         metric = fam.get("correlates_with")
-        bucket = METRIC_BUCKET.get(str(metric or ""))
-        if bucket and EPISODE_KIND.get(bucket):
-            episode.setdefault(row["kind"], set()).add(EPISODE_KIND[bucket])
+        ep = episode_kind(str(metric or ""))
+        if ep:
+            episode.setdefault(row["kind"], set()).add(ep)
     return {"by_kind": by_kind, "episode": episode}
 
 
@@ -328,7 +360,8 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
     w("| Symptom (Signal kind) | source |")
     w("|---|---|")
     paired_eps = {k for v in episode.values() for k in v}
-    for ep_kind in sorted(set(EPISODE_KIND.values()) - paired_eps - set(typed)):
+    all_eps = {k for k in map(episode_kind, METRIC_BUCKET) if k} | set(EPISODE_KIND.values())
+    for ep_kind in sorted(all_eps - paired_eps - set(typed)):
         w(f"| `{ep_kind}` | metric episode only |")
     w("")
     w("## Metric-episode lane (no rule row — reconstructed)")
@@ -337,7 +370,7 @@ def render(data: dict, rows: list[dict], families: dict, parser_rev: str) -> str
     w("|---|---|---|")
     for metric in sorted(METRIC_BUCKET):
         bucket = METRIC_BUCKET[metric]
-        w(f"| `{metric}` | `{bucket}` | `{EPISODE_KIND[bucket]}` |")
+        w(f"| `{metric}` | `{bucket}` | `{episode_kind(metric) or 'collected, never scored'}` |")
     w("")
     w("A metric family absent from this table never reaches the correlation bus")
     w("at all (the collector's RCA allowlist is the gate), so an event family")

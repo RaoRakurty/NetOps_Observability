@@ -54,16 +54,16 @@ engine treats them as such. Fidelity is the catalog's ladder
 | **`isis_adjacency_change`** | `syslog.isis.adjacency_change`, `syslog.junos.isis.adjacency` | `trap.isis.adjacency_change` | `igp_state_anomaly` | `cisco`, `juniper`, `nokia`, `standard` | syslog: code/doc_claimed · trap: doc_claimed |
 | `link_down_no_light` | `syslog.port.link_down_no_light` | — | — | `generic` | syslog: code |
 | `link_flap_on_insert` | `syslog.port.link_flap_on_insert` | — | — | `generic` | syslog: code |
-| **`link_state_change`** | `syslog.cisco.link.admin_down`, `syslog.comware.link.state_change`, `syslog.junos.link.state_change`, `syslog.link.state_change`, `syslog.nxos.link.down`, `syslog.nxos.link.up`, `syslog.sonic.link.admin_down`, `syslog.sonic.link.state_change`, `syslog.srlinux.link.state_change`, `syslog.sros.link.state_change` | `trap.link.state_change`, `trap.link.state_change.event_type`, `trap.sdwan.interface` | `if_metric_anomaly` | `any`, `arista`, `cisco`, `hp`, `juniper`, `nokia`, `sonic`, `standard` | syslog: code/doc_claimed · trap: code/doc_claimed |
-| **`lldp_neighbor_change`** | `syslog.lldp.neighbor_change` | — | `if_metric_anomaly` | `arista`, `nokia` | syslog: code |
-| **`mac_flap`** | `syslog.mac.flap` | — | `if_metric_anomaly` | `arista`, `cisco` | syslog: doc_claimed |
+| **`link_state_change`** | `syslog.cisco.link.admin_down`, `syslog.comware.link.state_change`, `syslog.junos.link.state_change`, `syslog.link.state_change`, `syslog.nxos.link.down`, `syslog.nxos.link.up`, `syslog.sonic.link.admin_down`, `syslog.sonic.link.state_change`, `syslog.srlinux.link.state_change`, `syslog.sros.link.state_change` | `trap.link.state_change`, `trap.link.state_change.event_type`, `trap.sdwan.interface` | `if_state_anomaly` | `any`, `arista`, `cisco`, `hp`, `juniper`, `nokia`, `sonic`, `standard` | syslog: code/doc_claimed · trap: code/doc_claimed |
+| **`lldp_neighbor_change`** | `syslog.lldp.neighbor_change` | — | `if_state_anomaly` | `arista`, `nokia` | syslog: code |
+| **`mac_flap`** | `syslog.mac.flap` | — | `if_state_anomaly` | `arista`, `cisco` | syslog: doc_claimed |
 | **`ospf_adjacency_change`** | `syslog.junos.ospf.neighbor`, `syslog.ospf.adjacency_change`, `syslog.sros.ospf.neighbor_state` | `trap.ospf.adjacency_change` | `igp_state_anomaly` | `arista`, `cisco`, `juniper`, `nokia`, `standard` | syslog: code/doc_claimed · trap: doc_claimed |
 | `pcs_deskew_fault` | `syslog.port.pcs_deskew_fault` | — | — | `generic` | syslog: code |
 | `pcs_local_fault` | `syslog.port.pcs_local_fault` | — | — | `generic` | syslog: code |
 | `pcs_remote_fault` | `syslog.port.pcs_remote_fault` | — | — | `generic` | syslog: code |
 | `prefec_ber_rising` | `syslog.port.prefec_ber_rising` | — | — | `generic` | syslog: code |
 | `routing_adjacency_change` | `syslog.routing.adjacency_change` | — | — | `generic` | syslog: code |
-| **`stp_topology_change`** | `syslog.stp.topology_change`, `syslog.stp.topology_notification` | `trap.stp.topology_change` | `if_metric_anomaly` | `arista`, `cisco`, `standard` | syslog: code/doc_claimed · trap: doc_claimed |
+| **`stp_topology_change`** | `syslog.stp.topology_change`, `syslog.stp.topology_notification` | `trap.stp.topology_change` | `if_state_anomaly` | `arista`, `cisco`, `standard` | syslog: code/doc_claimed · trap: doc_claimed |
 | `transceiver_unsupported` | `syslog.port.transceiver_unsupported` | — | — | `arista`, `cisco`, `fortinet` | syslog: code |
 | `vtep_state_change` | `syslog.vtep.state_change` | — | — | `cisco` | syslog: code |
 
@@ -77,6 +77,10 @@ only witness, so they are single-source by construction.
 | Symptom (Signal kind) | source |
 |---|---|
 | `cloud_resource_anomaly` | metric episode only |
+| `if_crc` | metric episode only |
+| `if_discards` | metric episode only |
+| `if_errors` | metric episode only |
+| `if_metric_anomaly` | metric episode only |
 
 ## Metric-episode lane (no rule row — reconstructed)
 
@@ -85,16 +89,16 @@ only witness, so they are single-source by construction.
 | `device_bgp_fsm_transitions` | `bgp` | `bgp_state_anomaly` |
 | `device_bgp_peer_state` | `bgp` | `bgp_state_anomaly` |
 | `device_cpu_percent` | `device_resource` | `device_resource_anomaly` |
-| `device_if_admin_status` | `interface` | `if_metric_anomaly` |
-| `device_if_fcs_errors` | `interface` | `if_metric_anomaly` |
-| `device_if_in_discards` | `interface` | `if_metric_anomaly` |
-| `device_if_in_errors` | `interface` | `if_metric_anomaly` |
+| `device_if_admin_status` | `interface` | `if_state_anomaly` |
+| `device_if_fcs_errors` | `interface` | `if_crc` |
+| `device_if_in_discards` | `interface` | `if_discards` |
+| `device_if_in_errors` | `interface` | `if_errors` |
 | `device_if_in_octets` | `interface` | `if_metric_anomaly` |
-| `device_if_oper_status` | `interface` | `if_metric_anomaly` |
-| `device_if_out_discards` | `interface` | `if_metric_anomaly` |
-| `device_if_out_errors` | `interface` | `if_metric_anomaly` |
+| `device_if_oper_status` | `interface` | `if_state_anomaly` |
+| `device_if_out_discards` | `interface` | `if_discards` |
+| `device_if_out_errors` | `interface` | `if_errors` |
 | `device_if_out_octets` | `interface` | `if_metric_anomaly` |
-| `device_if_speed` | `interface` | `if_metric_anomaly` |
+| `device_if_speed` | `interface` | `collected, never scored` |
 | `device_isis_adj_state` | `igp` | `igp_state_anomaly` |
 | `device_mem_percent` | `device_resource` | `device_resource_anomaly` |
 | `device_ospf_nbr_state` | `igp` | `igp_state_anomaly` |

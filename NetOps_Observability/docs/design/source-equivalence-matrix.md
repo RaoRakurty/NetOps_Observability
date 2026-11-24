@@ -18,18 +18,18 @@ Matchable = enabled RCA templates whose every mandatory clause the profile can s
 
 | Profile | Sources | Evidence types supplied | Matchable templates | Fidelity |
 |---|---|---|---|---|
-| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 12/13 | 19 | lab_validated |
+| SNMP + syslog / traps / flows | snmp_poll, syslog, trap, flow | 12/13 | 20 | lab_validated |
 | gNMI + syslog / traps / flows | gnmi, syslog, trap, flow | 11/13 | 18 | lab_validated |
-| SNMP polling + traps only | snmp_poll, trap | 10/13 | 11 | lab_validated |
+| SNMP polling + traps only | snmp_poll, trap | 10/13 | 12 | lab_validated |
 | Syslog only | syslog | 9/13 | 18 | lab_validated |
-| vManage only | vmanage | 11/13 | 11 | lab_validated |
-| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 13/13 | 22 | lab_validated |
+| vManage only | vmanage | 11/13 | 12 | lab_validated |
+| vManage + device push (edge collector) | vmanage, syslog, trap, flow | 13/13 | 23 | lab_validated |
 | Catalyst Center only | catalyst_center | 7/13 | 8 | doc_claimed |
 | Meraki only | meraki | 7/13 | 8 | doc_claimed |
 | NDFC only | ndfc | 6/13 | 6 | doc_claimed |
 | Prime only | prime | 7/13 | 8 | doc_claimed |
 | Versa Director only | versa_director | 7/13 | 7 | doc_claimed |
-| SNMP + push + vManage | snmp_poll, syslog, trap, flow, vmanage | 13/13 | 22 | lab_validated |
+| SNMP + push + vManage | snmp_poll, syslog, trap, flow, vmanage | 13/13 | 23 | lab_validated |
 
 ## Matrix
 
@@ -82,7 +82,7 @@ engine's own coverage report under-states what it receives.
 
 ### snmp_poll — SNMP polling (RCA metric allowlist → CUSUM episodes)
 
-Supplies: link_state (if_metric_anomaly); interface_health (if_metric_anomaly); bgp_session (bgp_state_anomaly); igp_adjacency (igp_state_anomaly); device_resource (device_resource_anomaly).
+Supplies: link_state (if_metric_anomaly); interface_health (if_discards, if_errors, if_metric_anomaly); bgp_session (bgp_state_anomaly); igp_adjacency (igp_state_anomaly); device_resource (device_resource_anomaly).
 
 - **overlay_tunnel** 🟠 normalization_pending: collectors/sdwan_overlay.go reads SD-WAN BFD session state (VIPTELA / CISCO-SDWAN MIBs) for topology, but emits no tunnel signal; tunnel_down is NORMALIZATION_PENDING in coverage.py (design §7b E4)
 - **control_connection** ❓ unverified: whether the SD-WAN MIBs' control-connection tables are read by sdwan_overlay.go is not established (design §7b E4)
@@ -148,7 +148,7 @@ Supplies: flow_volume (flow_volume_anomaly).
 
 ### vmanage — Cisco Catalyst SD-WAN Manager (vManage)
 
-Supplies: link_state (if_metric_anomaly, link_state_change); interface_health (if_metric_anomaly); bgp_session (bgp_adjacency_change); igp_adjacency (ospf_adjacency_change); overlay_tunnel (controller_bfd_down, controller_tunnel_state); control_connection (controller_control_connection_loss); device_reachability (controller_device_unreachable); device_restart (device_restart); device_resource (device_resource_anomaly); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
+Supplies: link_state (if_metric_anomaly, link_state_change); interface_health (if_discards, if_errors, if_metric_anomaly); bgp_session (bgp_adjacency_change); igp_adjacency (ospf_adjacency_change); overlay_tunnel (controller_bfd_down, controller_tunnel_state); control_connection (controller_control_connection_loss); device_reachability (controller_device_unreachable); device_restart (device_restart); device_resource (device_resource_anomaly); config_change (controller_policy_change); physical_layer (transceiver_unsupported).
 
 - **l2_control** ❓ unverified: VRRP / STP state on cEdge via vManage not assessed
 - **flow_volume** — unavailable: cflowd is exported by the edges directly, not by vManage; vAnalytics is not integrated

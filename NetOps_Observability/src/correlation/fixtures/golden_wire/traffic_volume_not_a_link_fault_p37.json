@@ -1,0 +1,98 @@
+{
+ "name": "ENGINE_SEMVER 3.7.0 regression (owner 2026-11-24): the shape of lab object 6bce5ab0-3cc0-5736-99dc-664879cdde3a - octet-rate episodes on idle cEdge ports, a CPU episode and a fault-counter episode, NO link_state_change. Before 3.7.0 this headlined sig.ent.access.local-link-fault 'suspected 0.5'. Now octets are traffic volume (if_metric_anomaly), the discard counter is if_discards, and no object or ranking headlines a link fault.",
+ "tenant": "acme",
+ "events": [
+  {
+   "lane": "metric",
+   "event": {
+    "device": "cedge-80",
+    "signal_family": "interface",
+    "metric": "device_if_in_octets",
+    "value": 13.9,
+    "collection_path": "via_controller",
+    "ts": "2026-11-23T21:23:29Z",
+    "tenant_id": "acme",
+    "if_name": "Gi4.200",
+    "index": "Gi4.200"
+   },
+   "detected": {
+    "deviation": 2365.7
+   }
+  },
+  {
+   "lane": "metric",
+   "event": {
+    "device": "cedge-60",
+    "signal_family": "interface",
+    "metric": "device_if_out_octets",
+    "value": 17.0,
+    "collection_path": "via_controller",
+    "ts": "2026-11-23T21:23:29Z",
+    "tenant_id": "acme",
+    "if_name": "Gi4",
+    "index": "Gi4"
+   },
+   "detected": {
+    "deviation": 11556.2
+   }
+  },
+  {
+   "lane": "metric",
+   "event": {
+    "device": "cedge-80",
+    "signal_family": "interface",
+    "metric": "device_if_in_octets",
+    "value": 8366.0,
+    "collection_path": "via_controller",
+    "ts": "2026-11-23T21:23:29Z",
+    "tenant_id": "acme",
+    "if_name": "Gi1",
+    "index": "Gi1"
+   },
+   "detected": {
+    "deviation": 11.2
+   }
+  },
+  {
+   "lane": "metric",
+   "event": {
+    "device": "cedge-40",
+    "signal_family": "interface",
+    "metric": "device_if_out_discards",
+    "value": 0.4,
+    "collection_path": "via_controller",
+    "ts": "2026-11-23T21:23:29Z",
+    "tenant_id": "acme",
+    "if_name": "Gi4",
+    "index": "Gi4"
+   },
+   "detected": {
+    "deviation": 6.0
+   }
+  },
+  {
+   "lane": "metric",
+   "event": {
+    "device": "vedge-100",
+    "signal_family": "device_resource",
+    "metric": "device_cpu_percent",
+    "value": 96.26,
+    "collection_path": "via_controller",
+    "ts": "2026-11-23T21:23:29Z",
+    "tenant_id": "acme"
+   },
+   "detected": {
+    "deviation": 6.5
+   }
+  }
+ ],
+ "expect": {
+  "never_top": "sig.ent.access.local-link-fault",
+  "kinds": {
+   "device_if_in_octets": "if_metric_anomaly",
+   "device_if_out_octets": "if_metric_anomaly",
+   "device_if_out_discards": "if_discards",
+   "device_cpu_percent": "device_resource_anomaly"
+  }
+ }
+}
