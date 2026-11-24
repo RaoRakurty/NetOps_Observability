@@ -123,3 +123,7 @@
 /* ── Toolbar row: dropdowns left, search right ──────────────────────────── */
 .kit-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 11px; }
 .kit-toolbar-end { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── SourceNote: a neutral marker beside a value whose sources disagree (tracker 389) ── */
+.kit-srcnote { display: inline-flex; align-items: center; margin-left: 6px; vertical-align: middle; color: var(--fg-muted, var(--muted)); cursor: help; }
+.kit-srcnote:hover { color: var(--fg); }

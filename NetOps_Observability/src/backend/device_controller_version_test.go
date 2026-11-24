@@ -39,7 +39,11 @@ func TestStampedVersionOfAControllerOnlyDevice(t *testing.T) {
 	if got[0].SoftwareVersion != "20.9.1" {
 		t.Errorf("controller-reported version = %q, want 20.9.1", got[0].SoftwareVersion)
 	}
-	if got[1].SoftwareVersion != "" {
-		t.Errorf("a free-form manual version was shown as parsed: %q", got[1].SoftwareVersion)
+	// Tracker 389 (owner 2026-11-24): the Version column shows what the
+	// source order resolves — the value Iris states ("software version x.y
+	// (from a manual entry)") — so a manual-only version is shown as entered,
+	// not hidden. Before, the page left it blank while Iris cited it.
+	if got[1].SoftwareVersion != "x.y" {
+		t.Errorf("the page must show the version Iris cites for a manual-only device: %q", got[1].SoftwareVersion)
 	}
 }

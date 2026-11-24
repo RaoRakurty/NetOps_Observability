@@ -12,6 +12,7 @@ import (
 	"netops/backend/collectors"
 	"netops/backend/internal/devreach"
 	"netops/backend/internal/siteres"
+	"netops/backend/internal/srcauthority"
 	"netops/backend/internal/vendorprofile"
 	"netops/backend/models"
 )
@@ -131,7 +132,10 @@ func (s *server) qVecKeyedScoped(ctx context.Context, query, key string, filters
 //     to the caller's devices (metricsScopeFiltersFor — the chokepoint rule);
 //   - SoftwareVersion from the device's own description;
 //   - ConfiguredLocation from the sysLocation the SNMP collector publishes;
-//   - ReportedSiteID from the device's SD-WAN overlay facts or its controller.
+//   - ReportedSiteID from the device's SD-WAN overlay facts or its controller;
+//   - Vendor / Model / SerialNumber / SoftwareVersion as the tenant's source
+//     order decides them, plus SourceDisagreements — the same resolution Iris
+//     cites (deviceFactsResolver, tracker 389), so the two never differ.
 //
 // Every source is best-effort and an unread one leaves its field empty /
 // "unknown" — never a guessed value — and is logged (§10).
@@ -139,6 +143,8 @@ func (s *server) stampDeviceReadFields(ctx context.Context, claims jwtClaims, ds
 	if len(ds) == 0 {
 		return ds
 	}
+	tenant, cross := principalTenant(claims)
+	facts := s.newDeviceFactsResolver(ctx, tenant, cross, false)
 	maxUp, minUp, ok := s.collectorReachability(ctx, s.metricsScopeFiltersFor(claims))
 	if !ok {
 		logWarn("devices", "collector reachability unread — every device reads 'unknown' this request", map[string]any{"devices": len(ds)})
@@ -166,6 +172,10 @@ func (s *server) stampDeviceReadFields(ctx context.Context, claims jwtClaims, ds
 			swRevs[ds[i].ID],
 			controllerReportedVersion(ds[i]))
 		ds[i].ConfiguredLocation = locs[ds[i].ID]
+		// Last: every fact a source reported takes its winner under the
+		// tenant's order (the fallbacks above stay for facts no source gave).
+		f := facts.facts(ds[i])
+		srcauthority.ApplyToDevice(&ds[i], f.Resolutions, f.Order, f.Customized)
 	}
 	return ds
 }

@@ -44,6 +44,8 @@ A reachable device that is alerting reads as *Degraded*, never as healthy. When 
 
 The columns are **Device** (the hostname, with its management address under it), **Site**, **Vendor · model**, **Health**, **Version**, **Serial**, **Sync**, **Config backup**, **SSH** and **Source**, and an **Open** action on each row. **Type** is inferred from SNMP. **Source** is how the device entered the inventory: SNMP discovery, static configuration, a manual entry, or a connector. Controllers and access points discovered by a wireless connector appear here too, with type `wlc` or `ap` and source `wireless`.
 
+When a device is reported by more than one source (a controller, discovery, NetBox or a manual entry) and they report different values, **Vendor · model**, **Version** and **Serial** show the value your workspace's source order picks — the same value Iris uses. A small grey **i** beside the value means the sources disagree; hover it to read which source was used and what each of the others reported. To change which source wins, see [When sources disagree](/administration/network-context#when-sources-disagree).
+
 ### Step 3 - Add a device by hand {#add-a-device-manually}
 
 Discovery is the normal way in. To declare one directly:

@@ -17,6 +17,7 @@ import Wizard from "../components/Wizard";
 import DataTable, { Column } from "../components/DataTable";
 import { NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
 import { PageHeader, OutlinedButton, PillSelect, StatusChip, type StatusKind } from "../components/kit";
+import SourceNote, { notesFor } from "../components/kit/SourceNote";
 import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
 import { overageSummary } from "./licence.model";
@@ -345,7 +346,12 @@ export default function Devices() {
         render: (d) => {
           const v = vendorName(d);
           const label = d.model ? `${v} · ${d.model}` : v;
-          return <span className="kit-muted" title={label}>{label}</span>;
+          return (
+            <span className="kit-muted" title={label}>
+              {label}
+              <SourceNote notes={notesFor(d, "vendor", "model")} testId={`srcnote-vendor-${d.id}`} />
+            </span>
+          );
         },
       },
       {
@@ -362,7 +368,12 @@ export default function Devices() {
         key: "software", header: "Version", width: "minmax(96px,0.8fr)", sortable: true,
         text: (d) => d.software_version ?? "", sortValue: (d) => d.software_version || "~",
         render: (d) => d.software_version
-          ? <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
+          ? (
+            <span>
+              <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
+              <SourceNote notes={notesFor(d, "software_version")} testId={`srcnote-version-${d.id}`} />
+            </span>
+          )
           : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title={d.os || "The device's description carries no version"}>—</span>,
       },
       {
@@ -371,7 +382,12 @@ export default function Devices() {
         render: (d) => {
           const sv = deviceSerial(d);
           return sv
-            ? <span title={sv.from} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{sv.serial}</span>
+            ? (
+              <span>
+                <span title={sv.from} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{sv.serial}</span>
+                <SourceNote notes={notesFor(d, "serial")} testId={`srcnote-serial-${d.id}`} />
+              </span>
+            )
             : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title="The device has not reported a serial number yet">—</span>;
         },
       },

@@ -79,6 +79,24 @@ export type Device = {
    *  the operator's site, never instead of it. */
   reported_site_id?: string;
   reported_site_source?: string;
+  /** Facts the device's sources disagree on (tracker 389). vendor, model,
+   *  software_version and serial_number already carry the value the
+   *  workspace's source order picks — the same one Iris cites. */
+  source_disagreements?: DeviceFactDisagreement[];
+};
+
+/** One fact a device's sources disagree on, as Iris states it. */
+export type DeviceFactDisagreement = {
+  fact: "vendor" | "model" | "software_version" | "serial" | string;
+  /** Operator wording, e.g. "software version". */
+  label: string;
+  /** The value shown (the winner under the source order). */
+  value: string;
+  /** The winning source, in words ("the controller (vmanage)"). */
+  source: string;
+  others: { value: string; source: string }[];
+  /** The full sentence Iris states. Plain text — render escaped. */
+  text: string;
 };
 
 /** GET /api/devices/{id}/monitoring — read-only status. */
