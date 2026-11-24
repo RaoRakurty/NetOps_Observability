@@ -266,15 +266,17 @@ def test_discriminator_prefers_link_fault_when_link_is_down():
     local = by_id["sig.ent.access.local-link-fault"]
     assert local.confidence_rank == 1.0
     assert local.verdict_gate.tier is VerdictTier.CONFIRMED
-    # ENGINE_SEMVER 3.7.0 — OWNER DECISION PENDING (flagged in the PR): with a real
-    # error-counter episode (if_errors now has a producer), lastmile-circuit-flap
-    # also reaches 1.0 here — link change + BGP drop + its optional `if_errors`
-    # clue — and wins rank()'s (−confidence, −#satisfied, id) tie-break 3 to 2,
-    # though it needs an active probe to confirm. Before the split the counter
-    # witness was `if_metric_anomaly`, which lastmile does not read, so the tie
-    # went to local-link-fault by id. Pinned as-is; a ranking change is its own.
-    assert r.top_hypothesis in ("sig.ent.middle-mile.lastmile-circuit-flap",
-                                "sig.ent.access.local-link-fault")
+    # ENGINE_SEMVER 3.7.0, owner 2026-11-24: lastmile-circuit-flap also reaches
+    # 1.0 here (link change + BGP drop + its optional `if_errors` clue, 3 clauses
+    # to 2) but needs an active probe to confirm. At an exact tie the confirmable
+    # hypothesis sorts first, so the object headlines the local link fault,
+    # CONFIRMED, with last-mile listed beneath it.
+    assert r.top_hypothesis == "sig.ent.access.local-link-fault"
+    assert r.verdict_tier is VerdictTier.CONFIRMED
+    ids = [h.template_id for h in r.hypotheses]
+    assert "sig.ent.middle-mile.lastmile-circuit-flap" in ids
+    assert ids.index("sig.ent.access.local-link-fault") < ids.index("sig.ent.middle-mile.lastmile-circuit-flap")
+    assert by_id["sig.ent.middle-mile.lastmile-circuit-flap"].confidence_rank == 1.0
 
 
 # ── Regression guards ─────────────────────────────────────────────────────────
