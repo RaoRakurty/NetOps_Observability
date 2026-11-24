@@ -14,8 +14,10 @@ import DeviceDetailPage from "./DeviceDetailPage";
 // open, so it loads on first "Connect" click, not with the Devices page.
 const DeviceTerminal = lazy(() => import("./DeviceTerminal"));
 import Wizard from "../components/Wizard";
-import DataTable, { Column, Sev } from "../components/DataTable";
-import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import DataTable, { Column } from "../components/DataTable";
+import { NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import { PageHeader, OutlinedButton, PillSelect, StatusChip, type StatusKind } from "../components/kit";
+import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
 import { overageSummary } from "./licence.model";
 import { operatorError } from "../lib/errors";
@@ -32,45 +34,33 @@ const Req = () => <span style={{ color: "var(--bad)", marginLeft: 2 }} title="re
 type Health = DeviceHealth;
 const HEALTH_META = DEVICE_HEALTH_META;
 
-// Stable accent per vendor so each group header reads as one product family.
-const VENDOR_HUE: Record<string, number> = {
-  cisco: 200, juniper: 150, arista: 280, fortinet: 0,
-  paloalto: 25, nokia: 220, huawei: 345, mikrotik: 35,
+// Vendor, type and discovery source are DESCRIPTIVE values: they stay neutral
+// (docs/design/visual-language.md rule 4). They used to carry a hue each —
+// a green "SNMP" badge read as healthy, a red "Firewall" as broken.
+const SOURCE_LABEL: Record<string, string> = {
+  static: "Static",
+  snmp: "SNMP",
+  netbox: "Source of Truth",
+  manual: "Manual",
 };
-function vendorColor(vendor: string): string {
-  const key = vendor.toLowerCase().replace(/[^a-z]/g, "");
-  let hue = VENDOR_HUE[key];
-  if (hue === undefined) {
-    if (vendor === "Unknown") return "var(--muted)";
-    let h = 0;
-    for (let i = 0; i < vendor.length; i++) h = (h * 31 + vendor.charCodeAt(i)) % 360;
-    hue = h;
-  }
-  return `hsl(${hue} 65% 55%)`;
+const sourceLabel = (s: string) => SOURCE_LABEL[s] ?? (s || "—");
+
+// Functional device type (SNMP-inferred, backend) → its label.
+const TYPE_LABEL: Record<string, string> = {
+  router: "Router", switch: "Switch", firewall: "Firewall", "load-balancer": "Load balancer",
+  ap: "AP", wlc: "WLC", "cloud-gw": "Cloud GW", generic: "Generic",
+};
+const typeLabel = (t?: string) => TYPE_LABEL[t || "generic"] ?? (t || "—");
+
+// Device health → the one status chip (visual language rule 3).
+const HEALTH_KIND: Record<Health, StatusKind> = { up: "up", degraded: "degraded", down: "down", unknown: "not-polled" };
+const HEALTH_WORD: Record<Health, string> = { up: "Up", degraded: "Degraded", down: "Down", unknown: "Not polled" };
+
+/** A vendor's display name ("cisco" → "Cisco"); empty → "Unknown". */
+function vendorName(d: Pick<Device, "vendor">): string {
+  const v = (d.vendor || "").trim();
+  return v ? v.charAt(0).toUpperCase() + v.slice(1) : "Unknown";
 }
-
-const SOURCE_META: Record<string, { label: string; tone: string }> = {
-  static: { label: "Static", tone: "" },
-  snmp: { label: "SNMP", tone: "good" },
-  netbox: { label: "Source of Truth", tone: "accent" },
-  manual: { label: "Manual", tone: "warn" },
-};
-const sourceLabel = (s: string) => SOURCE_META[s]?.label ?? (s || "—");
-const sourceTone = (s: string) => SOURCE_META[s]?.tone ?? "";
-
-// Functional device type (SNMP-inferred, backend) → label + colour. Distinct hues
-// so the column scans at a glance; "generic" stays muted (unclassified).
-const TYPE_META: Record<string, { label: string; color: string }> = {
-  router: { label: "Router", color: "#3b82f6" },
-  switch: { label: "Switch", color: "#22c55e" },
-  firewall: { label: "Firewall", color: "#ef4444" },
-  "load-balancer": { label: "Load balancer", color: "#a855f7" },
-  ap: { label: "AP", color: "#06b6d4" },
-  wlc: { label: "WLC", color: "#14b8a6" },
-  "cloud-gw": { label: "Cloud GW", color: "#f59e0b" },
-  generic: { label: "Generic", color: "var(--muted)" },
-};
-const typeMeta = (t?: string) => TYPE_META[(t || "generic")] ?? { label: t || "—", color: "var(--muted)" };
 
 type Filter = "all" | Health;
 
@@ -98,6 +88,10 @@ export default function Devices() {
   const [showAdd, setShowAdd] = useState(false);
   const [draft, setDraft] = useState({ id: "", name: "", address: "", vendor: "" });
   const [filter, setFilter] = useState<Filter>("all");
+  // Toolbar pill filters ("" = all). Both narrow the list the health filter
+  // already narrowed; the text filter (q) runs inside DataTable on what is left.
+  const [siteFilter, setSiteFilter] = useState("");
+  const [vendorFilter, setVendorFilter] = useState("");
   const [q, setQ] = useState("");
   // The box keeps the typed value; the TABLE filters against the deferred one,
   // so typing stays responsive on a fleet-sized list (DataTable's filter runs
@@ -275,84 +269,60 @@ export default function Devices() {
     return c;
   }, [health]);
 
-  // Health-filtered flat list; the text filter (q) + sort run inside DataTable.
-  const rows = useMemo(
-    () => devices.filter((d) => filter === "all" || health.get(d.id) === filter),
-    [devices, filter, health],
-  );
-
   // Declared-site lookup (slug → display name) + whether the site column is
   // editable. Only the INTERNAL SoT provider's sites are editable here; when an
   // external CMDB (NetBox) is the authority, placement is read-only.
   const siteName = useMemo(() => new Map(siteOptions.map((s) => [s.slug, s.name])), [siteOptions]);
-  const editableSites = sotProvider === "internal" && siteOptions.length > 0;
 
-  // Map device health → the sacred severity ramp so a stale/down heartbeat tints
-  // its "Last seen" cell (warn = degraded, crit = down).
-  const healthSev = (h: Health): Sev | undefined =>
-    h === "down" ? "crit" : h === "degraded" ? "warn" : undefined;
+  // The site a row reads as — the same precedence as the Site column (assigned,
+  // then configured on the device, then the id it reports) — for the Site pill.
+  const siteOf = (d: Device) =>
+    siteText(locs.get(d.id), siteName) || d.configured_location || (d.reported_site_id ? `Site ID ${d.reported_site_id}` : "");
+
+  // Health, site and vendor filters; the text filter (q) + sort run inside DataTable.
+  const rows = useMemo(
+    () => devices.filter((d) =>
+      (filter === "all" || health.get(d.id) === filter)
+      && (!siteFilter || (siteOf(d) || "—") === siteFilter)
+      && (!vendorFilter || vendorName(d) === vendorFilter)),
+    // siteOf reads locs + siteName, both listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [devices, filter, health, siteFilter, vendorFilter, locs, siteName],
+  );
+
+  // The pill options: only values the fleet actually has, each with its count.
+  const siteChoices = useMemo(() => tallyBy(devices, (d) => siteOf(d) || "—"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [devices, locs, siteName]);
+  const vendorChoices = useMemo(() => tallyBy(devices, vendorName), [devices]);
+  const editableSites = sotProvider === "internal" && siteOptions.length > 0;
 
   // Column defs for the telemetry table primitive. `text` feeds the inline
   // filter, `sortValue` the header sort, `sev` the conditional cell tint.
   const columns = useMemo<Column<Device>[]>(() => {
     const cols: Column<Device>[] = [
       {
-        // ONE glyph: the circle says whether Correlix monitors it, the arrow says
-        // whether it is answering (owner spec 2026-10-10).
-        key: "status", header: "Status", width: 92, sortable: true,
-        text: (d) => `${monitoringLabel(d)} ${HEALTH_META[health.get(d.id) ?? "unknown"].label}`,
-        sortValue: (d) => ["down", "degraded", "unknown", "up"].indexOf(health.get(d.id) ?? "unknown"),
-        sev: (d) => healthSev(health.get(d.id) ?? "unknown"),
-        render: (d) => <StatusGlyph device={d} health={health.get(d.id) ?? "unknown"} />,
-      },
-      {
-        // The hostname. The internal id is identity plumbing, not something an
-        // operator reads — it stays in the tooltip and in search.
-        key: "name", header: "Device", width: "17%", sortable: true,
-        text: (d) => `${d.name || ""} ${d.id}`, sortValue: (d) => (d.name || d.id).toLowerCase(),
+        // The hostname in bold with its management address under it in
+        // monospace (visual language). The internal id is identity plumbing,
+        // not something an operator reads — it stays in the tooltip and search.
+        // Wide enough for a full hostname and address (the owner's rule: the
+        // hostname is never cut short); it takes the spare width first.
+        key: "name", header: "Device", width: "minmax(190px,1.6fr)", sortable: true,
+        text: (d) => `${d.name || ""} ${d.id} ${d.address}`, sortValue: (d) => (d.name || d.id).toLowerCase(),
         render: (d) => (
-          <a className="dtv-link" title={`Open ${d.name || d.id} (id ${d.id})`}
-            onClick={(e) => { e.stopPropagation(); openDevice(d); }}><span className="device-name">{d.name || d.id}</span></a>
+          <span className="kit-attr" style={{ gap: 10 }}>
+            <Icon name="server" size={17} />
+            <span className="kit-host">
+              <a className="dtv-link kit-host-name" title={`Open ${d.name || d.id} (id ${d.id})`}
+                onClick={(e) => { e.stopPropagation(); openDevice(d); }}><span className="device-name">{d.name || d.id}</span></a>
+              <span className="kit-host-addr" title={d.address}>{d.address || "no address"}</span>
+            </span>
+          </span>
         ),
       },
       ...(tenantView.allTenants ? [tenantColumn<Device>((d) => d.tenant_id, tenantView.names)] : []),
       {
-        key: "address", header: "IP", width: 156,
-        text: (d) => d.address,
-        render: (d) => <span title={d.address} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.address}</span>,
-      },
-      {
-        key: "vendor", header: "Manufacturer", width: "11%", sortable: true,
-        text: (d) => d.vendor ?? "", sortValue: (d) => (d.vendor || "~").toLowerCase(),
-        render: (d) => {
-          const v = (d.vendor || "").trim() || "Unknown";
-          return (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={v}>
-              <span style={{ width: 8, height: 8, borderRadius: 3, background: vendorColor(v), flex: "none" }} />
-              <span style={{ textTransform: "capitalize" }}>{v}</span>
-            </span>
-          );
-        },
-      },
-      {
-        key: "software", header: "Version", width: "11%", sortable: true,
-        text: (d) => d.software_version ?? "", sortValue: (d) => d.software_version || "~",
-        render: (d) => d.software_version
-          ? <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
-          : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title={d.os || "The device's description carries no version"}>—</span>,
-      },
-      {
-        key: "serial", header: "Serial", width: 140, sortable: true,
-        text: (d) => deviceSerial(d)?.serial ?? "", sortValue: (d) => deviceSerial(d)?.serial || "~",
-        render: (d) => {
-          const sv = deviceSerial(d);
-          return sv
-            ? <span title={sv.from} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{sv.serial}</span>
-            : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title="The device has not reported a serial number yet">—</span>;
-        },
-      },
-      {
-        key: "location", header: "Site", width: "14%", sortable: true,
+        key: "site", header: "Site", width: "minmax(120px,1fr)", sortable: true,
         text: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || (d.reported_site_id ? `Site ID ${d.reported_site_id}` : ""),
         sortValue: (d) => siteText(locs.get(d.id), siteName) || d.configured_location || (d.reported_site_id ? `Site ID ${d.reported_site_id}` : "~"),
         render: (d) => (
@@ -368,6 +338,43 @@ export default function Devices() {
           />
         ),
       },
+      {
+        // Vendor · model, neutral (a descriptive value, never a colour).
+        key: "vendor", header: "Vendor · model", width: "minmax(150px,1.1fr)", sortable: true,
+        text: (d) => `${d.vendor ?? ""} ${d.model ?? ""}`, sortValue: (d) => (d.vendor || "~").toLowerCase(),
+        render: (d) => {
+          const v = vendorName(d);
+          const label = d.model ? `${v} · ${d.model}` : v;
+          return <span className="kit-muted" title={label}>{label}</span>;
+        },
+      },
+      {
+        // ONE health chip — icon + word + semantic colour. The monitoring
+        // state (monitored / over the licence limit / not monitored) rides on
+        // the accessible label and the hover text (owner spec 2026-10-10:
+        // monitoring and live status both readable from one cell).
+        key: "status", header: "Health", width: 132, sortable: true,
+        text: (d) => `${monitoringLabel(d)} ${HEALTH_META[health.get(d.id) ?? "unknown"].label}`,
+        sortValue: (d) => ["down", "degraded", "unknown", "up"].indexOf(health.get(d.id) ?? "unknown"),
+        render: (d) => <HealthCell device={d} health={health.get(d.id) ?? "unknown"} />,
+      },
+      {
+        key: "software", header: "Version", width: "minmax(96px,0.8fr)", sortable: true,
+        text: (d) => d.software_version ?? "", sortValue: (d) => d.software_version || "~",
+        render: (d) => d.software_version
+          ? <span title={d.os || d.software_version} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{d.software_version}</span>
+          : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title={d.os || "The device's description carries no version"}>—</span>,
+      },
+      {
+        key: "serial", header: "Serial", width: 140, sortable: true,
+        text: (d) => deviceSerial(d)?.serial ?? "", sortValue: (d) => deviceSerial(d)?.serial || "~",
+        render: (d) => {
+          const sv = deviceSerial(d);
+          return sv
+            ? <span title={sv.from} style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 14 }}>{sv.serial}</span>
+            : <span style={{ color: "var(--fg-subtle, var(--muted))" }} title="The device has not reported a serial number yet">—</span>;
+        },
+      },
     ];
     const off = <span style={{ color: "var(--fg-subtle, var(--muted))" }}>Off</span>;
     const configOffTip = featureOffTip("Configuration backup");
@@ -375,17 +382,19 @@ export default function Devices() {
     cols.push(
       {
         // Sync = is the running config the approved (golden) one?
-        key: "sync", header: "Sync", width: 128, sortable: true,
+        // A switched-off feature's columns stay (owner: say what is off rather
+        // than hide it) but only as wide as "Off".
+        key: "sync", header: "Sync", width: configLive ? 128 : 80, sortable: true,
         text: (d) => (configLive ? syncLabel(drift?.get(d.id)).label : "Off"),
         sortValue: (d) => (configLive ? syncLabel(drift?.get(d.id)).label : "~"),
         render: (d) => {
           if (!configLive) return <span title={configOffTip}>{off}</span>;
           const b = syncLabel(drift?.get(d.id));
-          return <span className={`badge ${b.tone}`} title={b.help}>{b.label}</span>;
+          return <StatusChip kind={b.kind} label={b.label} title={b.help} />;
         },
       },
       {
-        key: "backup", header: "Config backup", width: 168, sortable: true,
+        key: "backup", header: "Config backup", width: configLive ? 200 : 132, sortable: true,
         sortValue: (d) => new Date(drift?.get(d.id)?.last_capture_at ?? 0).getTime() || 0,
         render: (d) => {
           if (!configLive) return <span title={configOffTip}>{off}</span>;
@@ -393,54 +402,69 @@ export default function Devices() {
           const st = backupState.get(d.id);
           return (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
-              {at ? <span title={fmtDateTime(at)}>{relTime(at)}</span> : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>never</span>}
-              <button className="btn" style={{ padding: "2px 8px" }} disabled={st === "running"}
+              {at
+                ? <span className="kit-attr kit-mono" title={fmtDateTime(at)}><Icon name="clock" size={14} />{relTime(at)}</span>
+                : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>never</span>}
+              <OutlinedButton disabled={st === "running"}
                 title={st && st !== "running" ? st : "Capture the running configuration now"}
                 onClick={() => { void backupNow(d.id); }}>
                 {st === "running" ? "Backing up…" : "Back up now"}
-              </button>
+              </OutlinedButton>
             </span>
           );
         },
       },
       {
-        key: "ssh", header: "SSH", width: 104,
+        key: "ssh", header: "SSH", width: sshEnabled ? 120 : 72,
         text: () => (sshEnabled ? "Connect" : "Off"),
         render: (d) => sshEnabled
-          ? <button className="btn" title="Open an SSH session to the device" onClick={(e) => { e.stopPropagation(); setTerm(d); }}>Connect</button>
+          ? <OutlinedButton icon="code" title="Open an SSH session to the device" onClick={(e) => { e.stopPropagation(); setTerm(d); }}>Connect</OutlinedButton>
           : <span title={featureOffTip("SSH to devices")}>{off}</span>,
       },
     );
-    cols.push({
-      key: "source", header: "Source", width: 96,
-      text: (d) => sourceLabel(d.source),
-      render: (d) => <span className={`badge ${sourceTone(d.source)}`} title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
-    });
+    cols.push(
+      {
+        key: "source", header: "Source", width: 104,
+        text: (d) => sourceLabel(d.source),
+        render: (d) => <span className="kit-muted" title={`Discovery source: ${d.source || "unknown"}`}>{sourceLabel(d.source)}</span>,
+      },
+      {
+        // The row action, outlined with a chevron (visual language). A click on
+        // the row does the same; this is the visible, keyboard-reachable way.
+        key: "open", header: "", width: 92, sortable: false,
+        render: (d) => (
+          <OutlinedButton chevron title={`Open ${d.name || d.id}`} onClick={(e) => { e.stopPropagation(); openDevice(d); }}>
+            Open
+          </OutlinedButton>
+        ),
+      },
+    );
     return cols;
   }, [health, locs, siteOptions, editableSites, siteName, drift, configOn, sshEnabled, backupState, tenantView.allTenants, tenantView.names]);
 
-  const chip = (key: Filter, label: string, n: number, color?: string) => (
-    <button
-      className={filter === key ? "chip chip-active" : "chip"}
-      onClick={() => setFilter(key)}
-      style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-    >
-      {color && <span style={{ width: 8, height: 8, borderRadius: 999, background: color, flex: "none" }} />}
-      {label} <span style={{ opacity: 0.65, fontVariantNumeric: "tabular-nums" }}>{n}</span>
-    </button>
-  );
+  // The Health pill: every state the fleet can be in, each with its count.
+  const healthOptions = [
+    { value: "all", label: `All health · ${devices.length}` },
+    { value: "up", label: `Up · ${counts.up}` },
+    { value: "degraded", label: `Degraded · ${counts.degraded}` },
+    { value: "down", label: `Down · ${counts.down}` },
+    ...(counts.unknown > 0 ? [{ value: "unknown", label: `Not polled · ${counts.unknown}` }] : []),
+  ];
 
   return (
     <div className="dm-board">
-      <NocHeader
-        title="Inventory & Devices"
-        topic="page.devices"
-        chips={<>
+      <PageHeader
+        icon="server"
+        title="Devices"
+        count={devices.length}
+        actions={<>
           <Chip label={`Discovered ${devices.length}`} />
           <Chip label={`Monitored ${monitoredCount}`} />
           <LiveChip detail="30s poll" />
+          <AskIris topic="page.devices" label="Devices" />
         </>}
-      >
+      />
+      <div className="cc-hero" style={{ paddingTop: 0 }}>
         <NocKpis cols={5}>
           <NocKpi n={devices.length} label="Discovered devices" topic="devices.discovered" />
           <NocKpi n={monitoredCount} label="Monitored devices" topic="devices.monitored" />
@@ -453,7 +477,7 @@ export default function Devices() {
           <NocKpi n={counts.degraded} label="Degraded" topic="devices.degraded" tone={counts.degraded ? "var(--warn)" : undefined} />
           <NocKpi n={counts.down} label="Down" topic="devices.down" tone={counts.down ? "var(--crit)" : undefined} />
         </NocKpis>
-      </NocHeader>
+      </div>
 
       {alertsErr && (
         <p className="empty" role="alert" style={{ color: "var(--warn)", margin: "0 0 10px" }}>
@@ -486,23 +510,27 @@ export default function Devices() {
           </span>
         </div>
         <div style={{ padding: "11px 13px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 11 }}>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {chip("all", "All", devices.length)}
-              {chip("up", "Up", counts.up, HEALTH_META.up.color)}
-              {chip("degraded", "Degraded", counts.degraded, HEALTH_META.degraded.color)}
-              {chip("down", "Down", counts.down, HEALTH_META.down.color)}
-              {counts.unknown > 0 && chip("unknown", "Not polled", counts.unknown, HEALTH_META.unknown.color)}
-            </div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <div className="kit-toolbar">
+            <PillSelect label="Filter by health" icon="gauge" value={filter} testId="devices-health-filter"
+              options={healthOptions} onChange={(v) => setFilter(v as Filter)} />
+            <PillSelect label="Filter by site" icon="map-pin" value={siteFilter} testId="devices-site-filter"
+              options={[{ value: "", label: "All sites" }, ...siteChoices.map(([s, n]) => ({ value: s, label: `${s === "—" ? "No site" : s} · ${n}` }))]}
+              onChange={setSiteFilter} />
+            <PillSelect label="Filter by vendor" icon="package" value={vendorFilter} testId="devices-vendor-filter"
+              options={[{ value: "", label: "All vendors" }, ...vendorChoices.map(([v, n]) => ({ value: v, label: `${v} · ${n}` }))]}
+              onChange={setVendorFilter} />
+            <div className="kit-toolbar-end">
               <input
                 className="form-input"
-                placeholder="Filter devices…"
+                aria-label="Search devices"
+                placeholder="Search devices…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                style={{ width: 200, height: 32 }}
+                style={{ width: 220, height: 32 }}
               />
-              <button className="btn" onClick={() => setShowAdd((v) => !v)}>{showAdd ? "Cancel" : "+ Add device"}</button>
+              <OutlinedButton icon={showAdd ? undefined : "plus"} onClick={() => setShowAdd((v) => !v)}>
+                {showAdd ? "Cancel" : "Add device"}
+              </OutlinedButton>
             </div>
           </div>
 
@@ -564,6 +592,7 @@ export default function Devices() {
               rowKey={(d) => d.id}
               filter={deferredQ}
               height="58vh"
+              rowHeight={46}
               ariaLabel="Devices"
               initialSort={{ key: "vendor", dir: "asc" }}
               onRowClick={(d) => openDevice(d)}
@@ -638,8 +667,10 @@ function SiteCell({
 
   if (!editable) {
     return label
-      ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={label}><span aria-hidden style={{ color: "var(--muted)" }}>◍</span>{label}</span>
-      : fromDevice ?? <span style={{ color: "var(--fg-subtle, var(--muted))" }}>—</span>;
+      ? <span className="kit-attr" title={label}><Icon name="map-pin" size={15} />{label}</span>
+      : fromDevice
+        ? <span className="kit-attr"><Icon name="map-pin" size={15} />{fromDevice}</span>
+        : <span style={{ color: "var(--fg-subtle, var(--muted))" }}>—</span>;
   }
 
   // A manual (non-declared) location is shown as a hint after the picker so the
@@ -647,7 +678,7 @@ function SiteCell({
   const manualHint = !isDeclared && row?.source === "manual" && label;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={(e) => e.stopPropagation()}>
-      <span aria-hidden style={{ color: isDeclared ? "var(--accent, var(--muted))" : "var(--muted)" }}>◍</span>
+      <Icon name="map-pin" size={15} style={{ color: "var(--fg-muted, var(--muted))", flex: "none" }} />
       <select
         className="form-input"
         aria-label="Assign site"
@@ -671,33 +702,40 @@ function SiteCell({
 // the approved (golden) one? "Changed" (differs from the previous capture) and
 // "Drifted" (differs from golden) are both "Not in sync" here; the detail
 // panel keeps the distinction.
-function syncLabel(r: ConfigDriftRow | undefined): { label: string; tone: string; help: string } {
+export function syncLabel(r: ConfigDriftRow | undefined): { label: string; kind: StatusKind; help: string } {
   const b = statusBadge(r);
-  if (!r || !r.last_capture_at) return { label: "Not captured", tone: "", help: b.help };
-  if (String(r.state) === "failed") return { label: "Capture failed", tone: "bad", help: b.help };
+  if (!r || !r.last_capture_at) return { label: "Not captured", kind: "neutral", help: b.help };
+  if (String(r.state) === "failed") return { label: "Capture failed", kind: "failed", help: b.help };
   switch (String(r.state)) {
-    case "in_sync": return { label: "In sync", tone: "good", help: b.help };
+    case "in_sync": return { label: "In sync", kind: "in-sync", help: b.help };
     case "changed":
-    case "drifted": return { label: "Not in sync", tone: String(r.state) === "drifted" ? "bad" : "warn", help: b.help };
-    default: return { label: "Unknown", tone: "", help: b.help };
+    case "drifted": return { label: "Not in sync", kind: String(r.state) === "drifted" ? "bad" : "warn", help: b.help };
+    default: return { label: "Unknown", kind: "unknown", help: b.help };
   }
 }
 
-// StatusGlyph: the circle is monitoring (green = Correlix collects from it,
-// amber = past the licence limit, grey = not monitored); the arrow is the live
-// status from the collectors (↑ up, ↓ down, ↕ degraded, – not polled recently).
-function StatusGlyph({ device, health }: { device: Device; health: Health }) {
-  const ring = device.monitored ? "var(--good, #16a34a)" : device.monitor_state === "over_limit" ? "var(--warn, #d97706)" : "var(--muted, #94a3b8)";
+// HealthCell: the live status as ONE chip (✓ Up, ⓘ Degraded, ⊘ Down, ○ Not
+// polled). The monitoring state rides along: on the accessible label and the
+// hover text always, and as a second, amber chip when the device is past the
+// licence limit (the one monitoring state an operator has to act on).
+function HealthCell({ device, health }: { device: Device; health: Health }) {
   const m = HEALTH_META[health];
   const label = `${monitoringLabel(device)} · ${m.label}`;
   const methods = device.monitored ? (device.monitor_methods ?? []).join(" · ") : "";
   const title = [label, methods && `telemetry: ${methods}`, device.monitor_reason].filter(Boolean).join(" — ");
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }} title={title} aria-label={label}>
-      <span style={{ width: 12, height: 12, borderRadius: 999, background: ring, flex: "none" }} />
-      <span aria-hidden style={{ color: m.color, fontWeight: 700, fontSize: 16, lineHeight: 1 }}>{m.arrow}</span>
+    <span className="kit-attr" style={{ gap: 6 }} title={title} aria-label={label}>
+      <StatusChip kind={HEALTH_KIND[health]} label={HEALTH_WORD[health]} title={title} />
+      {device.monitor_state === "over_limit" && <StatusChip kind="warn" label="Over limit" title={title} />}
     </span>
   );
+}
+
+/** [value, count] for each distinct value, most common first (the pill options). */
+function tallyBy(devices: Device[], keyOf: (d: Device) => string): [string, number][] {
+  const m = new Map<string, number>();
+  for (const d of devices) { const k = keyOf(d); m.set(k, (m.get(k) ?? 0) + 1); }
+  return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
 // relTime renders a compact "3m ago" / "2h ago" age for the last-seen column.
@@ -726,7 +764,7 @@ function tally(
   devices: Device[],
   keyOf: (d: Device) => string,
   label: (k: string) => string,
-  color: (k: string) => string,
+  color: (k: string, i: number) => string,
   top = 5,
 ): Slice[] {
   const counts = new Map<string, number>();
@@ -735,10 +773,18 @@ function tally(
     counts.set(k, (counts.get(k) ?? 0) + 1);
   }
   const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  const head = sorted.slice(0, top).map(([k, n]) => ({ key: k, label: label(k), n, color: color(k) }));
+  const head = sorted.slice(0, top).map(([k, n], i) => ({ key: k, label: label(k), n, color: color(k, i) }));
   const rest = sorted.slice(top).reduce((s, [, n]) => s + n, 0);
-  if (rest > 0) head.push({ key: "__other", label: "Other", n: rest, color: "var(--muted)" });
+  if (rest > 0) head.push({ key: "__other", label: "Other", n: rest, color: neutralShade("", NEUTRAL_STEPS.length - 1) });
   return head;
+}
+
+// One neutral (the theme's muted text colour) at falling strengths: slice 0 is
+// the strongest. Works in every theme because it mixes the theme's own token.
+const NEUTRAL_STEPS = [85, 62, 44, 30, 18, 11];
+export function neutralShade(_key: string, i: number): string {
+  const pct = NEUTRAL_STEPS[Math.min(i, NEUTRAL_STEPS.length - 1)];
+  return `color-mix(in srgb, var(--fg-muted, var(--muted)) ${pct}%, transparent)`;
 }
 
 // A labelled distribution: a thin stacked bar + a legend of the slices. Honest
@@ -782,18 +828,20 @@ function FleetComposition({
   locs: Map<string, DeviceLocationRow>;
   siteName: Map<string, string>;
 }) {
+  // Type, vendor, source and placement are descriptive: their slices are told
+  // apart by SHADES of one neutral (neutralShade), not by hues — a hue would
+  // read as a state (visual language rule 4).
   const byType = useMemo(
-    () => tally(devices, (d) => d.type || "generic", (k) => typeMeta(k).label, (k) => typeMeta(k).color),
+    () => tally(devices, (d) => d.type || "generic", (k) => typeLabel(k), neutralShade),
     [devices],
   );
   const byVendor = useMemo(
     () => tally(devices, (d) => (d.vendor || "").trim() || "Unknown",
-      (k) => k.charAt(0).toUpperCase() + k.slice(1), (k) => vendorColor(k)),
+      (k) => k.charAt(0).toUpperCase() + k.slice(1), neutralShade),
     [devices],
   );
   const bySource = useMemo(
-    () => tally(devices, (d) => d.source || "unknown", (k) => sourceLabel(k),
-      (k) => SOURCE_META[k]?.tone === "good" ? "var(--good)" : SOURCE_META[k]?.tone === "accent" ? "var(--accent)" : SOURCE_META[k]?.tone === "warn" ? "var(--warn)" : "var(--muted)"),
+    () => tally(devices, (d) => d.source || "unknown", (k) => sourceLabel(k), neutralShade),
     [devices],
   );
   // Site placement coverage — declared site vs. unplaced. Directly actionable:
@@ -803,8 +851,8 @@ function FleetComposition({
     [devices, locs, siteName],
   );
   const placement: Slice[] = [
-    { key: "placed", label: "Placed at a site", n: placed, color: "var(--good, #16a34a)" },
-    { key: "unplaced", label: "Unplaced", n: devices.length - placed, color: "var(--muted)" },
+    { key: "placed", label: "Placed at a site", n: placed, color: neutralShade("", 0) },
+    { key: "unplaced", label: "Unplaced", n: devices.length - placed, color: neutralShade("", 3) },
   ];
 
   return (
