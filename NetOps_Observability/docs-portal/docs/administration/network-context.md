@@ -118,8 +118,10 @@ To change the order for your workspace, open **Administration → Iris → Knowl
 **Which source Iris believes**, move the sources up or down and choose **Save order**. **Use the platform
 default** undoes it. Your order applies only to your workspace.
 
-The order decides vendor, model, software version and serial number. It does not decide a device's name
-or address, and a site assigned by hand still wins over a site the device reports.
+The order decides vendor, model, software version and serial number — in Iris answers, on the
+**Devices** page and in the devices API alike, so they always show the same value. On the Devices page a
+small grey **i** beside a value marks a disagreement; hover it for the sources. It does not decide a
+device's name or address, and a site assigned by hand still wins over a site the device reports.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/ai/source-authority

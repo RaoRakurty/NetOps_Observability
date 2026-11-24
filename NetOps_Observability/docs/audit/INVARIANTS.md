@@ -758,8 +758,14 @@ states it — `TestAgentAnswerAlwaysStatesTheDisagreement`.
 vManage and SNMP values normalise to agreement (and how often sources really disagree) is measurable from
 `netops_iris_source_authority_total` once deployed.
 
-**NOT COVERED:** the device page and inventory API still show the merged row (`mergeDevices`), so they can
-show a different value from the one Iris cites. The collectors and identity deliberately keep that row.
+**PROVEN by tests (tracker 389, owner 2026-11-24):** the device page and the inventory API
+(`GET /api/devices`, `GET /api/devices/{id}`) read vendor, model, software version and serial through the
+SAME resolution Iris cites (`deviceFactsResolver` → `srcauthority.ResolveDevice` → `ApplyToDevice`) and
+carry `source_disagreements` with the sentence Iris states — `TestDevicePageAndIrisAgreeOnEveryFact`,
+`TestTheTenantsOrderDecidesThePageToo`; a tenant's order and values never reach another tenant's page —
+`TestDeviceSourceDisagreementsNeverCrossATenant`; the stamped field is never persisted —
+`TestSourceDisagreementsAreNeverPersisted`. The collectors and identity still keep the merged row
+(`mergeDevices`) underneath; only the read is resolved.
 
 ## 25. Change ledger: Provider-owned devices (tracker 337 N-D2, 2026-11-09)
 
