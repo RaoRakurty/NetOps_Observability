@@ -105,7 +105,7 @@ from canon import (
     tenant_key,
     tunnel_scope,
 )
-from catalog import builtin_catalog
+from catalog import BUSY_POLL_PLATFORMS, builtin_catalog
 from cloud_dependency import build_from_records, merge_path_views
 from cloud_log_parsers import (
     cloud_log_event,
@@ -140,6 +140,7 @@ from engine import (
     blob_cycle_begin,
     blob_cycle_end,
     bound_hypotheses_blob,
+    cpu_context_metric_lines,
     cycle_hypotheses_blob,
     digest_cache_stats,
     engine_temporal_reach_s,
@@ -206,6 +207,13 @@ from producers import (
 )
 from rank_memo import RankMemo
 from replay import replay_object
+from resource_dwell import HOLD as DWELL_HOLD
+from resource_dwell import (
+    ResourceDwell,
+    is_cpu_signal,
+    recast_busy_poll,
+    threshold_resource,
+)
 from routing_direction import forwarding_pairs, routing_direction_source
 from scoring import (
     RankingResult,
@@ -887,6 +895,12 @@ _SHADOW_TASKS: set[asyncio.Task] = set()
 # ProactiveMonitor.reset). EVERY check ships shadow, so this observes and counts
 # and emits nothing until a check is promoted.
 PROACTIVE = ProactiveMonitor()
+# Tracker 489 (owner 2026-11-24, ENGINE_SEMVER 3.8.0): a device's CPU / memory
+# threshold alarm is fault evidence only once it has stood CORR_RESOURCE_DWELL_S
+# (default 300 s) without a clear. Per-process, bounded, deliberately not persisted:
+# a raise pending at a restart is not released (its raw row is in corr_signals).
+# Gate + release at the window entry (buffer_signal) and the engine loop.
+RESOURCE_DWELL = ResourceDwell()
 PROACTIVE_SIGNALS = 0    # signals a PROMOTED check emitted (0 while all shadow)
 DEADLETTER_COUNT = 0  # exposed via /healthz; provenance is never guessed
 
@@ -2185,7 +2199,9 @@ def _canonicalize_event(sig: Signal) -> Signal:
     return res.signal
 
 
-def buffer_signal(sig: Signal) -> None:
+def buffer_signal(sig: Signal, *, dwell_released: bool = False) -> None:
+    """The single live window entry. `dwell_released` marks a raise the resource
+    dwell (tracker 489) is releasing at expiry, so it is not held a second time."""
     # Decision #76 + verdicts.py Decision #1: a debug_only / platform-self-check probe
     # (e.g. prober->nginx, api->netbox) stays SEARCHABLE — it's already in corr_signals —
     # but must NEVER open or attach to a correlation object. RCA is the CUSTOMER's
@@ -2221,6 +2237,17 @@ def buffer_signal(sig: Signal) -> None:
     # which never comes through here — carries the canonical entity.
     if identity_canon_enabled() and sig.source in CANON_EVENT_SOURCES:
         sig = _canonicalize_event(sig)
+    # Tracker 489 (owner 2026-11-24, ENGINE_SEMVER 3.8.0) stage [1]: a CPU/memory
+    # THRESHOLD alarm waits out the dwell (a clear inside it suppresses the raise —
+    # counted; its raw row is already in corr_signals), and a busy-poll platform's
+    # CPU signal is recast to context. Keyed by the tenant-canonical device, so a
+    # trap (`vedge-20-…`) and its syslog twin (`vEdge-20`) are one condition.
+    if threshold_resource(sig) is not None or is_cpu_signal(sig):
+        resolver = cached_identity_resolver_for(sig.tenant_id)
+        device = resolver.canonical_device(sig.entity_id) or sig.entity_id
+        if not dwell_released and RESOURCE_DWELL.admit(sig, device) == DWELL_HOLD:
+            return
+        sig = recast_busy_poll(sig, resolver.model_of(device), BUSY_POLL_PLATFORMS)
     # E1 (flag CORR_ORIGIN_OBSERVER, default OFF): after the tenant is canonical,
     # because the device is resolved through that tenant's inventory only.
     if origin_observer_enabled():
@@ -8411,9 +8438,27 @@ async def engine_loop() -> None:
             await _emit_proactive(PROACTIVE.sweep(datetime.now(timezone.utc)))
         except Exception:
             log.exception("proactive sweep failed (observable, §10; loop continues)")
+        # Tracker 489: release the CPU/memory threshold raises whose dwell expired
+        # without a clear. Own try, like the proactive sweep: a dwell timer must
+        # never be the reason correlation stops.
+        try:
+            release_resource_dwell()
+        except Exception:
+            log.exception("resource dwell release failed (observable, §10; loop continues)")
         # Idle (or drain-bounded): fall back to the normal interval. It still
         # drives low-volume flush, expiry and finalisation.
         await asyncio.sleep(CORR_ENGINE_INTERVAL_S)
+
+
+def release_resource_dwell() -> int:
+    """Buffer every CPU/memory threshold raise whose dwell expired (tracker 489).
+    Each is one signal for its (tenant, device, resource) group, with its own ts,
+    severity and signal_id; its raw row is already in corr_signals. Returns the
+    number released."""
+    released = RESOURCE_DWELL.due()
+    for sig in released:
+        buffer_signal(sig, dwell_released=True)
+    return len(released)
 
 
 async def _emit_proactive(events: tuple[ProactiveEvent, ...]) -> None:
@@ -15558,6 +15603,9 @@ def _metrics_text(health: dict | None = None) -> str:
         *admin_link_change_metric_lines(),
         *standing_finding_metric_lines(),
         *volume_context_metric_lines(),
+        *cpu_context_metric_lines(),
+        # Tracker 489: the CPU/memory threshold dwell (suppressed flaps, releases).
+        *RESOURCE_DWELL.metric_lines(),
         # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
         # whether or not the flag is on: the pair (enabled gauge, capped
         # counter) is only readable together — a 0 counter means nothing until
@@ -16248,6 +16296,8 @@ def _health_payload() -> dict:
             "series_cross_source_dropped": DETECTOR.cross_source_dropped,
             "series_unit_rejected": METRICS_SERIES_UNIT_REJECTED,
             "metrics_not_scored": METRICS_NOT_SCORED,
+            # Tracker 489: CPU/memory threshold raises held, suppressed and released.
+            "resource_dwell": RESOURCE_DWELL.health(),
             # P6 PR-E stage [1] canonicalisation (CORR_IDENTITY_CANON): calls by
             # overall outcome across lanes; the per-lane/axis split is
             # corr_identity_canon_total on /metrics.

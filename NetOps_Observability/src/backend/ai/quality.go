@@ -93,6 +93,7 @@ var evidenceKeyLabel = map[string]string{
 	"if_state_anomaly":             "Interface state-change signal",
 	"if_util_high":                 "High interface utilization",
 	"device_resource_anomaly":      "Device CPU/memory anomaly",
+	"device_cpu_context":           "Device CPU (busy-poll platform, context)",
 	"firewall_deny":                "Firewall deny event",
 	"firewall_session_utilization": "Firewall session-utilization signal",
 	"flow_retries":                 "Flow retry/retransmission evidence",

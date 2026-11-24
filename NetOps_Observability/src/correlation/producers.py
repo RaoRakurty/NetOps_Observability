@@ -336,6 +336,9 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     # counters and the port state are their own kinds (interface_metric_kind).
     "if_metric_anomaly", "bgp_state_anomaly", "device_resource_anomaly",
     "if_errors", "if_discards", "if_crc", "if_state_anomaly",
+    # 3.8.0 (tracker 489): a busy-poll platform's CPU signal, recast at the window
+    # entry (resource_dwell.recast_busy_poll) — context, never a template input.
+    "device_cpu_context",
     # IGP adjacency state off the POLLED series (tracker 222). The signal-lane
     # twin is ospf_adjacency_change / isis_adjacency_change above; this is the
     # metric lane, which answers "is it still bad?" without a recovery line.
