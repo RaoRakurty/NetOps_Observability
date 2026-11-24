@@ -150,6 +150,7 @@ from engine import (
     required_retention_s,
     run_window,
     standing_finding_metric_lines,
+    volume_context_metric_lines,
 )
 from entity_resolver import EntityResolver, identity_resolver_for
 from episodes import EpisodeDetector
@@ -185,10 +186,12 @@ from proactive import (
     proactive_stats,
 )
 from producers import (
+    UNSCORED_INTERFACE_METRICS,
     clock_skew_signal,
     episode_signal,
     flow_sample,
     high_severity_no_signal,
+    interface_metric_kind,
     known_benign_total,
     note_classifier_no_signal,
     parse_event_ts,
@@ -909,6 +912,8 @@ COUNTER_RATES = CounterRates()
 # counter-rate stage or the series. The cross-source bucket drops are counted
 # by the detector itself (DETECTOR.cross_source_dropped).
 METRICS_SERIES_UNIT_REJECTED = 0
+# 3.7.0: interface metrics collected but never scored (device_if_speed) — counted.
+METRICS_NOT_SCORED = 0
 # The syslog lane is TOPICS[0] and the source of link_down / BGP-state / optics
 # evidence — the highest-value RCA evidence class — and had NO intake counter at
 # all, so a broken Vector syslog route was indistinguishable from a quiet night.
@@ -12763,7 +12768,10 @@ def metric_identity(ev: dict) -> tuple[str, EntityType, str, tuple[str, ...]] | 
         # tracker 168: the bare interface name is device-LOCAL and must not be a
         # global grounding subject — entity_id is already `device:iface`, from
         # which Node.tokens() derives both the full id and the device part.
-        return f"{device}:{iface}", EntityType.INTERFACE, "if_metric_anomaly", (device,)
+        # 3.7.0 kind split: octets → if_metric_anomaly (volume), errors →
+        # if_errors, discards → if_discards, FCS → if_crc, status → if_state_anomaly.
+        metric = str(ev.get("metric") or ev.get("name") or "")
+        return f"{device}:{iface}", EntityType.INTERFACE, interface_metric_kind(metric), (device,)
     if family == "bgp":
         peer = str(ev.get("peer") or ev.get("index") or "")
         if not peer:
@@ -12806,7 +12814,7 @@ async def handle_metric(ev: dict) -> None:
     back-compat but carry no canonical identity."""
     global METRICS_RECEIVED, METRICS_ACCEPTED, METRICS_DROPPED
     global METRICS_DROPPED_NO_VALUE, METRICS_DROPPED_NO_IDENTITY, METRICS_DROPPED_STALE_TS
-    global METRICS_SERIES_UNIT_REJECTED
+    global METRICS_SERIES_UNIT_REJECTED, METRICS_NOT_SCORED
     METRICS_RECEIVED += 1
 
     metric = str(ev.get("metric") or ev.get("name") or "")
@@ -12830,6 +12838,12 @@ async def handle_metric(ev: dict) -> None:
         METRICS_DROPPED_NO_IDENTITY += 1
         return
     entity_id, entity_type, kind_prefix, tokens = ident
+    if metric in UNSCORED_INTERFACE_METRICS:
+        # 3.7.0 (owner 2026-11-24): interface speed is collected (VictoriaMetrics
+        # has it) but never an anomaly — vManage flips loopback/system speed
+        # 10 <-> 1000 Mbps; a speed change is configuration, not a fault. Counted.
+        METRICS_NOT_SCORED += 1
+        return
 
     # Timestamp validation (Layer-1F): trust the event clock only within skew.
     now = datetime.now(timezone.utc)
@@ -15543,6 +15557,7 @@ def _metrics_text(health: dict | None = None) -> str:
         # tracker 385: admin link changes exempted from the singleton rule.
         *admin_link_change_metric_lines(),
         *standing_finding_metric_lines(),
+        *volume_context_metric_lines(),
         # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
         # whether or not the flag is on: the pair (enabled gauge, capped
         # counter) is only readable together — a 0 counter means nothing until
@@ -15569,6 +15584,9 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_series_unit_rejected_total RCA-family metric samples refused because their declared unit contradicts the canonical table.",
         "# TYPE corr_series_unit_rejected_total counter",
         f"corr_series_unit_rejected_total {ing['series_unit_rejected']}",
+        "# HELP corr_metrics_not_scored_total Interface samples collected but never scored as anomalies (device_if_speed, ENGINE_SEMVER 3.7.0).",
+        "# TYPE corr_metrics_not_scored_total counter",
+        f"corr_metrics_not_scored_total {ing['metrics_not_scored']}",
         # P6 PR-E identity canonicalisation (flag CORR_IDENTITY_CANON): 1 only
         # when in force — requested without E1 + series admission reads 0 (fail
         # closed, logged at start). Declared either way so the counter below
@@ -16229,6 +16247,7 @@ def _health_payload() -> dict:
             # RCA-family sample whose declared unit contradicts the table.
             "series_cross_source_dropped": DETECTOR.cross_source_dropped,
             "series_unit_rejected": METRICS_SERIES_UNIT_REJECTED,
+            "metrics_not_scored": METRICS_NOT_SCORED,
             # P6 PR-E stage [1] canonicalisation (CORR_IDENTITY_CANON): calls by
             # overall outcome across lanes; the per-lane/axis split is
             # corr_identity_canon_total on /metrics.

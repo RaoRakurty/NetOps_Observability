@@ -54,6 +54,8 @@ T0 = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
 EMITTED_KINDS = frozenset({
     "probe_rtt_anomaly", "probe_loss",
     "if_metric_anomaly", "metric_anomaly", "device_resource_anomaly",
+    # ENGINE_SEMVER 3.7.0 kind split: the interface fault / state episodes.
+    "if_errors", "if_discards", "if_crc", "if_state_anomaly",
     "link_state_change", "bgp_adjacency_change", "bgp_state_anomaly",
     "ospf_adjacency_change", "isis_adjacency_change", "lldp_neighbor_change",
     "stp_topology_change", "device_restart",
@@ -130,7 +132,7 @@ def test_local_link_fault_confirmed_end_to_end():
     local-link-fault signature, CONFIRMED, and it replays clean."""
     link = sig("link_state_change", ModalityClass.CONTROL_PLANE, EntityType.INTERFACE,
                "leaf1:Gi0/1", "syslog-leaf1", source=Source.SYSLOG, secs=0)
-    ifm = sig("if_metric_anomaly", ModalityClass.DEVICE_TELEMETRY, EntityType.INTERFACE,
+    ifm = sig("if_errors", ModalityClass.DEVICE_TELEMETRY, EntityType.INTERFACE,
               "leaf1:Gi0/1", "snmp-poller", dev=6.0, secs=5)
     window = [link, ifm]
 
@@ -144,6 +146,23 @@ def test_local_link_fault_confirmed_end_to_end():
     # confirmed ⇒ nothing missing
     assert r.evidence_missing == ()
     _assert_replays_clean(snap, window)
+
+
+def test_link_change_beside_only_a_traffic_swing_never_confirms():
+    """ENGINE_SEMVER 3.7.0 (owner 2026-11-24, volume = context): a traffic-volume
+    episode on the same port supports the link-fault reading (optional bonus) but
+    is never its confirming second plane — the `context` clause stays out of the
+    verdict gate, so one control-plane witness caps the verdict at suspected."""
+    link = sig("link_state_change", ModalityClass.CONTROL_PLANE, EntityType.INTERFACE,
+               "leaf1:Gi0/1", "syslog-leaf1", source=Source.SYSLOG, secs=0)
+    vol = sig("if_metric_anomaly", ModalityClass.DEVICE_TELEMETRY, EntityType.INTERFACE,
+              "leaf1:Gi0/1", "snmp-poller", dev=6.0, secs=5)
+    snap = _only_object([link, vol])
+    r = snap.ranking
+    assert r.top_hypothesis == "sig.ent.access.local-link-fault"
+    assert r.verdict_tier is VerdictTier.SUSPECTED
+    top = {h.template_id: h for h in r.hypotheses}["sig.ent.access.local-link-fault"]
+    assert abs(top.confidence_rank - 0.55) < 1e-9   # 1 of 2 required + the volume bonus
 
 
 # ── Scenario B: BGP peer flap, single witness → SUSPECTED (never confirmed) ────
@@ -228,21 +247,36 @@ def test_discriminator_prefers_link_fault_when_link_is_down():
     """BGP flap + a same-device link transition + interface counters: the
     bgp-peer-flap signature is CONTRADICTED by the present link_state_change (its
     look-alike killer) and the link-fault explanation wins. Proves the
-    discriminator (else_prefer) wiring end to end."""
+    discriminator (else_prefer) wiring end to end. (3.7.0: the counter witness is
+    an error-counter episode, `if_errors` — a traffic swing is not a link fault.)"""
     link = sig("link_state_change", ModalityClass.CONTROL_PLANE, EntityType.INTERFACE,
                "leaf1:Gi0/1", "syslog-leaf1", source=Source.SYSLOG, secs=0)
-    ifm = sig("if_metric_anomaly", ModalityClass.DEVICE_TELEMETRY, EntityType.INTERFACE,
+    ifm = sig("if_errors", ModalityClass.DEVICE_TELEMETRY, EntityType.INTERFACE,
               "leaf1:Gi0/1", "snmp-poller", dev=6.0, secs=4)
     bgp = sig("bgp_adjacency_change", ModalityClass.CONTROL_PLANE, EntityType.DEVICE,
               "leaf1", "syslog-leaf1", source=Source.SYSLOG, secs=6)
     snap = _only_object([link, ifm, bgp])
 
     r = snap.ranking
-    assert r.top_hypothesis == "sig.ent.access.local-link-fault"
-    assert r.verdict_tier is VerdictTier.CONFIRMED
     by_id = {h.template_id: h for h in r.hypotheses}
+    # The discriminator: the BGP flap is ruled out in favour of the link fault.
     assert by_id["sig.ent.wan-edge.bgp-peer-flap"].contradicted is True
     assert "sig.ent.access.local-link-fault" in by_id["sig.ent.wan-edge.bgp-peer-flap"].forced_competitors
+    # …and the link-fault explanation is complete and confirmable on its own.
+    local = by_id["sig.ent.access.local-link-fault"]
+    assert local.confidence_rank == 1.0
+    assert local.verdict_gate.tier is VerdictTier.CONFIRMED
+    # ENGINE_SEMVER 3.7.0, owner 2026-11-24: lastmile-circuit-flap also reaches
+    # 1.0 here (link change + BGP drop + its optional `if_errors` clue, 3 clauses
+    # to 2) but needs an active probe to confirm. At an exact tie the confirmable
+    # hypothesis sorts first, so the object headlines the local link fault,
+    # CONFIRMED, with last-mile listed beneath it.
+    assert r.top_hypothesis == "sig.ent.access.local-link-fault"
+    assert r.verdict_tier is VerdictTier.CONFIRMED
+    ids = [h.template_id for h in r.hypotheses]
+    assert "sig.ent.middle-mile.lastmile-circuit-flap" in ids
+    assert ids.index("sig.ent.access.local-link-fault") < ids.index("sig.ent.middle-mile.lastmile-circuit-flap")
+    assert by_id["sig.ent.middle-mile.lastmile-circuit-flap"].confidence_rank == 1.0
 
 
 # ── Regression guards ─────────────────────────────────────────────────────────
@@ -291,7 +325,7 @@ def test_same_evidence_same_object_and_order_invariant():
     replay)."""
     link = sig("link_state_change", ModalityClass.CONTROL_PLANE, EntityType.INTERFACE,
                "leaf1:Gi0/1", "syslog-leaf1", source=Source.SYSLOG, secs=0)
-    ifm = sig("if_metric_anomaly", ModalityClass.DEVICE_TELEMETRY, EntityType.INTERFACE,
+    ifm = sig("if_errors", ModalityClass.DEVICE_TELEMETRY, EntityType.INTERFACE,
               "leaf1:Gi0/1", "snmp-poller", dev=6.0, secs=5)
     a = run_window([link, ifm], CATALOG, (), EngineConfig())[0]
     b = run_window([ifm, link], CATALOG, (), EngineConfig())[0]

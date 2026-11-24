@@ -362,19 +362,6 @@ NORMALIZATION_PENDING: dict[str, dict] = {
         "reason": "flap is derivable from collected state history; no producer",
         "owner": "correlix", "ticket": "#73", "date_added": "2026-07-09",
     },
-    "if_errors": {
-        "producer": "SNMP/gNMI collectors (device_if_* metrics)",
-        "observed_as": ["device_if_in_errors / device_if_out_errors (VictoriaMetrics)"],
-        "reason": "interface error counters ARE polled and rendered on boards; "
-                  "no anomaly producer emits the signal kind",
-        "owner": "correlix", "ticket": "#73", "date_added": "2026-07-09",
-    },
-    "if_discards": {
-        "producer": "SNMP/gNMI collectors (device_if_* metrics)",
-        "observed_as": ["device_if_in_discards / device_if_out_discards (VictoriaMetrics)"],
-        "reason": "discard counters ARE polled; no anomaly producer",
-        "owner": "correlix", "ticket": "#73", "date_added": "2026-07-09",
-    },
     "if_util_high": {
         "producer": "SNMP/gNMI collectors (device_if_* metrics)",
         "observed_as": ["device_if_in_octets / device_if_speed utilization (VictoriaMetrics)"],
@@ -431,14 +418,15 @@ COLLECTION_PENDING: dict[str, dict] = {
     ]),
     # v0 theoretical templates (wan-congestion, routing-instability, physical-
     # degradation, dns-impairment, cloud-region, tunnel-mtu-blackhole) awaiting
-    # Layer-2 collection. NOTE: if_crc stays here (FCS/CRC OIDs are a known
-    # SNMP-profile coverage gap — [[netops-snmp-baseline-audit]]); path_change
+    # Layer-2 collection. (if_crc left this ledger with ENGINE_SEMVER 3.7.0: the
+    # device_if_fcs_errors episode now emits it — producers.INTERFACE_METRIC_KINDS,
+    # as if_errors / if_discards left NORMALIZATION_PENDING.) path_change
     # stays here because the traceroute collector is opt-in dormant and its
     # results do not reach the bus yet.
     **_group("v0-theoretical template; Layer-2 collection pending (#73)",
              "#73", "2026-06-20", [
         "app_large_transfer_fail", "bgp_path_change", "cloud_gw_anomaly",
-        "dns_failure_rate", "if_crc", "optical_power_low",
+        "dns_failure_rate", "optical_power_low",
         "path_change", "qos_drops",
     ]),
     # v1 NOC catalog (owner failure-signature spec 2026-07-02, midnight-noc-

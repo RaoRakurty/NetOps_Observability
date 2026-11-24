@@ -338,7 +338,9 @@ def score_template(
         hits = _satisfying(clause, evidence)
         if hits:
             satisfied.append(clause.kind)
-            if not (context_only and clause.kinds() <= context_only):
+            # 3.7.0: a `context` clause (e.g. traffic volume beside a link fault)
+            # supports the rank, never the verdict gate — same rule as E5c.
+            if not clause.context and not (context_only and clause.kinds() <= context_only):
                 matched_signals.extend(hits)
             supporting_hit = True
             bonus = min(OPTIONAL_BONUS_CAP, bonus + OPTIONAL_BONUS_PER_CLAUSE)
@@ -1244,10 +1246,19 @@ def rank(catalog: Catalog, evidence: tuple[Signal, ...] | list[Signal]) -> Ranki
     # floor): it sorts after every one of them, whatever its own confidence.
     # Where nothing causal is viable it sorts as before, and may lead — capped at
     # suspected by score_template. Confidence numbers are never touched.
+    #
+    # Owner 2026-11-24 (ENGINE_SEMVER 3.7.0): at EXACTLY equal confidence, a
+    # hypothesis the evidence can CONFIRM sorts ahead of one capped at suspected,
+    # BEFORE the specificity key — link down + same-port errors + a BGP drop is a
+    # confirmable local link fault, and last-mile's extra clue (it needs a probe to
+    # confirm) must not take the headline from it on a 3-to-2 clause count. It only
+    # reorders exact ties (it sits after −confidence); no number is touched.
     causal_viable = any(not s.context_story and s.confidence_rank >= CONFIDENCE_FLOOR
                         for s in scores)
     scores.sort(key=lambda s: (bool(causal_viable and s.context_story),
-                               -s.confidence_rank, -len(s.satisfied), s.template_id))
+                               -s.confidence_rank,
+                               s.verdict_gate.tier is not VerdictTier.CONFIRMED,
+                               -len(s.satisfied), s.template_id))
 
     # Forced competitors must appear in the visible set even if low-ranked
     # (competing hypotheses by construction — §4.5).

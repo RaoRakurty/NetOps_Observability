@@ -159,7 +159,7 @@ def lab_signals(tenant: str = "acme"):
                        account="123", region="us-east-1", severity=Severity.HIGH,
                        metric_name="alb_5xx_pct", value=7.1, baseline=0.2)
     wan = Signal(
-        tenant_id=tenant, ts=T0, source=Source.METRIC, kind="if_metric_anomaly",
+        tenant_id=tenant, ts=T0, source=Source.METRIC, kind="if_errors",
         observer=Observer(observer_id="snmp-poller", observer_type=ObserverType.DEVICE),
         modality_class=ModalityClass.DEVICE_TELEMETRY, entity_type=EntityType.INTERFACE,
         entity_id="wan-edge-1:ge-0/0/0", severity=Severity.HIGH, native_id=f"w|{tenant}",
@@ -197,7 +197,7 @@ def test_rank7_shared_token_is_never_authoritative():
                entity_id="leaf1:Gi0/1", severity=Severity.HIGH, native_id="a|1",
                entity_tokens=("fabric-core",))
     b = Signal(tenant_id="acme", ts=T0 + timedelta(seconds=5), source=Source.METRIC,
-               kind="if_metric_anomaly",
+               kind="if_errors",
                observer=Observer(observer_id="snmp-poller", observer_type=ObserverType.DEVICE),
                modality_class=ModalityClass.DEVICE_TELEMETRY, entity_type=EntityType.INTERFACE,
                entity_id="leaf2:Gi0/2", severity=Severity.HIGH, native_id="b|1",
@@ -265,7 +265,7 @@ def _token_pair(shared_token: bool = True):
                entity_id="leaf1:Gi0/1", severity=Severity.HIGH, native_id="a|1",
                entity_tokens=tok)
     b = Signal(tenant_id="acme", ts=T0 + timedelta(seconds=5), source=Source.METRIC,
-               kind="if_metric_anomaly",
+               kind="if_errors",
                observer=Observer(observer_id="snmp-poller", observer_type=ObserverType.DEVICE),
                modality_class=ModalityClass.DEVICE_TELEMETRY, entity_type=EntityType.INTERFACE,
                entity_id="leaf2:Gi0/2", severity=Severity.HIGH, native_id="b|1",
@@ -526,7 +526,7 @@ def test_rank7_shared_token_uses_candidate_weight_not_containment():
                entity_id="leaf1:Gi0/1", severity=Severity.HIGH, native_id="a|1",
                entity_tokens=("fabric-core",))
     b = Signal(tenant_id="acme", ts=T0 + timedelta(seconds=5), source=Source.METRIC,
-               kind="if_metric_anomaly",
+               kind="if_errors",
                observer=Observer(observer_id="snmp-poller", observer_type=ObserverType.DEVICE),
                modality_class=ModalityClass.DEVICE_TELEMETRY, entity_type=EntityType.INTERFACE,
                entity_id="leaf2:Gi0/2", severity=Severity.HIGH, native_id="b|1",

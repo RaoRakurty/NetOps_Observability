@@ -27,6 +27,7 @@ first, calibrated at P4 (replay-driven calibration), never silently tuned.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -69,6 +70,67 @@ CLOCK_BUDGET_S = {
 # Determinism is unchanged: the same ordered (ts, value) stream still yields
 # the same events (the aggregates are a pure function of the pushed values).
 STATS_RECOMPUTE_EVERY = 1024
+
+# σ FLOOR (owner 2026-11-24, ENGINE_SEMVER 3.7.0). z = (value − mean) / σ had no
+# floor, so a near-constant baseline (an idle port, a clean error counter) turned
+# a trivial absolute change into an enormous z: on the lab 12.8 → 13.9 B/s scored
+# z = 2,366 (crit), and a discard counter with σ ≈ 0.001/s reached z ≈ 1.6e9.
+# Severity is meant to say "how bad", not "how surprising". For the metrics named
+# here the detector divides by
+#     σ_eff = max(σ, SIGMA_FLOOR_REL[metric] · |mean|, SIGMA_FLOOR_ABS[metric])
+# and freezes σ_eff at onset, so open and clear judge on the same scale. Units are
+# the detector's: counters are already per-second rates (counter_rate.py), so
+# octets are B/s (12,500 B/s = 100 kbit/s). A metric with no entry keeps the
+# legacy path byte for byte (state metrics, BGP FSM transitions, probe RTT, cloud
+# metrics); SIGMA_FLOOR_EXEMPT names the RCA families that are deliberately
+# unfloored, and test_sigma_floor_37.py fails if an RCA family is in neither.
+# Kill switch: CORR_SIGMA_FLOOR=0 (default ON), the CORR_COUNTER_RATES precedent.
+# Owner-tunable starting values; not in the engine hash (bump ENGINE_SEMVER).
+SIGMA_FLOOR_ABS: dict[str, float] = {
+    "device_if_in_octets": 12_500.0,
+    "device_if_out_octets": 12_500.0,
+    "flow_bytes_rate": 12_500.0,
+    "device_if_in_errors": 0.1,
+    "device_if_out_errors": 0.1,
+    "device_if_in_discards": 0.1,
+    "device_if_out_discards": 0.1,
+    "device_if_fcs_errors": 0.1,
+    "device_cpu_percent": 2.0,
+    "device_mem_percent": 1.0,
+    "device_temp_celsius": 1.0,
+}
+SIGMA_FLOOR_REL: dict[str, float] = {
+    "device_if_in_octets": 0.10,
+    "device_if_out_octets": 0.10,
+    "flow_bytes_rate": 0.10,
+    "device_if_in_errors": 0.10,
+    "device_if_out_errors": 0.10,
+    "device_if_in_discards": 0.10,
+    "device_if_out_discards": 0.10,
+    "device_if_fcs_errors": 0.10,
+}
+# RCA families (series_admission.SERIES_SEMANTICS) that keep the unfloored z:
+# enumerated states (a change of state is the signal), a transition counter whose
+# any increment matters, and interface speed (never scored at all, 3.7.0).
+SIGMA_FLOOR_EXEMPT = frozenset({
+    "device_if_oper_status", "device_if_admin_status", "device_bgp_peer_state",
+    "device_ospf_nbr_state", "device_isis_adj_state", "device_bgp_fsm_transitions",
+    "device_if_speed",
+})
+
+
+def sigma_floor(metric: str, mean: float) -> float | None:
+    """The σ floor for `metric` at baseline `mean`, or None (no floor: legacy z)."""
+    absolute = SIGMA_FLOOR_ABS.get(metric)
+    if absolute is None:
+        return None
+    return max(absolute, SIGMA_FLOOR_REL.get(metric, 0.0) * abs(mean))
+
+
+def sigma_floor_enabled() -> bool:
+    """CORR_SIGMA_FLOOR, default ON; 0/false/no/off restores the unfloored z."""
+    return os.environ.get("CORR_SIGMA_FLOOR", "1").strip().lower() not in ("0", "false", "no", "off")
+
 
 # P6 PR-C2 series admission (signals.CORR_SERIES_ADMISSION; detector side). A
 # collection path is wire text: bounded before it is kept per series, and at
@@ -188,7 +250,9 @@ class EpisodeDetector:
     reads — event time only (replay contract).
     """
 
-    def __init__(self, max_series: int | None = None) -> None:
+    def __init__(self, max_series: int | None = None, sigma_floor: bool | None = None) -> None:
+        # σ floor (3.7.0): None reads CORR_SIGMA_FLOOR once, here (default ON).
+        self.sigma_floor = sigma_floor_enabled() if sigma_floor is None else sigma_floor
         # Bounded, LRU by last observation. The key is
         # (tenant, entity, metric) and NOTHING evicted it: a tenant whose
         # entity_ids are ephemeral cloud resource ids (the realistic churn
@@ -273,6 +337,12 @@ class EpisodeDetector:
 
         mean = st.frozen_mean if st.open else st.mean()
         std = st.frozen_std if st.open else st.std()
+        std_eff: float | None = None
+        if self.sigma_floor and not st.open:
+            # 3.7.0: an open episode already judges on its frozen σ_eff.
+            floor = sigma_floor(metric, mean)
+            if floor is not None:
+                std = std_eff = max(std, floor)
         if std <= 0.0:
             if not st.open:
                 st.push(value)
@@ -281,7 +351,7 @@ class EpisodeDetector:
 
         if st.open:
             return self._while_open(st, key, ts, value, z, src)
-        return self._while_closed(st, key, ts, value, z, src)
+        return self._while_closed(st, key, ts, value, z, src, std_eff)
 
     @staticmethod
     def _note_source(st: _SeriesState, src: str | None) -> None:
@@ -296,6 +366,7 @@ class EpisodeDetector:
     def _while_closed(
         self, st: _SeriesState, key: tuple[str, str, str],
         ts: datetime, value: float, z: float, src: str | None = None,
+        std_eff: float | None = None,
     ) -> EpisodeEvent | None:
         pos_was = st.s_pos > 0.0
         neg_was = st.s_neg > 0.0
@@ -336,7 +407,9 @@ class EpisodeDetector:
             st.onset_ts = onset
             st.onset_uncertainty_s = uncertainty
             st.frozen_mean = st.mean()
-            st.frozen_std = st.std()
+            # 3.7.0: freeze σ_eff when the floor applied, so the clear (|z| < 1)
+            # is judged on the scale that opened the episode. None = legacy.
+            st.frozen_std = st.std() if std_eff is None else std_eff
             st.peak = abs(z)
             st.integral = abs(z) * st.interval_s
             st.clear_run = 0

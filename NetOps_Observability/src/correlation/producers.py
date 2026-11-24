@@ -84,6 +84,37 @@ log = logging.getLogger("correlation")
 PROBE_LOSS_PCT = 5.0
 
 
+# 3.7.0 kind split (owner 2026-11-24): an interface episode's kind says WHAT moved.
+# One metric family used to emit `if_metric_anomaly` for octets, errors, discards,
+# FCS and oper status alike, so a traffic swing satisfied a template's "counter
+# anomaly" clause (local-link-fault). Canonical names are the same for SNMP, gNMI
+# and the controller lane (collectors/metric_events.go rcaMetricFamilies).
+INTERFACE_METRIC_KINDS: dict[str, str] = {
+    "device_if_in_octets": "if_metric_anomaly",       # traffic volume (context)
+    "device_if_out_octets": "if_metric_anomaly",
+    "device_if_in_errors": "if_errors",
+    "device_if_out_errors": "if_errors",
+    "device_if_in_discards": "if_discards",
+    "device_if_out_discards": "if_discards",
+    "device_if_fcs_errors": "if_crc",
+    "device_if_oper_status": "if_state_anomaly",
+    "device_if_admin_status": "if_state_anomaly",
+}
+# Interface metrics collected and counted but NEVER scored: vManage reports
+# loopback / system interface speed flipping 10 <-> 1000 Mbps (1,752 high/crit
+# "anomalies" in 7 lab days); a speed change is configuration, not a fault.
+UNSCORED_INTERFACE_METRICS: frozenset[str] = frozenset({"device_if_speed"})
+# Traffic-volume kinds are CONTEXT (owner 2026-11-24): capped at warn here, and a
+# component made only of them opens no object (engine.VOLUME_CONTEXT_KINDS).
+VOLUME_KINDS: frozenset[str] = frozenset({"if_metric_anomaly", "flow_volume_anomaly"})
+
+
+def interface_metric_kind(metric: str) -> str:
+    """The episode kind for an interface metric; unknown names keep the legacy
+    `if_metric_anomaly` (a non-RCA interface metric is never a fault kind)."""
+    return INTERFACE_METRIC_KINDS.get(metric, "if_metric_anomaly")
+
+
 def severity_for(peak_z: float) -> Severity:
     if peak_z >= 8:
         return Severity.CRIT
@@ -300,8 +331,11 @@ EMITTED_KINDS: frozenset[str] = frozenset({
     "link_state_change_clear", "bgp_adjacency_change_clear", "ospf_adjacency_change_clear", "isis_adjacency_change_clear", "routing_adjacency_change_clear", "vtep_state_change_clear",
     # generic-alarm keystone (#80 §4)
     "device_alarm",
-    # metric episodes (main.py metric_identity + C6 flow)
+    # metric episodes (main.py metric_identity + C6 flow). 3.7.0 kind split (owner
+    # 2026-11-24): if_metric_anomaly is TRAFFIC VOLUME only (octets); the fault
+    # counters and the port state are their own kinds (interface_metric_kind).
     "if_metric_anomaly", "bgp_state_anomaly", "device_resource_anomaly",
+    "if_errors", "if_discards", "if_crc", "if_state_anomaly",
     # IGP adjacency state off the POLLED series (tracker 222). The signal-lane
     # twin is ospf_adjacency_change / isis_adjacency_change above; this is the
     # metric lane, which answers "is it still bad?" without a recovery line.
@@ -680,7 +714,10 @@ def episode_signal(
         modality_class=modality,
         entity_type=entity_type,
         entity_id=entity_id,
-        severity=severity_for(ev.peak_deviation),
+        # 3.7.0: a traffic-volume episode is context — capped at warn, below the
+        # open floor, so it never opens an object alone and joins a real fault.
+        # (severity_for never returns below warn, so the cap is warn itself.)
+        severity=Severity.WARN if kind_prefix in VOLUME_KINDS else severity_for(ev.peak_deviation),
         native_id=f"{tenant_id}|{entity_id}|{metric}|{ev.phase}|{onset_ms}",
         entity_tokens=entity_tokens,
         path_id=path_id,

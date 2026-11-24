@@ -74,6 +74,11 @@ class Clause(BaseModel):
     # earn it partial coverage, nor may its id occupy a rank tie. Required clauses
     # only.
     anchor: bool = False
+    # ENGINE_SEMVER 3.7.0 (owner 2026-11-24, "volume = context"): a CONTEXT clause
+    # supports the rank (its optional bonus) but its hits are never a witness at
+    # the verdict gate — it can remove a confirming plane, never add one (the E5c
+    # rule, declared per clause). Optional clauses only.
+    context: bool = False
 
     @field_validator("kind")
     @classmethod
@@ -103,6 +108,8 @@ class Clause(BaseModel):
     def _anchor_is_required(self) -> Clause:
         if self.anchor and self.optional:
             raise ValueError("an anchor clause cannot be optional")
+        if self.context and not self.optional:
+            raise ValueError("a context clause must be optional (a required clause is a witness)")
         return self
 
     def kinds(self) -> frozenset[str]:
@@ -546,7 +553,7 @@ def load_catalog(raw: list[dict]) -> Catalog:
 # no product branding, no internals).
 _IPSEC_CASCADE: list[dict] = [
     {"stage": "Gateway egress link",
-     "witness": "link_state_change|if_errors|if_metric_anomaly",
+     "witness": "link_state_change|if_errors|if_discards|if_crc|if_state_anomaly|if_metric_anomaly",
      "unobserved_note": "No link signals seen on the gateway egress"},
     {"stage": "Underlay path to the tunnel peer",
      "witness": "ipsec_underlay_status",
@@ -576,7 +583,7 @@ CHANGE_INDUCED_FAULT_KINDS = (
     "tunnel_degraded|tunnel_flap|link_state_change|bgp_adjacency_change|probe_loss|"
     "if_util_high|device_resource_anomaly|controller_bfd_down|controller_tunnel_state|"
     "controller_control_connection_loss|ospf_adjacency_change|isis_adjacency_change|"
-    "if_metric_anomaly|bgp_state_anomaly|igp_state_anomaly"
+    "if_errors|if_discards|if_crc|if_state_anomaly|bgp_state_anomaly|igp_state_anomaly"
 )
 
 # 2026-11-10 outage: many edges losing the same SD-WAN controller (stage [6]
@@ -949,7 +956,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             {"kind": "probe_rtt_anomaly|probe_loss", "entity_type": "path"},
             # The corroborating WAN egress interface witness that lifts a probe-
             # only suspicion to a confirmable, second-modality verdict.
-            {"kind": "if_metric_anomaly", "entity_type": "interface", "optional": True},
+            {"kind": "if_metric_anomaly|if_discards", "entity_type": "interface", "optional": True},
         ],
         "required_modalities": ["active_probe"],
         "discriminators": [
@@ -989,8 +996,11 @@ BUILTIN_TEMPLATES: list[dict] = [
         "title": "DIA egress fault — probe + control-plane corroborated",
         "domain": "ent.middle-mile",
         "requires": [
-            {"kind": "probe_rtt_anomaly|probe_loss", "entity_type": "path"},
-            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device"},
+            # Owner 2026-11-24: BOTH halves are the template — the probe symptom
+            # AND the BGP cause. Each is an anchor, so either alone leaves the
+            # template out of the ranking (no half-coverage "suspected").
+            {"kind": "probe_rtt_anomaly|probe_loss", "entity_type": "path", "anchor": True},
+            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device", "anchor": True},
         ],
         "required_modalities": ["active_probe", "control_plane"],
         "direction_expect": "path-egress -> control-plane -> service",
@@ -1048,8 +1058,16 @@ BUILTIN_TEMPLATES: list[dict] = [
             # The L1/L2 state transition AND a same-interface counter anomaly —
             # two planes on one port. (Same-interface co-location is the engine's
             # grounding job; the scorer needs both kinds present.)
-            {"kind": "link_state_change", "entity_type": "interface"},
-            {"kind": "if_metric_anomaly", "entity_type": "interface"},
+            # Owner 2026-11-24 (option B): the link-state change is the ANCHOR —
+            # a counter anomaly alone is generic evidence and must not earn this
+            # template partial coverage (1,184 of 1,186 lab objects in 7 days
+            # headlined "local link fault — suspected 0.5" with no link change).
+            {"kind": "link_state_change", "entity_type": "interface", "anchor": True},
+            # 3.7.0 (owner 2026-11-24, volume = context): the second plane is an
+            # error / discard / CRC / state anomaly on the port. A traffic-volume
+            # swing is load, not a fault: optional supporting context only.
+            {"kind": "if_errors|if_discards|if_crc|if_state_anomaly", "entity_type": "interface"},
+            {"kind": "if_metric_anomaly", "entity_type": "interface", "optional": True, "context": True},
         ],
         "required_modalities": ["control_plane", "device_telemetry"],
         "discriminators": [
@@ -1090,7 +1108,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             {"kind": "ospf_adjacency_change", "entity_type": "device"},
             # Independent corroboration: host pressure, route-driven loss, an interface
             # counter anomaly, or a co-incident link event on the adjacency.
-            {"kind": "if_metric_anomaly|device_resource_anomaly|probe_loss|link_state_change",
+            {"kind": "if_errors|if_discards|if_crc|if_state_anomaly|device_resource_anomaly|probe_loss|link_state_change",
              "optional": True},
             # "What changed?" — a config change on the SAME device inside the window.
             # Optional and single-plane by construction (it is the box talking about
@@ -1127,7 +1145,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             # A vanished LLDP peer / interface counter anomaly / host pressure / link
             # event corroborates a real adjacency loss (LLDP is same-plane, so it
             # supports but does not by itself confirm — that needs a 2nd modality).
-            {"kind": "if_metric_anomaly|device_resource_anomaly|lldp_neighbor_change|link_state_change",
+            {"kind": "if_errors|if_discards|if_crc|if_state_anomaly|device_resource_anomaly|lldp_neighbor_change|link_state_change",
              "optional": True},
             # "What changed?" — a config change on the SAME device inside the window.
             # Optional and single-plane by construction (it is the box talking about
@@ -1162,7 +1180,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             # The loop's fingerprint — a broadcast/unknown-unicast storm (interface
             # util/discards) or a co-incident MAC flap — and the independent 2nd
             # modality that lifts a lone topology change to a confirmable loop.
-            {"kind": "if_metric_anomaly|if_util_high|mac_flap", "optional": True},
+            {"kind": "if_metric_anomaly|if_discards|if_util_high|mac_flap", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
@@ -1194,7 +1212,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             # The gateway-reachability blip during the election (off-box probe), or the
             # tracked uplink's counter anomaly — the independent witness that confirms
             # real impact and distinguishes an election from a benign config event.
-            {"kind": "probe_loss|probe_rtt_anomaly|if_metric_anomaly", "optional": True},
+            {"kind": "probe_loss|probe_rtt_anomaly|if_metric_anomaly|if_discards|if_state_anomaly", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
@@ -1221,7 +1239,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             {"kind": "mac_flap", "entity_type": "device"},
             # The L2 instability shows up as an interface counter/util anomaly on the
             # oscillating ports — the independent second modality.
-            {"kind": "if_metric_anomaly|if_util_high", "entity_type": "interface", "optional": True},
+            {"kind": "if_metric_anomaly|if_discards|if_util_high", "entity_type": "interface", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "discriminators": [
@@ -1255,7 +1273,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             # The emergent angle: an underlay reachability/routing loss to the remote
             # VTEP loopback, or the overlay traffic impact — an independent witness
             # (probe = active_probe, if_metric = device_telemetry) confirms real blackhole.
-            {"kind": "bgp_adjacency_change|ospf_adjacency_change|isis_adjacency_change|probe_loss|if_metric_anomaly",
+            {"kind": "bgp_adjacency_change|ospf_adjacency_change|isis_adjacency_change|probe_loss|if_metric_anomaly|if_discards",
              "optional": True},
         ],
         "required_modalities": ["control_plane"],
@@ -1283,7 +1301,7 @@ BUILTIN_TEMPLATES: list[dict] = [
             {"kind": "evpn_mac_move", "entity_type": "device"},
             # The loop's fingerprint — a broadcast/util storm or tenant-path loss —
             # and the independent 2nd modality that confirms real overlay impact.
-            {"kind": "if_metric_anomaly|if_util_high|probe_loss", "optional": True},
+            {"kind": "if_metric_anomaly|if_discards|if_util_high|probe_loss", "optional": True},
         ],
         "required_modalities": ["control_plane"],
         "direction_expect": "mac-mobility(overlay) -> bridge-domain(VNI) -> tenant-service",
@@ -1448,7 +1466,9 @@ BUILTIN_TEMPLATES: list[dict] = [
         "seams": ["CARRIER_INTERCONNECT", "CLOUD_APP"],
         "deployment_scope": "hybrid",
         "requires": [
-            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device"},
+            # Anchor (owner 2026-11-24 audit): the template is about the BGP
+            # session going down; probe loss / a route-count drop alone is generic.
+            {"kind": "bgp_adjacency_change|bgp_state_anomaly", "entity_type": "device", "anchor": True},
             {"kind": "probe_loss|route_count_drop"},
             {"kind": "cloud_health|cloud_change", "optional": True},
             {"kind": "tunnel_flap", "optional": True},
@@ -2131,7 +2151,9 @@ BUILTIN_TEMPLATES: list[dict] = [
         "seams": ["WAN_SDWAN", "CARRIER_INTERCONNECT"],
         "deployment_scope": "hybrid",
         "requires": [
-            {"kind": "link_state_change", "entity_type": "interface"},
+            # Anchor (owner 2026-11-24 audit): a circuit FLAP is the access link
+            # changing state; probe loss or a BGP drop alone is generic evidence.
+            {"kind": "link_state_change", "entity_type": "interface", "anchor": True},
             {"kind": "probe_loss|bgp_adjacency_change"},
             {"kind": "if_errors|optical_power_low", "optional": True},
         ],
@@ -3635,7 +3657,9 @@ WIRELESS_TEMPLATES: list[dict] = [
         "title": "AP down — power/uplink path (PoE or switch port)",
         "domain": "ent.wireless",
         "requires": [
-            {"kind": "wireless_ap_down", "entity_type": "access_point"},
+            # Anchor (owner 2026-11-24 audit): the AP being down is what the
+            # template is about; a lone switch-port change is a link event.
+            {"kind": "wireless_ap_down", "entity_type": "access_point", "anchor": True},
             # The INDEPENDENT witness: the access switch reports the AP's
             # uplink port down. This is what separates power/cable from an AP
             # software fault — and what lets the verdict confirm at all (B2).
@@ -3917,7 +3941,7 @@ BUILTIN_TEMPLATES.extend(WIRELESS_TEMPLATES)
 # coverage classification as a side effect of an unrelated family.
 _CORROBORATING_NETWORK_EVIDENCE = (
     "bgp_adjacency_change|ospf_adjacency_change|isis_adjacency_change|"
-    "link_state_change|device_resource_anomaly|if_metric_anomaly"
+    "link_state_change|device_resource_anomaly|if_errors|if_discards|if_crc|if_state_anomaly"
 )
 
 EXPOSURE_STORY_TEMPLATES: list[dict] = [

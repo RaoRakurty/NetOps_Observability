@@ -73,10 +73,11 @@ def test_known_ground_truths():
         "active_probe", "device_telemetry", "passive_flow"]
 
     # spine-leaf demands device_telemetry whose witnesses (if_errors/if_crc)
-    # are a normalization gap → verdict capped at suspected.
+    # were a normalization gap until ENGINE_SEMVER 3.7.0's kind split gave them a
+    # producer (the device_if_* error / FCS episodes) → it can confirm now.
     spine = ROWS["sig.ent.fabric.spine-leaf-path-degradation"]
-    assert spine["status"] == "modality_mismatch"
-    assert spine["max_possible_verdict"] == "suspected"
+    assert spine["status"] == "confirmable_now"
+    assert spine["max_possible_verdict"] == "confirmed"
 
     # a healthy two-modality signature is confirmable now.
     assert ROWS["sig.ent.middle-mile.dia-egress-corroborated"]["status"] == "confirmable_now"

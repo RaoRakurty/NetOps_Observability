@@ -66,6 +66,8 @@ CLOUD_EDGE_FAULT_KINDS = frozenset({
 # The network on-path fault kinds (interface / tunnel down and their canonical spellings).
 NETWORK_FAULT_KINDS = frozenset({
     "link_state_change", "if_metric_anomaly", "lldp_neighbor_change",
+    # 3.7.0 kind split: the interface fault/state episodes are on-path faults too.
+    "if_errors", "if_discards", "if_crc", "if_state_anomaly",
     "ipsec_tunnel_status", "cloud_vpn_tunnel_down", "cloud_physical_link_down",
     "lb_5xx", "lb_target_unhealthy",
 })

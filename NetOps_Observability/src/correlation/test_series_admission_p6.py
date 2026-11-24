@@ -92,6 +92,10 @@ def at(seconds: float) -> datetime:
     return T0 + timedelta(seconds=seconds)
 
 
+# ENGINE_SEMVER 3.7.0: these tests pin SERIES ADMISSION (which source fed which
+# run), not detection magnitude. Their CPU steps (20.5 % -> 22 %) sit below the σ
+# floor's 2-point CPU minimum, so every detector here is built with the floor off;
+# the floor itself is pinned by test_sigma_floor_37.py.
 def warm(det: EpisodeDetector, n: int = 20, *, source: str | None = SNMP, start: float = 0.0) -> float:
     """n baseline samples, one per 60 s bucket (alternating 20/21: mean 20.5,
     σ≈0.51). Returns the next free time."""
@@ -131,13 +135,13 @@ def test_the_test_hook_refuses_a_bad_bucket() -> None:
 
 def test_detector_refuses_a_non_positive_bucket() -> None:
     with pytest.raises(ValueError):
-        EpisodeDetector().observe("t", DEVICE, "m", at(0), 1.0, source=SNMP, bucket_s=0.0)
+        EpisodeDetector(sigma_floor=False).observe("t", DEVICE, "m", at(0), 1.0, source=SNMP, bucket_s=0.0)
 
 
 # ── 1. one sample per (series, bucket) across sources ─────────────────────────
 
 def test_two_sources_in_one_bucket_admit_one_and_count_one() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "device_cpu_percent", at(5), 20.0, source=SNMP)
     det.observe("t", DEVICE, "device_cpu_percent", at(35), 99.0, source=CTL)
     st = det._state[("t", DEVICE, "device_cpu_percent")]
@@ -147,7 +151,7 @@ def test_two_sources_in_one_bucket_admit_one_and_count_one() -> None:
 
 
 def test_the_first_arrival_wins_whichever_source_it_is() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "device_cpu_percent", at(35), 20.0, source=CTL)
     det.observe("t", DEVICE, "device_cpu_percent", at(5), 21.0, source=SNMP)   # same bucket, later arrival
     assert det.cross_source_dropped == 1
@@ -155,7 +159,7 @@ def test_the_first_arrival_wins_whichever_source_it_is() -> None:
 
 
 def test_a_sources_own_samples_in_one_bucket_are_all_admitted() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     for s in (1, 20, 40, 59):          # one source, jittered — never a duplicate
         det.observe("t", DEVICE, "device_cpu_percent", at(s), 20.0 + s, source=SNMP)
     assert det.cross_source_dropped == 0
@@ -163,7 +167,7 @@ def test_a_sources_own_samples_in_one_bucket_are_all_admitted() -> None:
 
 
 def test_the_bucket_boundary() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "m", at(59.999), 1.0, source=SNMP)      # bucket 0
     det.observe("t", DEVICE, "m", at(60.0), 2.0, source=CTL)         # bucket 1: a new bucket → admitted
     assert det.cross_source_dropped == 0
@@ -175,21 +179,21 @@ def test_the_bucket_boundary() -> None:
 
 
 def test_a_bucket_width_other_than_60s() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "m", at(5), 1.0, source=SNMP, bucket_s=300.0)
     det.observe("t", DEVICE, "m", at(200), 2.0, source=CTL, bucket_s=300.0)   # same 300 s bucket
     assert det.cross_source_dropped == 1
 
 
 def test_a_late_sample_from_another_source_for_an_earlier_bucket_is_dropped() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "m", at(130), 1.0, source=SNMP)    # bucket 2
     det.observe("t", DEVICE, "m", at(70), 2.0, source=CTL)      # bucket 1, arrives late
     assert det.cross_source_dropped == 1
 
 
 def test_failover_a_second_source_takes_over_when_the_first_goes_quiet() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "m", at(5), 1.0, source=SNMP)
     for b in range(1, 5):                                       # SNMP silent, controller continues
         det.observe("t", DEVICE, "m", at(60 * b + 30), 1.0, source=CTL)
@@ -198,7 +202,7 @@ def test_failover_a_second_source_takes_over_when_the_first_goes_quiet() -> None
 
 
 def test_series_are_independent_and_tenants_never_share_a_bucket() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "m", at(5), 1.0, source=SNMP)
     det.observe("u", DEVICE, "m", at(6), 1.0, source=CTL)       # other tenant
     det.observe("t", DEVICE, "m2", at(7), 1.0, source=CTL)      # other metric
@@ -207,7 +211,7 @@ def test_series_are_independent_and_tenants_never_share_a_bucket() -> None:
 
 
 def test_source_none_is_the_legacy_path_and_never_drops() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     for i in range(10):
         det.observe("t", DEVICE, "m", at(i), float(i))
     assert det.cross_source_dropped == 0
@@ -218,7 +222,7 @@ def test_off_the_event_stream_is_identical_to_the_legacy_detector() -> None:
     """OFF = source None. The same stream must produce the same events, field
     for field, as a detector that never heard of admission."""
     vals = [20.0 + (i % 2) for i in range(25)] + [30.0] * 6 + [20.5] * 6 + [20.0 + (i % 2) for i in range(10)]
-    a, b, ea, eb = EpisodeDetector(), EpisodeDetector(), [], []
+    a, b, ea, eb = EpisodeDetector(sigma_floor=False), EpisodeDetector(sigma_floor=False), [], []
     for i, v in enumerate(vals):
         ea.append(a.observe("t", DEVICE, "m", at(60 * i), v))
         eb.append(b.observe("t", DEVICE, "m", at(60 * i), v, "unknown", source=None))
@@ -240,7 +244,7 @@ def test_the_lru_bound_still_holds_and_carries_the_admission_state() -> None:
 
 
 def test_source_strings_are_bounded() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     det.observe("t", DEVICE, "m", at(5), 1.0, source="x" * 10_000)
     assert len(det._state[("t", DEVICE, "m")].adm_source) == MAX_SOURCE_LEN
 
@@ -257,28 +261,28 @@ def _run_to_onset(det: EpisodeDetector, t: float, steps: list[tuple[str, float]]
 
 
 def test_a_single_source_episode_records_that_source() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     t = warm(det)
     ev, _ = _run_to_onset(det, t, [(SNMP, 22.0), (SNMP, 22.0)])
     assert ev.sources == frozenset({SNMP})
 
 
 def test_a_run_fed_by_two_sources_records_both() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     t = warm(det)
     ev, _ = _run_to_onset(det, t, [(CTL, 22.0), (SNMP, 22.0)])
     assert ev.sources == frozenset({SNMP, CTL})
 
 
 def test_baseline_samples_outside_the_run_do_not_count_as_feeding_it() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     t = warm(det, source=CTL)                 # a controller-fed baseline …
     ev, _ = _run_to_onset(det, t, [(SNMP, 22.0), (SNMP, 22.0)])
     assert ev.sources == frozenset({SNMP}), "… did not feed the SNMP run that opened the episode"
 
 
 def test_the_clear_records_the_run_and_the_open_period_then_resets() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     t = warm(det)
     _ev, t = _run_to_onset(det, t, [(SNMP, 22.0), (SNMP, 22.0)])
     clear = None
@@ -291,7 +295,7 @@ def test_the_clear_records_the_run_and_the_open_period_then_resets() -> None:
 
 
 def test_recorded_sources_are_bounded() -> None:
-    det = EpisodeDetector()
+    det = EpisodeDetector(sigma_floor=False)
     t = warm(det)
     det.observe("t", DEVICE, "device_cpu_percent", at(t), 22.0, source="p0")
     st = det._state[("t", DEVICE, "device_cpu_percent")]
@@ -382,7 +386,7 @@ class _Rows:
 def lane(monkeypatch):
     """handle_metric with a fresh detector, a captured spine and no window."""
     sink = _Rows()
-    monkeypatch.setattr(main, "DETECTOR", EpisodeDetector())
+    monkeypatch.setattr(main, "DETECTOR", EpisodeDetector(sigma_floor=False))
     monkeypatch.setattr(main, "ch", object())
     monkeypatch.setattr(main, "CORR_SIGNALS_ENABLED", True)
     monkeypatch.setattr(main, "batch_signal", sink.batch)

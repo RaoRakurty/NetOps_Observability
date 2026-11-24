@@ -89,6 +89,14 @@ def _bgp(off: float = 20.0, eid: str = "r1") -> Signal:
 
 
 def _if_metric(off: float = 30.0) -> Signal:
+    """The independent FAULT half on the port (an SNMP counter episode). Since
+    ENGINE_SEMVER 3.7.0's kind split that is an error-counter episode, `if_errors`;
+    a traffic-volume episode (`if_metric_anomaly`) is context, see _if_volume."""
+    return _sig("if_errors", off=off, observer="r1-snmp",
+                modality=ModalityClass.DEVICE_TELEMETRY)
+
+
+def _if_volume(off: float = 30.0) -> Signal:
     return _sig("if_metric_anomaly", off=off, observer="r1-snmp",
                 modality=ModalityClass.DEVICE_TELEMETRY)
 
@@ -274,7 +282,7 @@ def test_attrs_clauses_stay_reachable_through_the_kind_index():
     index, _ = _catalog_plan(builtin_catalog())
     assert "link_state_change" in index[LOCAL]
     assert "link_state_change" in index[SIBLING]
-    assert "if_metric_anomaly" in index[SIBLING]
+    assert "if_errors" in index[SIBLING]
 
 
 # ══ stage [6]: scoring ══════════════════════════════════════════════════════
@@ -437,7 +445,25 @@ def test_no_link_cause_evidence_is_byte_identical_with_and_without_385():
 #: legitimately moves one of these re-freezes it with its own proof.
 STEP0_CONTROL = ("ambiguous-undetermined", "bgp-peer-flap-confirmed",
                  "lastmile-circuit-flap-confirmed", "local-link-fault-confirmed")
-STEP0_DIGEST = "0dafd680d13d29fa"
+# Re-frozen 2026-11-24 for the ENGINE_SEMVER 3.7.0 anchors (owner option B): every
+# fixture's TOP is unchanged; only partial runners-up that lacked their new anchor
+# left the list — `lastmile-circuit-flap` with no link change (bgp-peer-flap) and
+# `ap-down-power` with no AP down (lastmile / local-link), letting the next
+# template into the TOP_K slot (test_traffic_judgement_37_anchor.py).
+# Same day, same change (the 3.7.0 kind split): local-link-fault-confirmed's
+# counter witness is `if_errors` now, and lastmile-circuit-flap-confirmed's
+# run_window object (link change + same-port `if_errors`; the probe does not
+# ground without path topology) headlines `local-link-fault` CONFIRMED instead of
+# `lastmile-circuit-flap` 0.55 — the errors episode finally satisfies the link
+# fault's counter clause. bgp-peer-flap-confirmed's top is unchanged.
+# Re-frozen again the same day for the two owner rulings on #406 (diffed blob by
+# blob against 358750d0): every top, tier and evidence_missing is unchanged and no
+# existing row's content moved. dia-egress-corroborated (both clauses now
+# anchors) left bgp-peer-flap-confirmed's list (it had only the BGP half), and the
+# confirmable-first tie key reorders EXACTLY-tied rows — here the 0.05 tail, so a
+# confirmable-gate row (threat-signal-story / controller-change-induced) takes
+# the last TOP_K slot from portsecurity-errdisable / dns-local-resolver-failure.
+STEP0_DIGEST = "084a3ea9cce8d545"
 PINNED_RULE_COUNT = 103  # parser_rules.RULES since tracker 387 wave 2 (Comware PHY_UPDOWN row)
 
 
@@ -523,6 +549,15 @@ def test_a_planned_shutdown_and_its_own_traffic_drop_never_confirm() -> None:
     assert sib.confidence_rank == 1.0
     assert sib.verdict_gate.tier is VerdictTier.SUSPECTED
     assert any("causes its own traffic drop" in r for r in sib.verdict_gate.reasons)
+
+
+def test_the_shutdowns_own_traffic_drop_is_not_even_the_fault_half() -> None:
+    # ENGINE_SEMVER 3.7.0 (owner 2026-11-24, volume = context): the volume drop a
+    # shutdown causes no longer satisfies the sibling's fault clause at all — it
+    # is half coverage, and nothing about it can confirm.
+    sib = _hyp(rank(builtin_catalog(), (_link("admin"), _if_volume())), SIBLING)
+    assert sib.confidence_rank == 0.5
+    assert sib.verdict_gate.tier is not VerdictTier.CONFIRMED
 
 
 def test_a_device_level_admin_change_contradicts_nothing_it_cannot_replace() -> None:
