@@ -62,8 +62,34 @@ export function viewSignature(view: TopologyView): string {
   return `${view.nodes.length}.${view.edges.length}.${h.toString(36)}`;
 }
 
+/**
+ * Signature over the GROUP structure — everything about the boxes that moves
+ * the geometry: id, label (a box is at least as wide as its label chip), parent
+ * (nesting), collapsed state and membership. Health is deliberately left out: a
+ * status change must not throw away a layout.
+ *
+ * viewSignature covers only node and edge ids, so two views with the same
+ * devices and links but different grouping (the site lens on vs off, a device
+ * moved to another site) shared one cached layout and the boxes were drawn
+ * around positions computed for the other grouping. Kept OUT of viewSignature on
+ * purpose: that one also keys the operator's saved pins (TopologyCanvas), and a
+ * device pin stays meaningful when the boxes around it change.
+ */
+export function groupSignature(view: TopologyView): string {
+  const groups = view.groups ?? [];
+  if (groups.length === 0) return "g0";
+  let h = 0;
+  for (const g of groups) {
+    const s = `g:${g.id}|${g.label}|${g.parent_id ?? ""}|${g.collapsed ? 1 : 0}|${[...g.children].sort().join(",")}`;
+    let x = 5381;
+    for (let i = 0; i < s.length; i++) x = ((x << 5) + x + s.charCodeAt(i)) | 0;
+    h = (h + (x >>> 0)) >>> 0; // commutative sum → group order does not matter
+  }
+  return `g${groups.length}.${h.toString(36)}`;
+}
+
 function viewKey(view: TopologyView): string {
-  return [view.view_id, view.mode, view.layout_type, viewSignature(view)].join("|");
+  return [view.view_id, view.mode, view.layout_type, viewSignature(view), groupSignature(view)].join("|");
 }
 
 function cachePut(key: string, result: LayoutResult): void {
