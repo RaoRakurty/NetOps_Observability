@@ -20,7 +20,7 @@
 
 import type { TopologyView, TopologyNode } from "../api/topologyTypes";
 import type { LayoutResult } from "../layout/layoutTypes";
-import { NODE_SIZE } from "../layout/layoutTypes";
+import { NODE_SIZE, nodeWidth } from "../layout/layoutTypes";
 
 export type Archetype = "leaf_spine" | "ring" | "star" | "bus" | "mesh" | "irregular";
 
@@ -203,13 +203,19 @@ export function circularLayout(view: TopologyView, walkCycle: boolean): LayoutRe
     }
     if (walked.length === devs.length) order = walked;
   }
-  const r = Math.max(220, (order.length * (NODE_SIZE.width + 40)) / (2 * Math.PI));
+  const r = Math.max(220, (order.length * (widestCard(view) + 40)) / (2 * Math.PI));
   const out: LayoutResult = {};
   order.forEach((id, i) => {
     const a = (Math.PI * 2 * i) / order.length - Math.PI / 2;
     out[id] = { x: CX + Math.cos(a) * r, y: CY + Math.sin(a) * r };
   });
   return parkOthers(view, out, r + 200);
+}
+
+/** The widest card among these devices (hostnames shown in full): the spacing
+ *  unit for the analytic shapes, so neighbouring names never collide. */
+function widestCard(view: TopologyView): number {
+  return deviceNodes(view).reduce((m, n) => Math.max(m, nodeWidth(n)), NODE_SIZE.width);
 }
 
 /** Star: the highest-degree device at the centre, spokes on a circle. */
@@ -219,7 +225,7 @@ export function radialLayout(view: TopologyView): LayoutResult {
   const adj = adjacency(view, ids);
   const hub = [...devs].sort((a, b) => (adj.get(b.id)?.size ?? 0) - (adj.get(a.id)?.size ?? 0))[0];
   const spokes = devs.filter((n) => n.id !== hub?.id).sort((a, b) => a.label.localeCompare(b.label));
-  const r = Math.max(240, (spokes.length * (NODE_SIZE.width + 40)) / (2 * Math.PI));
+  const r = Math.max(240, (spokes.length * (widestCard(view) + 40)) / (2 * Math.PI));
   const out: LayoutResult = {};
   if (hub) out[hub.id] = { x: CX, y: CY };
   spokes.forEach((n, i) => {
@@ -246,7 +252,7 @@ export function linearLayout(view: TopologyView): LayoutResult {
     }
     for (const d of devs) if (!seen.has(d.id)) order.push(d.id); // stragglers
   }
-  const gap = NODE_SIZE.width + 80;
+  const gap = widestCard(view) + 80;
   const out: LayoutResult = {};
   order.forEach((id, i) => {
     out[id] = { x: 80 + i * gap, y: CY };

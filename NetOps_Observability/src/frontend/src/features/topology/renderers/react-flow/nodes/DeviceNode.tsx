@@ -18,6 +18,7 @@ import {
   nodeTooltip,
 } from "../../../utils/topologyHealth";
 import { RCA_OVERLAY } from "../../../utils/rcaOverlay";
+import { nodeWidth } from "../../../layout/layoutTypes";
 
 // FIXED node footprint. Both dimensions are constants (not min-height) and are
 // also declared on the React-Flow node (see topologyToReactFlow) so RF never
@@ -119,6 +120,10 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
   //   a compact CPU/MEM strip renders inline. Both are CONTENT-ONLY (no geometry
   //   change), so the fixed-size no-shake invariant below still holds.
   const nameHidden = showLabel === false;
+  // The card's FIXED width, from its hostname (layout/layoutTypes nodeWidth):
+  // the name shows in full up to CARD_LABEL_MAX characters; it never changes
+  // with hover, spotlight or the zoom tier, so the card cannot shake.
+  const cardW = nodeWidth(node);
   // On an RCA path, the grounded verdict supersedes the generic health ring
   // (strictly more informative). internal_only is never shown (decision #76).
   const rca = node.rca_status ? RCA_OVERLAY[node.rca_status] : undefined;
@@ -166,7 +171,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         title={tip}
         style={{
           position: "relative",
-          width: CARD_W,
+          width: cardW,
           height: CARD_H,
           boxSizing: "border-box",
           display: "flex",
@@ -205,7 +210,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         {!nameHidden && (
           <span
             style={{
-              maxWidth: CARD_W - 6,
+              maxWidth: cardW - 6,
               fontSize: 9,
               fontWeight: 500,
               lineHeight: 1.1,
@@ -237,7 +242,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
       title={tip}
       style={{
         position: "relative",
-        width: CARD_W,
+        width: cardW,
         height: CARD_H,
         boxSizing: "border-box",
         // Token tier is a compact pill (no room for, and no need of, the
@@ -263,9 +268,10 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
         <span style={{ display: "inline-flex", color: accent, flex: "0 0 auto" }}>{icon}</span>
         <span
           style={{
-            fontSize: 12,
+            fontSize: 14,
             fontWeight: 500,
             lineHeight: 1.25,
+            minWidth: 0,
             // Bright label — pure white on dark canvases, dark ink on light ones
             // (theme-aware token). Hostname must read crisply, not tinted/muted.
             color: "var(--topo-node-fg, var(--fg))",
@@ -296,7 +302,7 @@ function NodeCardBase({ data, icon, accent }: NodeCardProps) {
             fontFamily: MONO,
             color: "var(--fg-subtle)",
             opacity: 0.85,
-            maxWidth: CARD_W - 46,
+            maxWidth: cardW - 46,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",

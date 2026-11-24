@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import p3Detail from "../../backend/internal/rca/testdata/p3e0400/detail.json" with { type: "json" };
 import p3Report from "../../backend/internal/rca/testdata/p3e0400/rca-report.json" with { type: "json" };
 import p3Context from "../src/components/rca/testdata/p3e0400.topology_context.json" with { type: "json" };
+import egoGolden from "../../backend/internal/rca/testdata/topoctx/ego_layout.golden.json" with { type: "json" };
 
 // The harness compiles the whole RCA view on first load (cold Vite) — allow it.
 test.describe.configure({ timeout: 90_000 });
@@ -297,4 +298,73 @@ test("the RCA view holds at phone width with no horizontal page scroll", async (
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   await shot(page, "rca-view-p424934-phone");
+});
+
+// ── P-7EE84E: the causal topology is clean on screen, not only in the PDF ─────
+// The lab-shaped context (2 faulted edges, 14 neighbours) from the Go twin's
+// parity golden is drawn in the real RCA view: no two nodes' text overlaps,
+// names render at ≥ 14px, and a phone-width column scrolls the picture
+// sideways instead of shrinking it (the page itself never scrolls sideways).
+const LAB_CONTEXT = {
+  ...(egoGolden.cases.find((c) => c.name === "lab-sdwan")!.context as Record<string, unknown>),
+  state: "topology_only",
+};
+
+async function openLabTopology(page: Page, theme: "light" | "dark" = "light") {
+  await page.addInitScript((fx) => { (window as unknown as { __RCA_PREVIEW__: unknown }).__RCA_PREVIEW__ = fx; }, {
+    object: p3Detail.object, timeline: P3_TIMELINE, report: { ...p3Report, topology_context: LAB_CONTEXT },
+  });
+  await page.route(/^https?:\/\/[^/]+\/api\//, (route: Route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.goto(`/rca-preview.html?theme=${theme}`);
+  await expect(page.locator(".rw-doc-title").first()).toBeVisible({ timeout: 60_000 });
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`P-7EE84E: the lab topology draws with no overlapping text (${theme})`, async ({ page }) => {
+    await page.setViewportSize({ width: 1500, height: 1200 });
+    await openLabTopology(page, theme);
+    const ego = workspace(page).getByTestId("topo-ego");
+    await ego.scrollIntoViewIfNeeded();
+    await expect(ego.locator("svg .rtc-node")).toHaveCount(16);
+    const boxes = await ego.locator("svg .rtc-node text").evaluateAll((els) =>
+      els.map((e) => {
+        const r = e.getBoundingClientRect();
+        const svg = (e as SVGTextElement).ownerSVGElement;
+        const scale = svg ? svg.getBoundingClientRect().width / (svg.viewBox.baseVal.width || 1) : 1;
+        return {
+          node: e.closest(".rtc-node")?.getAttribute("data-node") ?? "", cls: e.getAttribute("class") ?? "",
+          text: e.textContent ?? "", x0: r.left, y0: r.top, x1: r.right, y1: r.bottom,
+          px: parseFloat(getComputedStyle(e).fontSize) * scale,
+        };
+      }));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i], b = boxes[j];
+        if (a.node === b.node) continue; // one node's own lines stack by design
+        const hit = a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+        expect(hit, `"${a.text}" (${a.node}) overlaps "${b.text}" (${b.node})`).toBe(false);
+      }
+    }
+    // the picture is drawn at (at least) its viewBox size: names render at ≥ 14px
+    const names = boxes.filter((b) => b.cls.includes("rtc-svg-label")).map((b) => b.px);
+    expect(names.length).toBe(16);
+    expect(Math.min(...names)).toBeGreaterThanOrEqual(13.9);
+    await shotOf(ego, `p7ee84e-ego-${theme}`);
+  });
+}
+
+test("P-7EE84E: at phone width the topology scrolls inside its own frame and never widens the page", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await openLabTopology(page);
+  const ego = workspace(page).getByTestId("topo-ego");
+  await ego.scrollIntoViewIfNeeded();
+  const frame = await ego.evaluate((el) => ({
+    right: el.getBoundingClientRect().right, vw: document.documentElement.clientWidth,
+    scrolls: el.scrollWidth > el.clientWidth + 1,
+    svgW: el.querySelector("svg")!.getBoundingClientRect().width,
+  }));
+  expect(frame.right).toBeLessThanOrEqual(frame.vw + 1); // the frame fits the column…
+  expect(frame.scrolls).toBe(true);                      // …and scrolls sideways inside it
+  expect(frame.svgW).toBeGreaterThanOrEqual(759);        // drawn at its full 760 units — text not shrunk
+  await shotOf(ego, "p7ee84e-ego-phone");
 });

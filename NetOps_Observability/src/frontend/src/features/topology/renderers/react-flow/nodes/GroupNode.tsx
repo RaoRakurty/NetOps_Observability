@@ -27,6 +27,12 @@ const GROUP_TYPE_LABEL: Record<string, string> = {
   app: "App",
 };
 
+/** Site label type (owner, 2026-11-24, NOC-admin standard): the site NAME at
+ *  14px, the secondary text (kind, device count, links) at 12px, at 100 %
+ *  zoom — both scale with the canvas like every node. */
+const SITE_NAME_PX = 14;
+const SITE_META_PX = 12;
+
 function Chevron({ collapsed }: { collapsed: boolean }) {
   return (
     <svg width={12} height={12} viewBox="0 0 24 24" fill="none" aria-hidden="true"
@@ -74,11 +80,11 @@ function GroupNodeBase(props: NodeProps) {
         <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
         <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
         <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-          <span style={{ fontSize: 9.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".06em", color: "var(--fg-subtle)" }}>
+          <span style={{ fontSize: SITE_META_PX, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--fg-subtle)" }}>
             {kindLabel}
           </span>
           <button onClick={toggle} title="Expand group" aria-label="Expand group"
-            style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3, padding: "1px 6px", fontSize: 10,
+            style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3, padding: "1px 6px", fontSize: SITE_META_PX,
               color: "var(--fg-muted)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}>
             <Chevron collapsed /> {counts.total}
           </button>
@@ -87,10 +93,10 @@ function GroupNodeBase(props: NodeProps) {
           <span title={HEALTH_LABEL[health]} style={{ width: 16, height: 16, borderRadius: "50%", flex: "0 0 auto",
             display: "inline-flex", alignItems: "center", justifyContent: "center", border: `2px solid ${color}`,
             background: HEALTH_TINT[health], color, fontSize: 9, fontWeight: 600 }}>{HEALTH_GLYPH[health]}</span>
-          <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--fg)", overflow: "hidden",
+          <span style={{ fontSize: SITE_NAME_PX, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--fg)", overflow: "hidden",
             textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{group.label}</span>
         </div>
-        <div style={{ marginTop: 7, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10.5, fontWeight: 500 }}>
+        <div style={{ marginTop: 7, display: "flex", gap: 6, flexWrap: "wrap", fontSize: SITE_META_PX, fontWeight: 500 }}>
           <span style={{ color: "var(--fg-muted)" }}>{counts.total} nodes</span>
           {counts.critical > 0 && <span style={{ color: HEALTH_COLOR.critical }}>{counts.critical} crit</span>}
           {counts.warning > 0 && <span style={{ color: HEALTH_COLOR.warning }}>{counts.warning} warn</span>}
@@ -159,10 +165,10 @@ function GroupLabelNodeBase(props: NodeProps) {
         boxShadow: "0 1px 3px rgba(16,24,40,0.10)", opacity: emphasis === "dim" ? 0.6 : 1, whiteSpace: "nowrap" }}>
       <span title={HEALTH_LABEL[health]} style={{ width: 8, height: 8, borderRadius: "50%", background: color,
         boxShadow: `0 0 0 2px ${HEALTH_TINT[health]}`, flex: "0 0 auto" }} />
-      <span style={{ fontSize: 9.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--fg-subtle)" }}>{kindLabel}</span>
-      <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis",
-        whiteSpace: "nowrap", maxWidth: 220 }}>{group.label}</span>
-      <span style={{ fontSize: 10, color: "var(--fg-subtle)" }}>· {counts.total}</span>
+      <span style={{ fontSize: SITE_META_PX, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--fg-subtle)" }}>{kindLabel}</span>
+      <span style={{ fontSize: SITE_NAME_PX, fontWeight: 600, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis",
+        whiteSpace: "nowrap", maxWidth: 280 }}>{group.label}</span>
+      <span style={{ fontSize: SITE_META_PX, color: "var(--fg-subtle)" }}>· {counts.total}</span>
       <button onClick={toggle} title="Collapse group" aria-label="Collapse group" className="nodrag"
         style={{ display: "inline-flex", alignItems: "center", padding: "2px 4px", color: "var(--fg-muted)",
           background: "transparent", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}>
