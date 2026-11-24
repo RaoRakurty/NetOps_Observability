@@ -283,7 +283,8 @@ type hostJob struct {
 	// exists for content that non-delivery would otherwise destroy: the digest
 	// drains its accumulator to compose the message, so without this the
 	// window's warnings are gone even though nothing was sent (review 3.9-09).
-	// Nil for every job whose content survives its own delivery.
+	// An immediate (page / resolution) push uses it too, to release its
+	// cool-down stamp when it reached no channel (tracker 314). Nil otherwise.
 	onFail func()
 }
 
@@ -302,7 +303,15 @@ func (j hostJob) privileged() bool { return j.tier == tierPage || j.tier == tier
 // alert. It is called only for alerts that already passed the tenant refusal
 // and the cool-down, so the dedup window governs this route exactly as it
 // governs the product dispatcher — one push per identical alert per window.
-func (r *receiver) pushHost(a models.Alert, labels map[string]string, status string) {
+//
+// release (tracker 314) runs once, after the last target's outcome, when an
+// IMMEDIATE push reached NO target — every target failed its retry ladder, was
+// refused by its push budget, or found the queue full. One target reaching the
+// operator keeps the cool-down: re-sending would buzz the channel that already
+// has it. It never runs for a digested warning (the digest restores its own
+// content) nor when no channel exists (nothing could ever deliver it, so a
+// retry would only spin). Nil is allowed.
+func (r *receiver) pushHost(a models.Alert, labels map[string]string, status string, release func()) {
 	tier := hostTier(status, labels["tier"])
 
 	// THE WARNING TIER IS NEVER PUSHED ON ITS OWN (digest.go). Folding happens
@@ -330,9 +339,17 @@ func (r *receiver) pushHost(a models.Alert, labels map[string]string, status str
 		r.noHostTarget(j)
 		return
 	}
+	var fo *fanout
+	if release != nil {
+		fo = newFanout(len(targets), release)
+	}
 	for _, t := range targets {
 		jt := j
 		jt.target = t
+		if fo != nil {
+			jt.onOK = func() { fo.done(true) }
+			jt.onFail = func() { fo.done(false) }
+		}
 		// The budget is taken at ENQUEUE, synchronously with the request, so a
 		// refusal is decided (and counted) at a point the operator can
 		// correlate with the alert that caused it rather than inside a drain
@@ -355,6 +372,9 @@ func (r *receiver) pushHost(a models.Alert, labels map[string]string, status str
 				// same fact as "this host's whole ntfy allowance is spent" (§10).
 				"server": t.Budget.Server(),
 			})
+			if fo != nil {
+				fo.done(false)
+			}
 			continue
 		}
 		r.enqueueHost(jt)
