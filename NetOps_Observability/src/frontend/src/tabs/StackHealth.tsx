@@ -92,6 +92,49 @@ function Header() {
 const fmtCount = (n: number | null): string => (n == null ? "—" : Math.round(n).toLocaleString());
 const fmtMs = (n: number | null): string => (n == null ? "—" : `${Math.round(n)} ms`);
 
+// ── the read boundary (2026-11-25) ──────────────────────────────────────────
+// The page used to trust both answers: a stack body without `overall` threw on
+// `.toUpperCase()`, and a `components` or Prometheus `result` that was not a
+// list threw while iterating — the whole page went to its error screen on a
+// malformed answer (found rendering with empty mock data). Each answer is now
+// checked here: unreadable → an honest "could not be read", a missing number →
+// "—", never a crash and never a zero that was not sent.
+
+/** A Prometheus result list, or undefined when the answer is not one. */
+const asSeries = <T,>(v: T): T | undefined => (Array.isArray(v) ? v : undefined);
+
+const STATUSES = new Set(["up", "degraded", "down"]);
+
+/** The stack answer as the board can render it, or null when it has no readable
+ *  shape. Exported for the malformed-payload tests. */
+export function readStackHealth(raw: unknown): StackHealthData | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.overall !== "string" || !Array.isArray(r.components)) return null;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
+  const components: StackComponent[] = r.components
+    .filter((c): c is Record<string, unknown> => !!c && typeof c === "object" && !Array.isArray(c))
+    .map((c) => ({
+      name: typeof c.name === "string" ? c.name : "unnamed component",
+      category: typeof c.category === "string" ? c.category : "other",
+      // An unrecognised status is shown as unknown (a muted dot), never
+      // promoted to "down" — that would be a claim the answer did not make.
+      status: (typeof c.status === "string" && STATUSES.has(c.status) ? c.status : "unknown") as StackComponent["status"],
+      latency_ms: num(c.latency_ms),
+      detail: typeof c.detail === "string" ? c.detail : undefined,
+    }));
+  return {
+    overall: r.overall as StackHealthData["overall"],
+    up: num(r.up),
+    degraded: num(r.degraded),
+    down: num(r.down),
+    components,
+    subsystems: r.subsystems && typeof r.subsystems === "object" ? (r.subsystems as Record<string, unknown>) : {},
+  };
+}
+
+const fmtNum = (n: number): string | number => (Number.isFinite(n) ? n : "—");
+
 function CollectionSection() {
   const [monitored, setMonitored] = useState<number | null>(null);
   const [snmpReachable, setSnmpReachable] = useState<number | null>(null);
@@ -115,9 +158,9 @@ function CollectionSection() {
           api.searchLogs({ query: "*", signal: "snmptrap", size: 0 }),
         ]);
         if (!alive) return;
-        setMonitored(scalarValue(mon?.data?.result));
-        setSnmpReachable(scalarValue(reach?.data?.result));
-        setCollectors(collectorRows(conf?.data?.result, cReach?.data?.result, poll?.data?.result));
+        setMonitored(scalarValue(asSeries(mon?.data?.result)));
+        setSnmpReachable(scalarValue(asSeries(reach?.data?.result)));
+        setCollectors(collectorRows(asSeries(conf?.data?.result), asSeries(cReach?.data?.result), asSeries(poll?.data?.result)));
         setSources(flowSourceRows(byType?.data));
         setTraps(Number(trapHits?.hits?.total?.value ?? NaN) || 0);
         setErr(null);
@@ -234,8 +277,12 @@ export default function StackHealth() {
     let alive = true;
     const tick = async () => {
       try {
-        const d = await api.stackHealth();
+        const d = readStackHealth(await api.stackHealth());
         if (alive) {
+          if (!d) {
+            setErr("the platform answered, but its health could not be read.");
+            return;
+          }
           setData(d);
           setErr(null);
         }
@@ -306,9 +353,9 @@ export default function StackHealth() {
           <>
             <StatStrip>
               <Stat label="Stack status" value={data.overall.toUpperCase()} tone={overallTone(data.overall)} />
-              <Stat label="Up" value={data.up} tone="good" />
-              <Stat label="Degraded" value={data.degraded} tone={data.degraded > 0 ? "warn" : ""} />
-              <Stat label="Down" value={data.down} tone={data.down > 0 ? "bad" : ""} />
+              <Stat label="Up" value={fmtNum(data.up)} tone="good" />
+              <Stat label="Degraded" value={fmtNum(data.degraded)} tone={data.degraded > 0 ? "warn" : ""} />
+              <Stat label="Down" value={fmtNum(data.down)} tone={data.down > 0 ? "bad" : ""} />
             </StatStrip>
 
             <div className="sh-grid">
@@ -329,7 +376,7 @@ export default function StackHealth() {
                             <span className="sh-name">{c.name}</span>
                             {c.detail && <span className="sh-detail">{c.detail}</span>}
                           </span>
-                          <span className="sh-lat mono">{c.latency_ms} ms</span>
+                          <span className="sh-lat mono">{Number.isFinite(c.latency_ms) ? `${c.latency_ms} ms` : "—"}</span>
                         </li>
                       ))}
                     </ul>

@@ -21,7 +21,7 @@ vi.mock("../../services/api", () => ({
   },
 }));
 
-import LaneHealth from "./LaneHealth";
+import LaneHealth, { readLaneStatus } from "./LaneHealth";
 
 const ROW = {
   tenant_id: "acme",
@@ -222,5 +222,39 @@ describe("LaneHealth — Scan now", () => {
     render(<LaneHealth />);
     fireEvent.click(await screen.findByRole("button", { name: /scan now/i }));
     expect(await screen.findByText(/a scan needs one tenant/i)).toBeTruthy();
+  });
+});
+
+// 2026-11-25: a malformed answer took the whole page down (found rendering with
+// empty mock data). Each of these threw while rendering before the read
+// boundary existed; now the panel says the status could not be read, or shows
+// the missing numbers as "not stated" — never a crash, never a zero.
+describe("LaneHealth — a malformed answer degrades, it never crashes", () => {
+  for (const [name, body] of [
+    ["an empty object", {}],
+    ["null", null],
+    ["an array", []],
+    ["tenants that is not a list", { tenants: "nope" }],
+  ] as const) {
+    it(`${name} reads as "could not be read"`, async () => {
+      securityLaneStatus.mockResolvedValue(body);
+      render(<LaneHealth />);
+      expect(await screen.findByText(/status could not be read/i)).toBeTruthy();
+    });
+  }
+
+  it("a partial answer renders, with missing numbers as 'not stated' (never 0, never NaN)", async () => {
+    securityLaneStatus.mockResolvedValue({ tenants: [{ tenant_seg: "acme" }] });
+    render(<LaneHealth />);
+    expect(await screen.findByText("acme")).toBeTruthy();
+    expect(screen.getAllByText(/not stated/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/NaN/)).toBeNull();
+  });
+
+  it("readLaneStatus keeps real values and drops junk rows and non-numeric counters", () => {
+    const st = readLaneStatus({ tenants: [null, 7, { tenant_seg: "a", devices_assessed: 3 }], metrics: { scan_runs_total: 2, bogus: "x" } });
+    expect(st?.tenants).toHaveLength(1);
+    expect(st?.tenants[0].devices_assessed).toBe(3);
+    expect(st?.metrics).toEqual({ scan_runs_total: 2 });
   });
 });

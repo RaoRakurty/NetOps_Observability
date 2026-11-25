@@ -341,6 +341,16 @@ async function pickDevice(id = "spine1") {
   expect(select.value).toBe(id);
 }
 
+/** The device health panel once its BODY has rendered. The panel mounts before
+ *  the health read answers, so reading its blocks straight after findByLabelText
+ *  raced the read: `querySelector` returned null and `.dataset` threw (failed
+ *  #423's vitest job on CI, 2026-11-25). Wait for a depth block first. */
+async function healthPanel(): Promise<HTMLElement> {
+  const panel = await screen.findByLabelText("Device IGP health");
+  await waitFor(() => expect(panel.querySelector(".igp-depth")).not.toBeNull());
+  return panel;
+}
+
 describe("advanced depth blocks", () => {
   beforeEach(() => {
     devices.mockResolvedValue([{ id: "spine1", name: "spine1", address: "10.0.0.1", source: "gnmi", last_seen: "" }]);
@@ -355,7 +365,7 @@ describe("advanced depth blocks", () => {
     render(<IgpAdjacencies proto="isis" />);
     await waitFor(() => expect(igpAdjacencies).toHaveBeenCalled());
     await pickDevice();
-    const panel = await screen.findByLabelText("Device IGP health");
+    const panel = await healthPanel();
     const lsdb = panel.querySelector('.igp-depth[data-block="LSDB / LSP count"]') as HTMLElement;
     expect(lsdb.dataset.collected).toBe("yes");
     expect((lsdb.querySelector(".igp-depth-value") as HTMLElement).textContent).toBe("8");
@@ -371,7 +381,7 @@ describe("advanced depth blocks", () => {
     render(<IgpAdjacencies proto="isis" />);
     await waitFor(() => expect(igpAdjacencies).toHaveBeenCalled());
     await pickDevice();
-    const panel = await screen.findByLabelText("Device IGP health");
+    const panel = await healthPanel();
     const lsdb = panel.querySelector('.igp-depth[data-block="LSDB / LSP count"]') as HTMLElement;
     expect(lsdb.dataset.collected).toBe("no");
     expect(within(lsdb).getByText("Not collected")).toBeTruthy();
@@ -389,7 +399,7 @@ describe("advanced depth blocks", () => {
     render(<IgpAdjacencies proto="isis" />);
     await waitFor(() => expect(igpAdjacencies).toHaveBeenCalled());
     await pickDevice();
-    const panel = await screen.findByLabelText("Device IGP health");
+    const panel = await healthPanel();
     const areaRow = within(panel).getByText("IS-IS area addresses").closest("tr") as HTMLElement;
     expect(areaRow.textContent).toContain("49.0001");
     // Area membership and "levels with an adjacency" are DIFFERENT facts and
@@ -402,7 +412,7 @@ describe("advanced depth blocks", () => {
     render(<IgpAdjacencies proto="isis" />);
     await waitFor(() => expect(igpAdjacencies).toHaveBeenCalled());
     await pickDevice();
-    const panel = await screen.findByLabelText("Device IGP health");
+    const panel = await healthPanel();
     const absent = within(panel).getByText("IS-IS area addresses").closest("tr") as HTMLElement;
     expect(absent.textContent).toContain("not collected");
   });
@@ -419,7 +429,7 @@ describe("advanced depth blocks", () => {
     await waitFor(() => expect(igpAdjacencies).toHaveBeenCalled());
     await pickDevice();
     const panel = await screen.findByLabelText("IGP timers");
-    expect(within(panel).getByRole("columnheader", { name: "Neighbour" })).toBeTruthy();
+    expect(await within(panel).findByRole("columnheader", { name: "Neighbour" })).toBeTruthy();
     expect(within(panel).getByRole("columnheader", { name: "Hold remaining" })).toBeTruthy();
     expect(within(panel).getByText("27s")).toBeTruthy();
     // Without this sentence a sampled countdown reads as a configured timer.
@@ -440,7 +450,7 @@ describe("advanced depth blocks", () => {
     await waitFor(() => expect(igpAdjacencies).toHaveBeenCalled());
     await pickDevice("edge1");
     const panel = await screen.findByLabelText("IGP timers");
-    expect(within(panel).getByRole("columnheader", { name: "Interface" })).toBeTruthy();
+    expect(await within(panel).findByRole("columnheader", { name: "Interface" })).toBeTruthy();
     expect(within(panel).queryByRole("columnheader", { name: "Neighbour" })).toBeNull();
     expect(within(panel).getByText("30s")).toBeTruthy();
     // The dead interval was not collected for this row: a dash, not a 0 and not
@@ -455,7 +465,7 @@ describe("advanced depth blocks", () => {
     await waitFor(() => expect(igpAdjacencies).toHaveBeenCalled());
     await pickDevice();
     const panel = await screen.findByLabelText("IGP timers");
-    expect(within(panel).getByText("Not collected")).toBeTruthy();
+    expect(await within(panel).findByText("Not collected")).toBeTruthy();
     expect(panel.textContent).toContain("device_isis_adj_hold_seconds");
     expect(panel.querySelector("table")).toBeNull();
   });

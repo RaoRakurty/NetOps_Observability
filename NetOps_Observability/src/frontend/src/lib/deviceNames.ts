@@ -117,13 +117,20 @@ export function nameDevicesIn(text: string, names: DeviceNames | null | undefine
   return last === 0 ? text : out + text.slice(last);
 }
 
+/** The inventory answer as a list of device records. An answer that is not a
+ *  list (a malformed or empty body) is no devices, never a crash: before
+ *  2026-11-25 a bare `{}` threw "devices is not iterable" and took Flows down. */
+export function asDeviceList(d: unknown): Device[] {
+  return Array.isArray(d) ? d.filter((x): x is Device => !!x && typeof x === "object") : [];
+}
+
 /** One shared, short-lived read of the caller's inventory. A failed read is not
  *  cached, so the next caller tries again. */
 export function loadDeviceNames(now: number = Date.now()): Promise<DeviceNames> {
   if (cached && now - cached.at < TTL_MS) return cached.names;
   // Started inside a promise: any failure, even a synchronous one, leaves the
   // raw ids on screen and never breaks the page that asked.
-  const names = Promise.resolve().then(() => api.devices()).then((d) => buildDeviceNames(d ?? []));
+  const names = Promise.resolve().then(() => api.devices()).then((d) => buildDeviceNames(asDeviceList(d)));
   cached = { at: now, names };
   names.catch(() => { cached = null; });
   return names;
@@ -143,7 +150,7 @@ export function loadDeviceLabels(now: number = Date.now()): Promise<DeviceNames>
   if (cachedLabels && now - cachedLabels.at < TTL_MS) return cachedLabels.labels;
   // Started inside a promise: any failure, even a synchronous one, leaves the
   // raw keys on screen and never breaks the page that asked.
-  const labels = Promise.resolve().then(() => api.devices()).then((d) => buildDeviceLabels(d ?? []));
+  const labels = Promise.resolve().then(() => api.devices()).then((d) => buildDeviceLabels(asDeviceList(d)));
   cachedLabels = { at: now, labels };
   labels.catch(() => { cachedLabels = null; });
   return labels;
@@ -190,7 +197,7 @@ let cachedPlaces: { at: number; places: Promise<DevicePlaces> } | null = null;
 /** Shared short-lived read for buildDevicePlaces; a failed read is not cached. */
 export function loadDevicePlaces(now: number = Date.now()): Promise<DevicePlaces> {
   if (cachedPlaces && now - cachedPlaces.at < TTL_MS) return cachedPlaces.places;
-  const places = Promise.resolve().then(() => api.devices()).then((d) => buildDevicePlaces(d ?? []));
+  const places = Promise.resolve().then(() => api.devices()).then((d) => buildDevicePlaces(asDeviceList(d)));
   cachedPlaces = { at: now, places };
   places.catch(() => { cachedPlaces = null; });
   return places;

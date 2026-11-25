@@ -292,6 +292,12 @@ export default function WanCircuits({ site = "", onSites, measured: probe }: {
   // fallback the projection took because the peer was never looked for.
   const [degraded, setDegraded] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // Whether the interface list has ANSWERED at least once. Until it has, no path
+  // can be judged "claimed by no WAN interface": with rows still [] every
+  // measured path used to read as unclaimed, so "Measured paths to other
+  // targets (2)" appeared before anything was read (2026-11-25; also the race
+  // behind a CI flake). A failed first read says so instead of counting.
+  const [haveRows, setHaveRows] = useState(false);
   const [q, setQ] = useState("");
 
   useEffect(() => {
@@ -299,7 +305,7 @@ export default function WanCircuits({ site = "", onSites, measured: probe }: {
     const tick = async () => {
       try {
         const res = await api.wanInterfaces();
-        if (alive) { setRows(res?.interfaces ?? []); setDegraded(res?.degraded ?? []); setErr(null); setLoaded(true); }
+        if (alive) { setRows(res?.interfaces ?? []); setDegraded(res?.degraded ?? []); setErr(null); setLoaded(true); setHaveRows(true); }
       } catch (e) {
         if (alive) { setErr((e as Error).message); setLoaded(true); }
       }
@@ -531,9 +537,14 @@ export default function WanCircuits({ site = "", onSites, measured: probe }: {
         />
       )}
 
-      {probe && (
+      {probe && haveRows && (
         <OtherPaths paths={others} site={site}
           onOpen={(m) => setPanel({ title: destText(m), paths: [{ m, role: "other" }] })} />
+      )}
+      {probe && !haveRows && loaded && err && (
+        <p className="wan-line" data-testid="paths-other-unknown">
+          Which measured paths belong to a WAN interface is not known: the interface list could not be read.
+        </p>
       )}
       <EndpointsSection panel={endpoints} onRetry={reloadEndpoints} q={q} site={site} canEdit={canEdit} onMarked={afterMark} />
       <PossibleSection panel={endpoints} site={site} canEdit={canEdit} onMarked={afterMark} />

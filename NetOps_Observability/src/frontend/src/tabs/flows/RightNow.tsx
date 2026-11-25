@@ -23,7 +23,7 @@ import { useMemo, useState } from "react";
 import ReactECharts from "../../components/EChart";
 import { api, type Device, type FlowMover, type FlowMoversBy } from "../../services/api";
 import { operatorError } from "../../lib/errors";
-import { buildDeviceNames } from "../../lib/deviceNames";
+import { asDeviceList, buildDeviceNames } from "../../lib/deviceNames";
 import { fmtTime } from "../../lib/time";
 import DataTable, { type Column } from "../../components/DataTable";
 import AskIris from "../../components/AskIris";
@@ -85,7 +85,7 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
   const base = includePlatform ? { traffic: "all" } : {};
   const fkey = JSON.stringify(base);
 
-  const devices = useTicked<Device[]>(() => api.devices(), []);
+  const devices = useTicked<Device[]>(() => api.devices().then(asDeviceList), []);
   const names = useMemo(() => buildDeviceNames(devices.data ?? []), [devices.data]);
 
   const cur = useTicked(() => api.flowsLinks(wq, LINKS_LIMIT, ftype, base), [wkey, ftype, fkey]);
@@ -134,7 +134,7 @@ export default function RightNow({ win, ftype, includePlatform, selected, onSele
   const q = { since, ftype, filters: base, fkey };
   const err = cur.error ? operatorError(cur.error, "Busiest links could not be read for this window.") : null;
   const winEcho = cur.data?.window;
-  const respSampling = samplingNote(cur.data?.basis.sampling);
+  const respSampling = samplingNote(cur.data?.basis?.sampling);
   const utilWord = cs.past ? "at the end of this window" : "now";
 
   const cols = useMemo<Column<LinkRow>[]>(
@@ -407,7 +407,7 @@ function WhatChanged({ link, win, traffic }: { link: { exporter: string; ifIndex
   const r = useTicked(() => api.flowsLinkMovers(link, wq, by, "both", 10, traffic), [link.exporter, link.ifIndex, link.tenant, JSON.stringify(wq), by, traffic]);
   const err = r.error ? operatorError(r.error, "What changed on this link could not be read.") : null;
   const movers = r.data?.movers ?? [];
-  const noPrev = r.data?.totals.prev_bytes === null;
+  const noPrev = r.data?.totals?.prev_bytes === null;
 
   const cols = useMemo<Column<FlowMover>[]>(
     () => [
@@ -448,7 +448,7 @@ function WhatChanged({ link, win, traffic }: { link: { exporter: string; ifIndex
       <p className="mini-meta tr-note">
         {noPrev
           ? "The window before is older than the flow records kept, so there is nothing to compare with."
-          : r.data
+          : r.data?.totals
             ? `This window ${fmtBytes(r.data.totals.bytes)} · window before ${fmtBytes(r.data.totals.prev_bytes ?? 0)}.${by === "talker" ? " A conversation counts toward both of its hosts." : ""}`
             : ""}
       </p>
