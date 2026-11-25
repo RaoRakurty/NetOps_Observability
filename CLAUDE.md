@@ -572,6 +572,10 @@ waste, so CI round-trips are rare.
   `src/correlation` (there is no root pytest config, so a bare `pytest` is
   ambiguous and silently runs only one of them). Frontend is `src/frontend`, not
   `docs-portal/`.
+- **Playwright in parallel worktrees: one port each.** `PW_PORT=30NN npm run e2e`
+  (default 3001; `src/frontend/devPort.ts`). Vite refuses a busy port and an
+  already-running dev server is reused only with `PW_REUSE=1` (never in CI) — before
+  2026-11-25 a second worktree silently tested the FIRST worktree's server.
 - **Gate tools are not on PATH** — they live in `~/go/bin`; put it on PATH first.
   `promtool` is not installed locally at all: `scripts/preflight-configs.sh`
   runs promtool, vector and syslog-ng through docker and exits 2 without docker,

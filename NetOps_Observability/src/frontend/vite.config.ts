@@ -3,11 +3,15 @@
 
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { devPort } from "./devPort";
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 3001,
+    // PW_PORT (default 3001); a busy port is an error, never a silent move to
+    // the next one — see devPort.ts.
+    port: devPort(),
+    strictPort: true,
     proxy: {
       "/api": "http://localhost:8080",
       "/admin": "http://localhost:8080",
