@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { api, Rule } from "../services/api";
 import Icon from "../components/Icon";
 import DataTable, { type Column } from "../components/DataTable";
-import { NocHeader, Chip, LiveChip } from "../components/noc";
+import { NocHeader, LiveChip } from "../components/noc";
+import { OutlinedButton, StatusChip, severityStatus } from "../components/kit";
 import Wizard from "../components/Wizard";
 import { Modal } from "../components/ui";
 import { operatorError } from "../lib/errors";
@@ -72,11 +73,13 @@ export default function Rules() {
     <div className="dm-board cc-board">
       <NocHeader
         title="Monitor Rules"
+        icon="sliders"
+        count={loadErr ? undefined : rules.length}
         subtitle="Define alert conditions, review built-in rules, and manage custom monitors over your telemetry."
         chips={
           loadErr
-            ? <Chip label="Rule list unavailable" tone="var(--crit)" title="The rules API did not answer — the monitor set is unknown." />
-            : <><Chip label={`${rules.length} rules`} /><LiveChip detail="live evaluation" /></>
+            ? <StatusChip kind="critical" label="Rule list unavailable" title="The rules API did not answer — the monitor set is unknown." />
+            : <LiveChip detail="live evaluation" />
         }
       />
       {msg && (
@@ -88,9 +91,7 @@ export default function Rules() {
       <div className="card">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <h2 style={{ margin: 0 }}>Rules ({rules.length})</h2>
-          <button className="btn-accent" onClick={openAdd}>
-            <Icon name="alerts" size={14} /> Add rule
-          </button>
+          <OutlinedButton icon="plus" onClick={openAdd}>Add rule</OutlinedButton>
         </div>
         <p className="mini-meta" style={{ marginTop: -6 }}>
           Built-in rules ship with the platform (rules file); custom monitors are yours — created here or via{" "}
@@ -190,9 +191,11 @@ function ruleColumns(remove: (name: string) => void): Column<Rule>[] {
     {
       key: "source", header: "Source", sortable: true, width: 110,
       sortValue: (r) => (r.labels?.origin === "ui" ? 0 : 1), text: (r) => (r.labels?.origin === "ui" ? "custom" : "built-in"),
-      render: (r) => <span className={`badge ${r.labels?.origin === "ui" ? "accent-badge" : ""}`}>{r.labels?.origin === "ui" ? "custom" : "built-in"}</span>,
+      // Where a rule came from is descriptive: neutral for both (visual language).
+      render: (r) => <span className="badge">{r.labels?.origin === "ui" ? "custom" : "built-in"}</span>,
     },
-    { key: "severity", header: "Severity", sortable: true, width: 110, text: (r) => r.severity, render: (r) => r.severity },
+    { key: "severity", header: "Severity", sortable: true, width: 120, text: (r) => r.severity,
+      render: (r) => <StatusChip kind={severityStatus(r.severity)} label={r.severity} /> },
     { key: "expr", header: "Expression", text: (r) => r.expr, render: (r) => <code>{r.expr}</code> },
     { key: "for", header: "For", sortable: true, width: 80, align: "right", sortValue: (r) => Number(r.for) || 0, text: (r) => `${r.for}s`, render: (r) => `${r.for}s` },
     {

@@ -3,6 +3,8 @@
 
 import { ReactNode } from "react";
 import AskIris from "./AskIris";
+import Icon from "./Icon";
+import "./kit/kit.css";
 
 // noc.tsx — the shared premium NOC workspace kit. One source of truth for the
 // section header, status strip, KPI cards and badges so every Monitoring / Event
@@ -14,15 +16,21 @@ import AskIris from "./AskIris";
 // `subtitle` is legacy and optional: a swept page passes `topic` instead, and the
 // sentence that stood under the title becomes an authored explanation behind the
 // `(i)` (docs/design/UI_WORDS_IRIS_EXPLAINS_2026-09-06.md).
-export function NocHeader({ title, subtitle, topic, chips, children }: {
+// `icon` / `count` (visual language phase 3, 2026-11-24): the PageHeader look —
+// the page's menu icon in a bordered tile, the title, a quiet count badge. Both
+// optional: a page that passes neither renders exactly as before.
+export function NocHeader({ title, subtitle, topic, chips, children, icon, count }: {
   title: string; subtitle?: string; topic?: string; chips?: ReactNode; children?: ReactNode;
+  icon?: string; count?: number;
 }) {
   return (
-    <div className="cc-hero">
+    <div className={icon ? "cc-hero cc-hero-kit" : "cc-hero"}>
       <div className="cc-hero-head">
         <div>
           <div className="cc-h1-row">
+            {icon && <span className="kit-ph-tile" aria-hidden><Icon name={icon} size={17} /></span>}
             <h1 className="cc-h1">{title}</h1>
+            {icon && count !== undefined && <span className="kit-ph-count" aria-label={`${count} items`}>{count}</span>}
             {topic && <AskIris topic={topic} label={title} />}
           </div>
           {subtitle && <p className="cc-sub">{subtitle}</p>}

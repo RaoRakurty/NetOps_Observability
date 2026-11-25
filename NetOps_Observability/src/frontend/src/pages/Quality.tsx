@@ -163,11 +163,12 @@ export default function Quality({ rangeMinutes = 60 }: { rangeMinutes?: number }
   return (
     <div className="dm-board cc-board">
       <NocHeader
-        title="Link Quality"
+        title="Network Health"
+        icon="activity"
         subtitle="Interface error, discard and saturation signals — normalized per 1,000 packets so quiet links with high drop fractions aren't hidden behind busy-link volume."
         chips={<LiveChip detail="signal quality" />}
       />
-      <Group title="Link error quality" hue="#22C55E">
+      <Group title="Link error quality">
         <StatStrip>
           <MetricStat label="Interfaces monitored" query="count(device_if_oper_status) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} />
           <MetricStat label="Operationally up" query="count(device_if_oper_status == 1) or vector(0)" minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={() => "good"} />
@@ -183,7 +184,7 @@ export default function Quality({ rangeMinutes = 60 }: { rangeMinutes?: number }
         </p>
       </Group>
 
-      <Group title="Capacity quality (saturation)" hue="#14B8A6">
+      <Group title="Capacity quality (saturation)">
         <StatStrip>
           <MetricStat label="Interfaces ≥ 80% util" query={utilCount(80)} minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "bad" : "good")} />
           <MetricStat label="Interfaces ≥ 60% util" query={utilCount(60)} minutes={m} fmt={(n) => `${n.toFixed(0)}`} tone={(n) => (n > 0 ? "warn" : "good")} />
@@ -194,7 +195,7 @@ export default function Quality({ rangeMinutes = 60 }: { rangeMinutes?: number }
         </div>
       </Group>
 
-      <Group title="Overlay quality (tunnels)" hue="#8B5CF6">
+      <Group title="Overlay quality (tunnels)">
         <TunnelQuality />
       </Group>
     </div>

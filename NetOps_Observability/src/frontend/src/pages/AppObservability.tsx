@@ -257,7 +257,7 @@ export function CloudShell() {
 
   return (
     <div className="ao">
-      <NocHeader title="Cloud" subtitle="What the connected cloud accounts report" />
+      <NocHeader title="Cloud" icon="cloud" subtitle="What the connected cloud accounts report" />
       <CloudScopeBar scope={shell.scope} mode={shell.mode} summary={shell.summary}
         control={{
           scope: scopeCtl.scope, options: shell.options, active: scopeCtl.active,

@@ -55,12 +55,13 @@ export function Liveness() {
 /** A collapsible group whose children exist only while it is open: a closed
  *  <details> keeps its children mounted and polling, which this host pays for. */
 export function LazyGroup({ title, hue, defaultOpen = true, topic, children }: {
-  title: string; hue: string; defaultOpen?: boolean; topic?: string; children: ReactNode;
+  title: string; hue?: string; defaultOpen?: boolean; topic?: string; children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // No hue = the neutral heading (visual language: a heading is not a state).
   return (
     <details className="dm-group" open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
-      <summary className="dm-group-head" style={{ ["--g" as string]: hue } as React.CSSProperties}>
+      <summary className={hue ? "dm-group-head" : "dm-group-head dm-group-neutral"} style={hue ? ({ ["--g" as string]: hue } as React.CSSProperties) : undefined}>
         <Icon name="chevron" size={14} className="dm-group-chevron" />
         <span>{title}</span>
         {topic && <span onClick={(e) => e.stopPropagation()}><AskIris topic={topic} label={title} /></span>}

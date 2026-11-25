@@ -106,10 +106,13 @@ export function EmptyHint({ kind = "metrics" }: { kind?: DataKind }) {
 }
 
 // ── layout ───────────────────────────────────────────────────────────────────
-export function Group({ title, hue, children, defaultOpen = true }: { title: string; hue: string; children: ReactNode; defaultOpen?: boolean }) {
+// `hue` is optional (visual language, 2026-11-24): a group heading is structure,
+// not a state, so a page that leaves it out gets the neutral heading
+// (.dm-group-neutral in components/kit/kit.css). A hue still passed renders as before.
+export function Group({ title, hue, children, defaultOpen = true }: { title: string; hue?: string; children: ReactNode; defaultOpen?: boolean }) {
   return (
     <details className="dm-group" open={defaultOpen}>
-      <summary className="dm-group-head" style={{ ["--g" as string]: hue } as React.CSSProperties}>
+      <summary className={hue ? "dm-group-head" : "dm-group-head dm-group-neutral"} style={hue ? ({ ["--g" as string]: hue } as React.CSSProperties) : undefined}>
         <Icon name="chevron" size={14} className="dm-group-chevron" />
         <span>{title}</span>
       </summary>

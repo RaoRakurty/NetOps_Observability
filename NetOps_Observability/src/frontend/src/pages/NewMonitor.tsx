@@ -7,6 +7,7 @@ import { useShell } from "../context/shell";
 import Wizard from "../components/Wizard";
 import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
+import { PageHeader, StatusChip } from "../components/kit";
 
 // New Monitor — guided monitor creation over the alert rules engine
 // (build-order #9). Three steps: pick a signal template (every template is
@@ -155,13 +156,11 @@ export default function NewMonitor() {
 
   return (
     <div className="card form-card form-card-wide">
-      <div className="form-head">
-        <span className="form-head-icon"><Icon name="alerts" size={18} /></span>
-        <div>
-          <h2>Create monitor</h2>
-          <p className="form-sub">Every template is backed by telemetry you collect.<AskIris topic="monitor.templates" label="Monitor templates" /></p>
-        </div>
-      </div>
+      <PageHeader
+        icon="plus"
+        title="Create monitor"
+        subtitle={<>Every template is backed by telemetry you collect.<AskIris topic="monitor.templates" label="Monitor templates" /></>}
+      />
 
       <Wizard
         finishLabel="Create monitor"
@@ -324,9 +323,10 @@ function LivePreview({ expr }: { expr: string }) {
   if (series === null) return <div className="cc-empty">Checking what this would fire on…</div>;
   return (
     <div>
-      <span className={`badge ${series.length ? "warn" : "good"}`}>
-        {series.length ? `would fire on ${series.length} series` : "quiet right now"}
-      </span>
+      <StatusChip
+        kind={series.length ? "warning" : "ok"}
+        label={series.length ? `would fire on ${series.length} series` : "quiet right now"}
+      />
       <AskIris topic="monitor.preview" label="Preview" />
       {series.length > 0 && (
         <ul className="dm-list" style={{ marginTop: 8 }}>

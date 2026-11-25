@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { fmtDateTime } from "../lib/time";
 import { api, MaintenanceWindow, MaintenanceWindowInput } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
-import { Chip } from "../components/noc";
+import { OutlinedButton, PageHeader, StatusChip } from "../components/kit";
 import { operatorError } from "../lib/errors";
 // Maintenance Windows (item 121): declared planned-work periods. A covering
 // window pauses alert NOTIFICATIONS for the scoped devices/sites/rules — the
@@ -314,10 +314,10 @@ export default function MaintenanceWindows() {
       text: (w) => (w.enabled ? (isActiveNow(w) ? "active" : "enabled") : "disabled"),
       render: (w) => (
         <span style={{ display: "inline-flex", gap: 4 }}>
-          {isActiveNow(w) && <Chip label="Suppressing now" tone="var(--warn)"
+          {isActiveNow(w) && <StatusChip kind="warning" label="Suppressing now"
             title="This window is active — notifications in its scope are paused." />}
-          {!isActiveNow(w) && w.enabled && <Chip label="Enabled" tone="var(--ok)" />}
-          {!w.enabled && <Chip label="Disabled" tone="var(--fg-subtle)" />}
+          {!isActiveNow(w) && w.enabled && <StatusChip kind="ok" label="Enabled" />}
+          {!w.enabled && <StatusChip kind="off" label="Disabled" />}
         </span>
       ) },
     { key: "scope", header: "Scope", width: "18%", text: scopeSummary, render: (w) => scopeSummary(w) },
@@ -341,16 +341,18 @@ export default function MaintenanceWindows() {
 
   return (
     <div>
+      <PageHeader
+        icon="calendar"
+        title="Maintenance Windows"
+        count={loadErr || items === null ? undefined : items.length}
+        actions={
+          <>
+            {loadErr && <StatusChip kind="critical" label="Unavailable" />}
+            <OutlinedButton icon="plus" onClick={() => setEditing({ form: EMPTY_FORM })}>New window</OutlinedButton>
+          </>
+        }
+      />
       <div className="cc-panel">
-        <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Maintenance windows</h3>
-          <span className="cc-panel-meta" style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-            {loadErr ? "unavailable" : `${items?.length ?? 0} window${(items?.length ?? 0) === 1 ? "" : "s"}`}
-            <button className="btn btn-sm btn-primary" onClick={() => setEditing({ form: EMPTY_FORM })}>
-              New window
-            </button>
-          </span>
-        </div>
         <div style={{ padding: "11px 13px" }}>
           <div className="ccw-hint" style={{ marginBottom: 8 }}>
             During a covering window, alert <strong>notifications are paused</strong> — alerts still fire and stay
