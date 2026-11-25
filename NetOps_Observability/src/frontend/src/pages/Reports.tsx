@@ -18,6 +18,7 @@ import {
 } from "../services/api";
 import Icon from "../components/Icon";
 
+import { PageHeader } from "../components/kit";
 // Reports — build a report (what + when + who + which formats), monitor its
 // runs, and drill into the async execution history (phase timeline, per-recipient
 // delivery, downloadable HTML/Excel/PDF artifacts). The server renders the
@@ -333,7 +334,7 @@ export default function Reports() {
   }
 
   return (
-    <>
+    <><PageHeader icon="file-text" title="Reports" />
       {!editingId && (
         <button type="button" className="report-launch" onClick={() => setWizard(true)}>
           <span className="report-launch-icon" aria-hidden>+</span>

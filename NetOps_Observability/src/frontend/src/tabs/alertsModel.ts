@@ -12,6 +12,7 @@
 //     loaded rows only, and are labelled that way.
 
 import type { AlertEpisode } from "../services/api";
+import type { StatusKind } from "../components/kit";
 import { severityGroupOf, SEVERITY_GROUPS, type SeverityGroup } from "../lib/logFilters";
 import { nameDeviceIn } from "../lib/deviceNames";
 
@@ -32,6 +33,10 @@ export const statusLabel = (s: AlertEpisode["status"]): string =>
 
 export const statusTone = (s: AlertEpisode["status"]): string =>
   s === "active" ? "var(--warn)" : s === "cleared" ? "var(--ok)" : "var(--fg-subtle)";
+
+/** The StatusChip kind for an episode status (same meaning as statusTone). */
+export const statusKind = (s: AlertEpisode["status"]): StatusKind =>
+  s === "active" ? "warning" : s === "cleared" ? "resolved" : "neutral";
 
 /** A device id shown by its inventory name; "Platform" for a stack-level episode. */
 export function deviceLabel(e: AlertEpisode, names: ReadonlyMap<string, string> | null): string {

@@ -26,6 +26,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AskIris from "../../components/AskIris";
+import Icon from "../../components/Icon";
+import { PageHeader, OutlinedButton } from "../../components/kit";
 import Tunnels from "../../tabs/Tunnels";
 import WanCircuits from "../WanCircuits";
 import PathData from "./PathData";
@@ -71,7 +73,23 @@ export default function PathsPage() {
   return (
     <div className="paths-shell paths-page" data-testid="paths-page">
       <div className="paths-head">
-        <h2>Paths</h2>
+        <PageHeader
+          icon="route"
+          title="Paths"
+          actions={<>
+            <label className="kit-select kit-pill">
+              <Icon name="map-pin" size={15} />
+              <select value={site} onChange={(e) => choose(e.target.value)} data-testid="paths-site" aria-label="Site">
+                <option value="">All sites</option>
+                {missing && <option value={site}>{site} (no rows here)</option>}
+                {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+              <Icon name="chevron-down" size={14} className="kit-chev" />
+            </label>
+            <AskIris topic="paths.site-filter" label="Site filter" />
+            <OutlinedButton icon="layers" testId="paths-data-open" onClick={() => setDataOpen(true)}>Path data</OutlinedButton>
+          </>}
+        />
         <nav className="paths-tabs" role="tablist" aria-label="Paths">
           {PATHS_TABS.map((t) => (
             <button key={t.id} type="button" role="tab" id={`paths-tab-${t.id}`}
@@ -81,20 +99,6 @@ export default function PathsPage() {
             </button>
           ))}
         </nav>
-        <div className="paths-toolbar">
-          <label className="paths-site">
-            <span>Site</span>
-            <select value={site} onChange={(e) => choose(e.target.value)} data-testid="paths-site" aria-label="Site">
-              <option value="">All sites</option>
-              {missing && <option value={site}>{site} (no rows here)</option>}
-              {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-            </select>
-            <AskIris topic="paths.site-filter" label="Site filter" />
-          </label>
-          <button type="button" className="btn-ghost" data-testid="paths-data-open" onClick={() => setDataOpen(true)}>
-            Path data
-          </button>
-        </div>
       </div>
 
       <div id="paths-panel" role="tabpanel" aria-labelledby={`paths-tab-${tab}`}>

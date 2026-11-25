@@ -90,7 +90,36 @@ Rules the kit enforces:
   told apart (a stacked bar of vendors or types), use falling strengths of the
   muted text colour, not hues: a hue reads as a state.
 
+## Administration headers
+
+`AdminPageHeader` is the kit PageHeader when given its page's menu `icon`, and a
+neutral section title without one. The Administration group colours of
+2026-10-18 (the `.adm-scope` accent re-point, coloured header bar and tinted
+card tops) are retired: Administration uses the one accent like every page.
+
+## Guard
+
+`src/frontend/src/visualLanguage.guard.test.ts` keeps the rules from eroding.
+It scans every `.ts`, `.tsx` and `.css` file under `src/` (comments stripped;
+the kit and tests exempt) and counts, per file:
+
+- hard-coded colours: `#hex`, `rgb()/rgba()`, `hsl()/hsla()`;
+- per-section hue maps (`MOD_HUE`, `*_HUE`, `hueFor`, the retired admin hues);
+- state badges that are not a StatusChip (`className="badge good|warn|bad"`,
+  `` badge ${tone} ``).
+
+Today's counts live in `src/frontend/src/visualLanguage.ledger.json`, each file
+with the reason it is still there (theme token files, chart palettes, the
+printed RCA document, pages awaiting their sweep). The ledger only shrinks:
+
+- a file may not gain an occurrence, and a file not in the ledger may have none;
+- when a file drops below its number, the test asks for the ledger to be
+  lowered, so the gain is kept;
+- regenerate after a cleanup with
+  `UPDATE_VL_LEDGER=1 npx vitest run src/visualLanguage.guard.test.ts`, which
+  refuses to raise any number.
+
 ## Still to do
 
-- A sweep of every screen against these rules, moving each page onto the kit,
-  with a guard test against decorative colour.
+- Finish the sweep of the remaining screens (the ledger lists them) and keep
+  lowering the ledger as pages move onto the kit.

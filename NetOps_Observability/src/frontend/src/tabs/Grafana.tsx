@@ -4,6 +4,7 @@
 import { useRef, useState } from "react";
 import Icon from "../components/Icon";
 
+import { PageHeader } from "../components/kit";
 // Grafana — embedded seamlessly in-app (same pattern as Source of Truth /
 // NetBox). The osd-gate auto-logs-in the platform owner via Grafana's auth
 // proxy (X-WEBAUTH-USER), so there's no separate Grafana login or "not signed
@@ -15,7 +16,7 @@ export default function GrafanaTab() {
   const reload = () => { if (ref.current) ref.current.src = ref.current.src; };
 
   return (
-    <div className="sot-head">
+    <div className="sot-head"><PageHeader icon="metrics" title="Self-Monitoring" />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div>
           <h2 style={{ margin: 0 }}>Metrics &amp; Dashboards</h2>

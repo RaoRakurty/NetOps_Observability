@@ -17,6 +17,7 @@ import AskIris from "../components/AskIris";
 import { ifRateBps, ifUtilPct } from "../lib/ifUtilisation";
 import { asOfText, oldestQualityAsOf } from "../tabs/tunnels.model";
 
+import { PageHeader } from "../components/kit";
 // Device Monitoring — the network-device-fleet cockpit (the fleet master
 // board). Collapsible, tinted section groups built on the
 // shared board framework (components/board/panels). Every panel is wired to data
@@ -307,7 +308,7 @@ function fleetPacketMix(dir: "in" | "out"): string {
 export default function DeviceMonitoring({ rangeMinutes = 60 }: { rangeMinutes?: number } = {}) {
   const m = rangeMinutes;
   return (
-    <div className="dm-board">
+    <div className="dm-board"><PageHeader icon="model" title="Device Monitoring" />
       <Group title="Fleet vitals &amp; reachability" hue="#22C55E">
         <FleetPulse />
       </Group>

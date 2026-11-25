@@ -32,6 +32,7 @@ import { OverviewDataProvider } from "./useOverviewData";
 import { Liveness } from "./boardParts";
 import { Safe } from "./rcaPanels";
 import DashboardPicker from "./DashboardPicker";
+import { PageHeader } from "../../components/kit";
 import { MAX_CELLS, SPANS, TEMPLATES, dashHref, dashRoute, parseBody, type BoardBody, type Cell, type DashRoute, type TemplateId } from "./dashboardModel";
 
 
@@ -201,14 +202,17 @@ export function BoardEditor({ board, template }: { board: SavedObject | null; te
   return (
     <div className="overview-page fp mydash" data-testid="dashboard-board">
       <div className="mydash-head">
-        <div>
-          <div className="mydash-eyebrow">My dashboards</div>
-          {editing ? (
-            <input className="ccw-input dashb-name" value={name} maxLength={80} aria-label="Dashboard name"
-              onChange={(e) => { setName(e.target.value); setDirty(true); }} placeholder="Name this dashboard" />
-          ) : (
-            <h1 className="mydash-title">{name || "Untitled"}</h1>
-          )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="kit-ph-tile" aria-hidden><Icon name="board" size={17} /></span>
+          <div>
+            <div className="mydash-eyebrow">My dashboards</div>
+            {editing ? (
+              <input className="ccw-input dashb-name" value={name} maxLength={80} aria-label="Dashboard name"
+                onChange={(e) => { setName(e.target.value); setDirty(true); }} placeholder="Name this dashboard" />
+            ) : (
+              <h1 className="mydash-title">{name || "Untitled"}</h1>
+            )}
+          </div>
         </div>
         <div className="ov-head-right">
           {!editing && board && <DashboardPicker current={board.id} />}
@@ -333,12 +337,12 @@ function DashboardList() {
   const start = (r: DashRoute) => { location.hash = dashHref(r); };
   return (
     <div className="overview-page" data-testid="dashboard-list">
-      <div className="mydash-head">
-        <div>
-          <h1 className="mydash-title">My dashboards</h1>
-          <div className="ov-sub">Your own views from Overview's live panels, shared with your tenant.</div>
-        </div>
-      </div>
+      <PageHeader
+        icon="board"
+        title="My dashboards"
+        count={boards ? boards.length : undefined}
+        subtitle="Your own views from Overview's live panels, shared with your tenant."
+      />
       <div className="ov-starts">
         <button type="button" className="ov-start" onClick={() => start({ kind: "new", template: "default" })}>
           <strong>Make a copy of the default</strong><span>{TEMPLATES.default.blurb}</span>

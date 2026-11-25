@@ -120,6 +120,7 @@ import {
   type Tone,
 } from "./licence.model";
 
+import { PageHeader } from "../components/kit";
 // ── panel plumbing ──────────────────────────────────────────────────────────
 
 type Panel<T> = { data: T | null; error: string | null; loading: boolean };
@@ -1164,7 +1165,7 @@ export default function Licence() {
   // do. Everything else — the paperwork, limits nothing enforces, the daily
   // usage history, the trust anchors — is one fold away under Details.
   return (
-    <div className="lic-page">
+    <div className="lic-page"><PageHeader icon="badge-check" title="License" />
       <Section
         id="licence"
         title="License"

@@ -84,6 +84,23 @@ import {
   type PickKind,
   type PickRow,
 } from "./investigationModel";
+import { StatusChip, type StatusKind } from "../../components/kit";
+
+// Visual language (docs/design/visual-language.md): the block icon tiles are
+// neutral — no per-section hue; colour is kept for states only.
+const GROUP_NEUTRAL = { ["--g" as string]: "var(--fg-muted, var(--muted))" } as React.CSSProperties;
+
+/** A case chip's word → its semantic tone. A confirmed or likely case is a
+ *  fault (red / amber), a recovered one is clear (green), the rest neutral —
+ *  the same meaning the RCA workspace gives a verdict tier. */
+function chipKind(label: string): StatusKind {
+  switch (label) {
+    case "Confirmed": return "bad";
+    case "Likely": return "suspected";
+    case "Recovered": return "resolved";
+    default: return "neutral";
+  }
+}
 
 /** parseJSON — a remote JSON blob is untrusted input; a bad blob is "absent". */
 function parseJSON<T>(raw: string | undefined, fallback: T): T {
@@ -301,7 +318,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
   return (
     <div className="ts-inv">
       {/* ── 1 · Start troubleshooting ─────────────────────────────────────── */}
-      <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--mod-network)" } as React.CSSProperties} aria-labelledby="ts-what-h" data-testid="ts-pick">
+      <section className="ts-block ts-group" style={GROUP_NEUTRAL} aria-labelledby="ts-what-h" data-testid="ts-pick">
         <div className="ts-group-head">
           <BlockMark icon="tool" />
           <h2 id="ts-what-h" className="ts-block-h">
@@ -345,7 +362,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
                       <span className="ts-case-f fact-line">
                         {r.affects}{r.since ? ` · ${fmtDateTime(r.since)}` : ""}
                       </span>
-                      <span className="ts-case-chip badge">{r.chip}</span>
+                      <span className="ts-case-chip"><StatusChip kind={chipKind(r.chip)} label={r.chip} /></span>
                     </button>
                   </li>
                 ))}
@@ -384,7 +401,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
       {/* ── 2 · The answer ─────────────────────────────────────────────────── */}
       {picked && (
-        <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--accent)" } as React.CSSProperties} aria-label="The answer" data-testid="ts-answer-block">
+        <section className="ts-block ts-group" style={GROUP_NEUTRAL} aria-label="The answer" data-testid="ts-answer-block">
           <div className="ts-group-head">
             <BlockMark icon="target" />
             <h2 className="ts-block-h">The answer</h2>
@@ -409,8 +426,8 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
               <div className="ts-fact"><dt>Since:</dt> <dd>{since ? fmtDateTime(since) : "Not stated"}</dd></div>
               <div className="ts-fact"><dt>Owner:</dt> <dd>{plainOwner(rcaCase?.ownershipLabel)}</dd></div>
             </dl>
-            <span className="ts-answer-chip badge" data-testid="ts-confidence">
-              {corrId ? confidenceChip(obj?.top_confidence) : confidenceChip(0)}
+            <span className="ts-answer-chip" data-testid="ts-confidence">
+              <StatusChip kind="neutral" label={corrId ? confidenceChip(obj?.top_confidence) : confidenceChip(0)} />
             </span>
           </div>
 
@@ -482,7 +499,7 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
       {/* ── 3 · The evidence ───────────────────────────────────────────────── */}
       {picked && (
-        <section className="ts-block ts-group" style={{ ["--g" as string]: "var(--mod-logs)" } as React.CSSProperties} aria-labelledby="ts-ev-h" data-testid="ts-evidence">
+        <section className="ts-block ts-group" style={GROUP_NEUTRAL} aria-labelledby="ts-ev-h" data-testid="ts-evidence">
           <div className="ts-group-head">
             <BlockMark icon="layers" />
             <h2 id="ts-ev-h" className="ts-block-h">The evidence</h2>

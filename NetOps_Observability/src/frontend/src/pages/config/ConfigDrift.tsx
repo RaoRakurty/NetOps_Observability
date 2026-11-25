@@ -34,6 +34,7 @@ import {
   statusBadge,
 } from "./configModel";
 
+import { PageHeader } from "../../components/kit";
 const PAGE_SIZE = 100;
 
 /** Deep link into the device inventory, which pre-filters on ?q=… */
@@ -105,7 +106,7 @@ export default function ConfigDrift() {
   }
 
   return (
-    <div className="dm-board">
+    <div className="dm-board"><PageHeader icon="git-compare" title="Config Drift" />
       <Group title="Config drift" hue="#0EA5E9">
         <div className="cfg-toolbar" role="group" aria-label="Filter by configuration state">
           {DRIFT_FILTERS.map((f) => (

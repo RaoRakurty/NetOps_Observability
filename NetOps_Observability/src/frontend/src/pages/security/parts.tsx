@@ -21,25 +21,35 @@ import {
 } from "./model";
 import { fmtDateTime } from "../../lib/time";
 import AskIris from "../../components/AskIris";
+import { StatusChip, type StatusKind } from "../../components/kit";
+
+/** A section Tone as a StatusChip kind (visual language: a state is icon +
+ *  word + semantic colour). Low/info severities read as information, an
+ *  untoned state as neutral — never the pass colour. */
+export function toneKind(t: Tone, severity?: string): StatusKind {
+  if (t === "bad") return "bad";
+  if (t === "warn") return "warn";
+  if (t === "good") return "ok";
+  const x = (severity ?? "").toLowerCase();
+  return x === "low" || x === "info" ? "info" : "neutral";
+}
 
 const toneClass = (t: Tone): string => (t === "bad" ? "t-bad" : t === "warn" ? "t-warn" : t === "good" ? "t-good" : "");
 
 /** Severity as a badge. An absent severity reads "unrated", never "low". */
 export function SeverityBadge({ severity }: { severity?: string }) {
   const s = (severity ?? "").trim();
-  if (!s) return <span className="badge sec-unassessed">unrated</span>;
-  return <span className={`badge ${severityTone(s)}`}>{s}</span>;
+  if (!s) return <StatusChip kind="neutral" label="unrated" />;
+  return <StatusChip kind={toneKind(severityTone(s), s)} label={s} />;
 }
 
 /** OCSF verdict as a badge. "Unassessed" is neutral — never the pass colour. */
 export function VerdictBadge({ verdict }: { verdict: Verdict }) {
   const tone = verdictTone(verdict);
   return (
-    <span className={`badge ${tone}`} title={verdict === "unassessed"
+    <StatusChip kind={toneKind(tone)} label={VERDICT_LABEL[verdict]} title={verdict === "unassessed"
       ? "The check did not produce a verdict (not applicable or errored) — unknown, not clear."
-      : undefined}>
-      {VERDICT_LABEL[verdict]}
-    </span>
+      : undefined} />
   );
 }
 
@@ -234,7 +244,7 @@ export function FindingDetail({ finding }: { finding: SecFindingLike }) {
         <VerdictBadge verdict={v} />
         <SeverityBadge severity={finding.severity} />
         <span className="badge">{evidenceClassLabel(finding.evidence_class)}</span>
-        {finding.seam?.internet_facing && <span className="badge bad">internet-facing seam</span>}
+        {finding.seam?.internet_facing && <StatusChip kind="bad" label="internet-facing seam" />}
       </div>
 
       <h3 style={{ margin: 0, fontSize: 14 }}>

@@ -19,6 +19,7 @@ import { httpFailure, operatorError } from "../../lib/errors";
 import { fmtDateTime } from "../../lib/time";
 import { parseLines, problems, sourceLine, textFor } from "./corsOriginsModel";
 
+import { PageHeader } from "../../components/kit";
 type Load =
   | { kind: "loading" }
   | { kind: "denied" }
@@ -74,8 +75,7 @@ export default function CorsOrigins() {
   };
 
   return (
-    <div className="cors-origins-page" style={{ fontSize: 14, maxWidth: 1000 }}>
-      <h2 style={{ margin: "0 0 4px" }}>Cross-origin access</h2>
+    <div className="cors-origins-page" style={{ fontSize: 14, maxWidth: 1000 }}><PageHeader icon="globe" title="Cross-origin access" />
       <p style={{ margin: "0 0 12px" }}>
         The web addresses of your own apps that may send data to Correlix from a browser. The real-user tag needs each app
         listed here; browsers block the data from any other address.

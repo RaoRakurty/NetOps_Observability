@@ -104,6 +104,7 @@ import {
 import { mergeCloudView } from "../../utils/cloudMerge";
 import { withCarrierOverlay } from "../../utils/carrierOverlay";
 import { pathEdgeIds, firstDegree, edgesWithin } from "../../graph/graphAlgorithms";
+import { PageHeader } from "../../../../components/kit";
 import {
   TopologyToolbar,
   TopologySearch,
@@ -926,6 +927,7 @@ function CanvasInner({
 
   return (
     <div className={`topo-root${fullscreen ? " topo-fullscreen" : ""}`}>
+      {!fullscreen && <PageHeader icon="topology" title="Topology" />}
       <TopologyToolbar
         onFit={() => rf.fitView({ padding: fitPadding(showInventory), duration: 320 })}
         onZoomIn={() => rf.zoomIn({ duration: 200 })}

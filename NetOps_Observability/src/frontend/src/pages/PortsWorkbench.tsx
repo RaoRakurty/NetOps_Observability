@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, PortRow } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { operatorError } from "../lib/errors";
+import { PageHeader } from "../components/kit";
 // PortsWorkbench — the service-provider-grade Interfaces / Ports / Optics / DDM
 // workbench (#94 P6). Fleet-wide table over /api/infrastructure/interfaces with
 // six column presets (NOC / Troubleshooting / Optics-DDM / 400G-800G Lane /
@@ -155,7 +156,7 @@ export default function PortsWorkbench() {
   const seams = useMemo(() => Array.from(new Set(rows.map((r) => r.seam).filter(Boolean))) as string[], [rows]);
 
   return (
-    <div style={{ padding: 16 }}>
+    <div style={{ padding: 16 }}><PageHeader icon="plug" title="Interfaces & Optics" />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <h2 style={{ margin: 0, fontSize: 16 }}>Interfaces · Ports · Optics</h2>
         {summary && (

@@ -30,6 +30,7 @@ import { useAuth } from "../hooks/useAuth";
 import AskIris from "../components/AskIris";
 import AdminPageHeader from "../components/admin/AdminPageHeader";
 
+import { PageHeader, StatusChip } from "../components/kit";
 // ---- shared chrome ---------------------------------------------------------
 
 // AdminHead is the shared Administration page header.
@@ -382,20 +383,18 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                   {userLabel(u)}
                   {u.identity_status === "unresolved" && (
                     <span
-                      className="badge warn"
                       style={{ marginLeft: 6 }}
                       title="This account has no single sign-on identity recorded yet. Accounts from a directory (LDAP or TACACS+) are linked automatically when the system starts; this one comes from an identity provider, so it is linked the next time its owner signs in through the same provider that created it. Disable the account if you would rather it were not."
                     >
-                      identity not linked yet
+                      <StatusChip kind="warn" label="identity not linked yet" />
                     </span>
                   )}
                   {u.identity_status === "ambiguous" && (
                     <span
-                      className="badge bad"
                       style={{ marginLeft: 6 }}
                       title="This account cannot be linked automatically: the identity it would be given already belongs to another account. Nothing was merged. Decide which account should keep it, then remove or rename the other."
                     >
-                      needs a decision
+                      <StatusChip kind="bad" label="needs a decision" />
                     </span>
                   )}
                 </td>
@@ -408,8 +407,8 @@ export function UsersAdmin({ scopeTenant, scopeName, scopeNoun = "Tenant" }: { s
                 </td>
                 <td>{u.tenant_id || "—"}</td>
                 <td><span className="badge">{u.auth_source || "local"}</span></td>
-                <td>{u.mfa_enabled ? <span className="badge good" title="Two-factor enabled">On</span> : <span className="adm-line">—</span>}</td>
-                <td><span className={`badge ${u.status === "disabled" ? "warn" : "good"}`}>{u.status || "active"}</span></td>
+                <td>{u.mfa_enabled ? <StatusChip kind="ok" label="On" title="Two-factor enabled" /> : <span className="adm-line">—</span>}</td>
+                <td><StatusChip kind={u.status === "disabled" ? "warn" : "ok"} label={u.status || "active"} /></td>
                 <td>{u.last_login_at ? fmtDateTime(u.last_login_at) : "—"}</td>
               </tr>
             ))}
@@ -684,8 +683,8 @@ export function TenantsAdmin({ onManageTenant, orgId }: { onManageTenant?: (id: 
                     </td>
                     <td>
                       {!isParent && (t.status || "active") === "suspended"
-                        ? <span className="badge bad">Suspended</span>
-                        : <span className="badge good">Active</span>}
+                        ? <StatusChip kind="bad" label="Suspended" />
+                        : <StatusChip kind="ok" label="Active" />}
                     </td>
                     <td style={{ color: "var(--muted)", fontSize: "var(--fs-meta)" }}>{orgName(t.org_id)}</td>
                     <td>
@@ -997,7 +996,7 @@ export function RegionsAdmin() {
   const active = rows.filter((r) => r.tenants > 0 || r.orgs > 0);
   return (
     <div className="adm">
-      <AdminHead title="Regions" sub="Where each tenant's data lives." topic="admin.regions" />
+      <AdminHead icon="map" title="Regions" sub="Where each tenant's data lives." topic="admin.regions" />
       <ErrLine msg={err} />
       <StatStrip>
         <Stat label="Management" value="Global" />
@@ -1779,7 +1778,7 @@ export function IdentityAccess() {
   if (!platform) {
     return (
       <div className="adm">
-        <AdminHead title="Identity & Access" sub="Users, roles and security here." topic="admin.identity" />
+        <AdminHead icon="users" title="Identity & Access" sub="Users, roles and security here." topic="admin.identity" />
         <IAItems kind="tenant" id={user?.tenant_id || ""} deepTab={deepTab} />
       </div>
     );
@@ -1792,7 +1791,7 @@ export function IdentityAccess() {
   return (
     <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Identity & Access" sub="Organizations and the people inside." topic="admin.identity-tree" />
+        <AdminHead icon="users" title="Identity & Access" sub="Organizations and the people inside." topic="admin.identity-tree" />
         <button className="dash-btn accent" onClick={() => setShowAdd(true)}>＋ Add</button>
       </div>
       {showAdd && <GuidedSetupWizard onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); setSel(null); setRefresh((r) => r + 1); }} />}
@@ -1840,7 +1839,7 @@ export function SessionsAdmin() {
   return (
     <div className="adm">
       <div className="admin-head-row">
-        <AdminHead title="Sessions" sub="Live sign-in sessions." topic="admin.sessions" />
+        <AdminHead icon="laptop" title="Sessions" sub="Live sign-in sessions." topic="admin.sessions" />
         <button className="dash-btn" onClick={reload}>↻ Refresh</button>
       </div>
       <StatStrip>
@@ -2079,7 +2078,7 @@ export function ScopePicker({
       })}
       {adminSelected && (
         <div className="planned-banner" style={{ borderColor: "var(--warn)" }}>
-          <span className="badge warn">Administrative key</span>
+          <StatusChip kind="warn" label="Administrative key" />
           <span>
             {platformAdmin
               ? "This credential administers the whole platform — every tenant, every user, every device. Treat it like a root password: give it a source-IP allowlist and an expiry."
@@ -2206,7 +2205,7 @@ export function ApiAccessAdmin() {
   ];
 
   return (
-    <div className="dm-board adm">
+    <div className="dm-board adm"><PageHeader icon="key" title="API Access" />
       <Group title="API access" hue="#3B82F6">
       <StatStrip>
         <Stat label="Keys" value={keys ? list.length : <Skeleton w={26} h={22} />} />
@@ -2263,7 +2262,7 @@ export function ApiAccessAdmin() {
                 <td>{k.created_at ? fmtDate(k.created_at) : "—"}</td>
                 <td>{k.client_expires_at || k.secret_expires_at ? fmtDate(k.client_expires_at || k.secret_expires_at || "") : "never"}</td>
                 <td>{k.last_used_at ? fmtDateTime(k.last_used_at) : "never"}</td>
-                <td>{k.revoked_at ? <span className="badge warn">revoked</span> : <span className="badge good">active</span>}</td>
+                <td>{k.revoked_at ? <StatusChip kind="warn" label="revoked" /> : <StatusChip kind="ok" label="active" />}</td>
                 <td>{!k.revoked_at && <button className="dash-btn" onClick={() => revoke(k)}>Revoke</button>}</td>
               </tr>
             );})}
@@ -2277,7 +2276,7 @@ export function ApiAccessAdmin() {
           <ErrLine msg={err} />
           {secret && (
             <div className="planned-banner" style={{ background: "var(--sev-ok-bg)", borderColor: "var(--good)" }}>
-              <span className="badge good">Client secret</span>
+              <span className="badge">Client secret</span>
               <span>Copy it now — it won't be shown again:&nbsp;<code style={{ userSelect: "all" }}>{secret}</code>
                 <AskIris topic="api.client-secret" label="client secret" />
               </span>
@@ -2420,7 +2419,7 @@ export function GraphQLExplorer() {
   };
 
   return (
-    <div className="card adm">
+    <div className="card adm"><PageHeader icon="code" title="GraphQL Explorer" />
       <div className="admin-card-head">
         <h2>GraphQL explorer</h2>
         <a className="dash-btn" href="/api/graphql" target="_blank" rel="noreferrer">/api/graphql <Icon name="external" size={12} /></a>
@@ -2513,7 +2512,7 @@ function OpenAPIReference({ embedded = false }: { embedded?: boolean }) {
 
 // Small status pill for a provider section.
 function ProviderBadge({ enabled }: { enabled: boolean }) {
-  return <span className={`badge ${enabled ? "good" : "accent-badge"}`}>{enabled ? "Enabled" : "Disabled"}</span>;
+  return <StatusChip kind={enabled ? "ok" : "off"} label={enabled ? "Enabled" : "Disabled"} />;
 }
 
 // Renders a test-connection result (Okta-style: the headline is the role).
@@ -2524,7 +2523,7 @@ function TestResult({ r }: { r: AuthTestResult | null }) {
     // role=status: the async "Test connection" outcome is announced (4.1.3);
     // the OK/FAIL badge text (not only the color) carries the verdict.
     <div role="status" style={{ marginTop: 8, padding: "8px 10px", borderRadius: 6, border: `1px solid ${color}`, background: "var(--panel)", fontSize: 13 }}>
-      <span className={`badge ${r.ok ? "good" : "bad"}`}>{r.ok ? "OK" : "FAIL"}</span>{" "}
+      <StatusChip kind={r.ok ? "ok" : "bad"} label={r.ok ? "OK" : "FAIL"} />{" "}
       <span className="adm-line">[{r.stage}]</span> {r.message}
       {r.resolved_dn && <div className="mono adm-line adm-mt">DN: {r.resolved_dn}</div>}
       {r.groups && r.groups.length > 0 && <div className="adm-line">groups: {r.groups.join(", ")}</div>}
@@ -2873,7 +2872,7 @@ export function AuthenticationAdmin() {
 
   return (
     <div className="adm">
-      <AdminHead title="Authentication" sub="How people sign in." topic="admin.authentication" />
+      <AdminHead icon="user-check" title="Authentication" sub="How people sign in." topic="admin.authentication" />
       <StatStrip>
         <Stat label="Providers" value={AUTH_PROVIDERS.length} />
         <Stat label="Active" value={loaded ? enabledCount : <Skeleton w={26} h={22} />} tone="good" />
@@ -2955,7 +2954,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
   const head = (
     <>
       <ProviderBadge enabled={cfg.enabled} />
-      <span className={`badge ${ready ? "good" : "accent-badge"}`}>{ready ? "Ready" : "Not ready"}</span>
+      <StatusChip kind={ready ? "ok" : "off"} label={ready ? "Ready" : "Not ready"} />
       <label className="auth-enable"><input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled</label>
     </>
   );
@@ -2966,7 +2965,7 @@ function SsoAdminForm({ roleIds, embedded = false }: { roleIds: string[]; embedd
       ) : (
         <div className="admin-card-head">
           <h2>Single Sign-On (OIDC) <ProviderBadge enabled={cfg.enabled} />{" "}
-            <span className={`badge ${ready ? "good" : "accent-badge"}`}>{ready ? "Ready" : "Not ready"}</span>
+            <StatusChip kind={ready ? "ok" : "off"} label={ready ? "Ready" : "Not ready"} />
           </h2>
           <label style={{ fontSize: 13 }}>
             <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Enabled
@@ -3242,7 +3241,7 @@ export function IntegrationsAdmin() {
 
   return (
     <div className="adm">
-      <AdminHead title="Integrations" sub="Your system of record." topic="admin.integrations" />
+      <AdminHead icon="webhook" title="Integrations" sub="Your system of record." topic="admin.integrations" />
       <StatStrip>
         <Stat label="Connectors" value={loaded ? CONNECTORS.length : <Skeleton w={26} h={22} />} />
         <Stat label="Configured" value={loaded ? configuredCount : "—"} tone={configuredCount ? "accent" : ""} />
@@ -3295,7 +3294,7 @@ export function IntegrationsAdmin() {
       {/* Live open tickets per connected connector — real operational data, not config. */}
       {sn?.enabled && (sn.open?.length ?? 0) > 0 && (
         <div className="card">
-          <div className="admin-card-head"><h2>ServiceNow — open incidents</h2><span className="badge good">{sn.open_count ?? sn.open!.length}</span></div>
+          <div className="admin-card-head"><h2>ServiceNow — open incidents</h2><span className="badge">{sn.open_count ?? sn.open!.length}</span></div>
           <table className="ds-table">
             <thead><tr><th>Incident</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
             <tbody>
@@ -3314,7 +3313,7 @@ export function IntegrationsAdmin() {
       )}
       {jira?.enabled && (jira.open?.length ?? 0) > 0 && (
         <div className="card">
-          <div className="admin-card-head"><h2>Jira — open issues</h2><span className="badge good">{jira.open_count ?? jira.open!.length}</span></div>
+          <div className="admin-card-head"><h2>Jira — open issues</h2><span className="badge">{jira.open_count ?? jira.open!.length}</span></div>
           <table className="ds-table">
             <thead><tr><th>Issue</th><th>Severity</th><th>Device</th><th>Summary</th><th>Opened</th></tr></thead>
             <tbody>
@@ -3795,7 +3794,7 @@ export function NotificationsAdmin() {
   return (
     <div className="adm">
       <AdminHead
-        title="Notifications"
+        icon="mail" title="Notifications"
         sub={platform ? "Alerts about Correlix itself." : "Who scheduled reports go to."}
         topic={platform ? "notify.channels" : "notify.contact-points"}
       />
@@ -4298,7 +4297,7 @@ function PolicyEditor({ policy, canWrite, onSaved, onCancel, inModal }: {
         {decision && (
           <div style={{ marginTop: "var(--sp-2)" }}>
             <p style={{ margin: 0 }}>
-              <span className={`badge ${decision.create ? "good" : "warn"}`}>{decision.create ? "Would open a ticket" : "Held"}</span>{" "}
+              <StatusChip kind={decision.create ? "ok" : "warn"} label={decision.create ? "Would open a ticket" : "Held"} />{" "}
               <span className="adm-line">{decision.reason}</span>
             </p>
             {decision.policy_name && (
@@ -4579,8 +4578,8 @@ export function IncidentPoliciesAdmin({ embedded = false, onLoaded }: {
                 </td>
                 <td>
                   {p.enabled && conflictSystems.has(p.external_system || "servicenow")
-                    ? <span className="badge bad">Conflict — ticketing held</span>
-                    : <span className={`badge ${p.enabled ? "good" : ""}`}>{p.enabled ? "Active" : "Disabled"}</span>}
+                    ? <StatusChip kind="bad" label="Conflict — ticketing held" />
+                    : <StatusChip kind={p.enabled ? "ok" : "off"} label={p.enabled ? "Active" : "Disabled"} />}
                 </td>
                 <td className="adm-line">{policyGates(p).join(" · ")}</td>
                 <td className="adm-line">{p.assignment_group || "—"}</td>

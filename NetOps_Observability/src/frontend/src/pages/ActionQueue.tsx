@@ -24,6 +24,7 @@ import {
 import { Segmented } from "../components/ui";
 import { FilterBar, queueColumns, ExpandPanel } from "./CommandCenter";
 import AskIris from "../components/AskIris";
+import { PageHeader } from "../components/kit";
 import WirelessRemediation from "./WirelessRemediation";
 
 export default function ActionQueue() {
@@ -72,12 +73,18 @@ export default function ActionQueue() {
 
   return (
     <div className="dm-board cc-board">
+      <PageHeader
+        icon="alert-triangle"
+        title="Problems"
+        count={loaded && !err ? needsCount : undefined}
+        actions={
+          <>
+            <AskIris topic="queue.action-queue" label="Problems" />
+            <a className="cc-panel-meta" href="#/overview/home">KPIs in Command Center →</a>
+          </>
+        }
+      />
       <div className="cc-panel">
-        <div className="cc-panel-h">
-          <h3 className="cc-panel-t">Problems</h3>
-          <AskIris topic="queue.action-queue" label="Problems" />
-          <span className="cc-panel-meta"><a href="#/overview/home">KPIs in Command Center →</a></span>
-        </div>
         {err && <p className="cc-err">{err}</p>}
         {loaded && (
           <div className="cc-tabs">

@@ -22,7 +22,9 @@ import { buildTopoGraph } from "../components/rca/topoGraph";
 import { readTopologyContext, type TopologyContext } from "../components/rca/topologyContext";
 import { exportRcaPdf } from "../components/rca/rcaExport";
 import { signatureName, ownerLabel, isInternalStackAffected, friendlyProblemId, ticketStateLabel } from "../components/rca/labels";
-import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import { NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import { PageHeader, PillSelect, StatusChip, type StatusKind } from "../components/kit";
+import AskIris from "../components/AskIris";
 import { operatorError } from "../lib/errors";
 // RCA is for CUSTOMER networks; internal self-monitoring objects (every affected
 // entity is our own infra) are hidden by default and revealed via a toggle for
@@ -38,10 +40,13 @@ const isInternalStackObject = (o: CorrObject): boolean => isInternalStackAffecte
 
 const mono: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 13 };
 
-const TIER_CLASS: Record<string, string> = {
-  confirmed: "sev-critical",   // strongest claim → strongest visual weight
-  suspected: "sev-warning",
-  undetermined: "",
+// A verdict tier → its StatusChip tone. A CONFIRMED root cause is a confirmed
+// fault (red, the strongest claim); suspected is amber; not confirmed is
+// neutral. Same meaning the old sev-critical / sev-warning badges carried.
+const TIER_KIND: Record<string, StatusKind> = {
+  confirmed: "bad",
+  suspected: "suspected",
+  undetermined: "neutral",
 };
 
 function parseJSON<T>(raw: string | undefined, fallback: T): T {
@@ -148,14 +153,17 @@ function TierChip({ label, n, tone, active, onClick, title }: {
       aria-pressed={active}
       title={title}
       style={{
-        display: "inline-flex", alignItems: "baseline", gap: 6, cursor: "pointer",
-        padding: "4px 11px", borderRadius: 999, fontSize: 12.5,
-        border: `1px solid ${active ? tone : "var(--border)"}`,
-        background: active ? tone + "1c" : "var(--surface)",
-        color: active ? tone : "var(--fg)",
-        fontWeight: active ? 700 : 500,
+        display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
+        padding: "4px 11px", borderRadius: 8, fontSize: 13,
+        border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+        background: active ? "color-mix(in srgb, var(--accent) 12%, var(--surface))" : "var(--surface)",
+        color: active ? "var(--accent)" : "var(--fg)",
+        fontWeight: active ? 600 : 500,
       }}
     >
+      {/* Visual language: the tier's meaning is a small semantic dot (beside
+          its word); selection is the one accent. A neutral tier has no dot. */}
+      {tone && <span aria-hidden style={{ width: 8, height: 8, borderRadius: 999, background: tone, flex: "none" }} />}
       <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{n ?? "…"}</span>
       <span>{label}</span>
     </button>
@@ -227,8 +235,8 @@ export default function Correlations() {
     { key: "created_at", header: "Updated", width: 160, sortable: true,
       sortValue: (o) => parseTs(o.created_at)?.getTime() || 0,
       render: (o) => <span style={mono}>{fmtDateTime(o.created_at)}</span> },
-    { key: "verdict_tier", header: "Status", width: 116, sortable: true, text: (o) => o.verdict_tier,
-      render: (o) => <span className={`badge ${TIER_CLASS[o.verdict_tier] ?? ""}`}>{VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier}</span> },
+    { key: "verdict_tier", header: "Status", width: 148, sortable: true, text: (o) => o.verdict_tier,
+      render: (o) => <StatusChip kind={TIER_KIND[o.verdict_tier] ?? "neutral"} label={VERDICT_NOC[o.verdict_tier] ?? o.verdict_tier} /> },
     // #113: promoted tier badge — this row has a management RCA document (in
     // the RCA Reports library). Membership check only; never re-evaluated here.
     { key: "promoted", header: "RCA doc", width: 84, sortable: true,
@@ -445,18 +453,24 @@ export default function Correlations() {
   const truncated = tierTotal !== null && visible.length < tierTotal;
   return (
     <div className="dm-board cc-board">
-      <NocHeader
+      <PageHeader
+        icon="target"
         title="RCA Candidates"
-        topic="rca.candidates"
-        chips={<><Chip label={`${trueTotal ?? visible.length} candidates · 24h`} /><LiveChip detail="correlation engine" /></>}
-      >
+        count={trueTotal ?? visible.length}
+        actions={<>
+          <Chip label={`${trueTotal ?? visible.length} candidates · 24h`} />
+          <LiveChip detail="correlation engine" />
+          <AskIris topic="rca.candidates" label="RCA Candidates" />
+        </>}
+      />
+      <div className="cc-hero" style={{ paddingTop: 0 }}>
         <NocKpis cols={4}>
           <NocKpi n={trueTotal ?? visible.length} label="Candidates" topic="rca.candidates" />
           <NocKpi n={rConfirmed} label="Confirmed" topic="kpi.confirmed-rca" tone={rConfirmed ? "var(--crit)" : "var(--ok)"} />
           <NocKpi n={rSuspected} label="Suspected" topic="kpi.suspected-rca" tone={rSuspected ? "var(--warn)" : undefined} />
           <NocKpi n={rUndet} label="Not confirmed" topic="rca.not-confirmed" />
         </NocKpis>
-      </NocHeader>
+      </div>
       {deepErr && (
         <div className="cc-panel" style={{ borderColor: "var(--warn)", padding: "10px 13px", marginBottom: 10 }}>
           <span style={{ color: "var(--warn)", fontWeight: 500 }}>RCA not found.</span>{" "}
@@ -479,20 +493,20 @@ export default function Correlations() {
           {/* Stat-chip row (owner directive: DON'T HIDE) — true window counts,
               each chip clickable to filter the table to that verdict tier. */}
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <TierChip label="total" n={trueTotal} tone="var(--accent, #2563EB)"
+            <TierChip label="total" n={trueTotal} tone=""
               active={tier === ""} onClick={() => setTier("")}
               title="All candidates in the last 24h (merged duplicates excluded)" />
-            <TierChip label="confirmed" n={summary?.confirmed ?? null} tone="#E11D48"
+            <TierChip label="confirmed" n={summary?.confirmed ?? null} tone="var(--crit)"
               active={tier === "confirmed"} onClick={() => setTier(tier === "confirmed" ? "" : "confirmed")}
               title="Confirmed root causes" />
-            <TierChip label="suspected" n={summary?.suspected ?? null} tone="#D97706"
+            <TierChip label="suspected" n={summary?.suspected ?? null} tone="var(--warn)"
               active={tier === "suspected"} onClick={() => setTier(tier === "suspected" ? "" : "suspected")}
               title="Suspected root causes" />
-            <TierChip label="not confirmed" n={summary?.undetermined ?? null} tone="#8A93A6"
+            <TierChip label="not confirmed" n={summary?.undetermined ?? null} tone=""
               active={tier === "undetermined"} onClick={() => setTier(tier === "undetermined" ? "" : "undetermined")}
               title="Undetermined — still gathering evidence" />
             {/* #113: narrow (client-side) to rows with a promoted RCA document */}
-            <TierChip label="promoted" n={promotedVisible} tone="#16A34A"
+            <TierChip label="promoted" n={promotedVisible} tone=""
               active={promotedOnly} onClick={() => setPromotedOnly((v) => !v)}
               title="Promoted real outages — those whose RCA document is in the RCA Reports library" />
             {summary && (
@@ -507,17 +521,23 @@ export default function Correlations() {
             )}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-            <select value={state} onChange={(e) => setState(e.target.value)} aria-label="Filter by state">
-              <option value="">All states</option>
-              <option value="open">Open</option>
-              <option value="closed">Resolved</option>
-            </select>
-            <select value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Filter by status">
-              <option value="">All statuses</option>
-              <option value="confirmed">Confirmed</option>
-              <option value="suspected">Suspected</option>
-              <option value="undetermined">Not confirmed</option>
-            </select>
+            <PillSelect
+              label="Filter by state" icon="activity" value={state} onChange={setState}
+              options={[
+                { value: "", label: "All states" },
+                { value: "open", label: "Open" },
+                { value: "closed", label: "Resolved" },
+              ]}
+            />
+            <PillSelect
+              label="Filter by status" icon="target" value={tier} onChange={setTier}
+              options={[
+                { value: "", label: "All statuses" },
+                { value: "confirmed", label: "Confirmed" },
+                { value: "suspected", label: "Suspected" },
+                { value: "undetermined", label: "Not confirmed" },
+              ]}
+            />
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--muted)", marginLeft: "auto" }}>
               <input type="checkbox" checked={showInternal} onChange={(e) => setShowInternal(e.target.checked)} />
               Show internal/stack{hiddenInternal > 0 && !showInternal ? ` (${hiddenInternal} hidden)` : ""}

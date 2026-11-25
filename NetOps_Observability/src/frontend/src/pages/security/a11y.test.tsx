@@ -137,7 +137,9 @@ describe("Finding detail a11y", () => {
 
   it("explains an unassessed verdict in its tooltip rather than leaving a bare grey chip", () => {
     render(<FindingDetail finding={FINDINGS[3]} />);
-    const chip = screen.getAllByText("Unassessed")[0];
+    // StatusChip carries the tooltip on the chip; the word is its inner text.
+    const chip = screen.getAllByText("Unassessed")[0].closest(".kit-status")!;
     expect(chip.getAttribute("title")).toMatch(/unknown, not clear/i);
+    expect(chip.getAttribute("data-tone")).toBe("neutral");
   });
 });

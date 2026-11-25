@@ -41,6 +41,7 @@ import { useOverviewData } from "./useOverviewData";
 import { customerProblems, internalObjects, topProblem } from "./overviewModel";
 import { AttentionBlock, LazyGroup, Liveness, RegistryCell, SiteHealth } from "./boardParts";
 import DashboardPicker from "./DashboardPicker";
+import { PageHeader } from "../../components/kit";
 import { ReadOnlyBoard } from "./MyDashboards";
 import {
   CapacityOutlook, ImpactSummary, InternalMonitoringChecks, KpiStrip, PlatformHealth, RcaCoverage,
@@ -107,16 +108,12 @@ function useOverviewRoute(): OverviewRoute {
 function TeamOverview({ board }: { board: SavedObject }) {
   return (
     <div className="overview-page fp dm-board" data-testid="overview-page">
-      <div className="mydash-head">
-        <div>
-          <h1 className="mydash-title">Overview</h1>
-          <div className="ov-sub">Your team's default: {board.name}</div>
-        </div>
-        <div className="ov-head-right">
-          <DashboardPicker current="default" teamDefault />
-          <Liveness />
-        </div>
-      </div>
+      <PageHeader
+        icon="dashboards"
+        title="Overview"
+        subtitle={`Your team's default: ${board.name}`}
+        actions={<><DashboardPicker current="default" teamDefault /><Liveness /></>}
+      />
       <ReadOnlyBoard board={board} />
     </div>
   );
@@ -154,22 +151,18 @@ function BuiltinOverview({ teamDefault }: { teamDefault: boolean }) {
 
   return (
     <div className="overview-page fp dm-board" data-testid="overview-page">
-      <div className="mydash-head">
-        <div>
-          <h1 className="mydash-title">Overview</h1>
-          <div className="ov-sub">What is broken, where, and what to do first.</div>
-        </div>
-        <div className="ov-head-right">
-          <DashboardPicker current="standard" teamDefault={teamDefault} />
-          <Liveness />
-        </div>
-      </div>
+      <PageHeader
+        icon="dashboards"
+        title="Overview"
+        subtitle="What is broken, where, and what to do first."
+        actions={<><DashboardPicker current="standard" teamDefault={teamDefault} /><Liveness /></>}
+      />
 
       <AttentionBlock d={d} />
 
       <Safe><KpiStrip problems={problems} health={d.health} stats={d.stats} /></Safe>
 
-      <LazyGroup title="Open problems" hue="#ef4444" topic="page.overview">
+      <LazyGroup title="Open problems" topic="page.overview">
         <div className="dm-grid">
           <Safe><TopIssues problems={problems} health={d.health} err={d.corrErr} /></Safe>
           <Safe><RcaPathPanel top={top} err={d.corrErr} /></Safe>
@@ -178,7 +171,7 @@ function BuiltinOverview({ teamDefault }: { teamDefault: boolean }) {
         </div>
       </LazyGroup>
 
-      <LazyGroup title="What is broken now" hue="#f97316">
+      <LazyGroup title="What is broken now">
         <div className="ov-grid">
           <RegistryCell type="active-alerts" span={6} />
           <div className="col-6"><Safe><TopHealthContributors health={d.health} err={d.healthErr} /></Safe></div>
@@ -188,18 +181,18 @@ function BuiltinOverview({ teamDefault }: { teamDefault: boolean }) {
         </div>
       </LazyGroup>
 
-      <LazyGroup title="Health by site" hue="#14b8a6">
+      <LazyGroup title="Health by site">
         <Safe><SiteHealth /></Safe>
       </LazyGroup>
 
-      <LazyGroup title="What changed" hue="#8b5cf6">
+      <LazyGroup title="What changed">
         <div className="dm-grid">
           <Safe><WhatChanged /></Safe>
           <Safe><CapacityOutlook /></Safe>
         </div>
       </LazyGroup>
 
-      <LazyGroup title="Is data arriving" hue="#3b82f6">
+      <LazyGroup title="Is data arriving">
         <div className="ov-grid">
           <div className="col-6"><Safe><TelemetryCoverage health={d.health} err={d.healthErr} /></Safe></div>
           <RegistryCell type="site-availability" span={6} title="Devices reachable" />
@@ -208,7 +201,7 @@ function BuiltinOverview({ teamDefault }: { teamDefault: boolean }) {
         </div>
       </LazyGroup>
 
-      <LazyGroup title="Traffic and resources" hue="#06b6d4" defaultOpen={false}>
+      <LazyGroup title="Traffic and resources" defaultOpen={false}>
         <div className="ov-grid">
           <RegistryCell type="traffic" span={8} />
           <RegistryCell type="tunnels-health" span={4} />

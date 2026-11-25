@@ -27,6 +27,7 @@ import { useFeatureSwitches } from "./useFeatureSwitches";
 import { IRIS_MODELS_ROUTE } from "../../iris/connectModel";
 import { PlatformAlertsNotice } from "../../components/PlatformAlertsNotice";
 
+import { PageHeader } from "../../components/kit";
 export default function Features() {
   const { load, busy, rowError, save: saveEnv, restart, requestRestart } = useFeatureSwitches();
   const [confirm, setConfirm] = useState<PlatformFeature | null>(null);
@@ -49,8 +50,7 @@ export default function Features() {
   const { data } = load;
 
   return (
-    <div className="features-page" style={{ fontSize: 14, maxWidth: 1100 }}>
-      <h2 style={{ margin: "0 0 4px" }}>Features</h2>
+    <div className="features-page" style={{ fontSize: 14, maxWidth: 1100 }}><PageHeader icon="toggle" title="Features" />
       {/* The model connection moved to Administration → Iris → AI models
           (owner 2026-11-19, "consolidate"); the on/off switches stay here. */}
       <p className="fact-line" data-testid="features-iris-models-link" style={{ margin: "0 0 12px" }}>

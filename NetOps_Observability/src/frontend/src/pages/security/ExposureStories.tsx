@@ -10,6 +10,7 @@ import { fmtDateTime } from "../../lib/time";
 import { storyConfidence, storyList } from "./model";
 import { operatorError } from "../../lib/errors";
 import AskIris from "../../components/AskIris";
+import { PageHeader } from "../../components/kit";
 // WORD SWEEP (2026-09-06, tracker 270): the "security is a fourth evidence
 // class" paragraph is now ai/skills/explain/story.rca-workspace.md.
 //
@@ -121,7 +122,7 @@ export default function ExposureStories() {
   }
 
   return (
-    <div className="sec dm-board">
+    <div className="sec dm-board"><PageHeader icon="book" title="Exposure Stories" />
       <Group title="Exposure stories" hue="#0ea5e9">
         {err ? (
           <div className="empty" role="alert" style={{ color: "var(--bad)" }}>{err}</div>

@@ -2,6 +2,8 @@
 // Copyright 2026 Correlix
 
 import { parseTs } from "../lib/time";
+import { PageHeader } from "../components/kit";
+import Icon from "../components/Icon";
 import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { FlowDetail, FlowTitle } from "../components/logs/FlowRowParts";
 import { api, OSHit, ExportFmt, LogSampling, LogSearchOpts } from "../services/api";
@@ -568,13 +570,16 @@ export default function Logs({ initialQuery, rangeMinutes, initialSignal }: Prop
   return (
     <div className="lv">
       <div className="card">
-        <div className="lv-head">
-          <h2 className="lv-title">Log search</h2>
-          <button type="button" className="lv-help-btn" aria-label="Search examples" title="Search examples"
-            aria-expanded={helpOpen} aria-controls="lv-help" onClick={() => setHelpOpen((o) => !o)}>
-            ?
-          </button>
-        </div>
+        <PageHeader
+          icon="logs"
+          title="Log search"
+          actions={
+            <button type="button" className="kit-obtn kit-icon-only" aria-label="Search examples" title="Search examples"
+              aria-expanded={helpOpen} aria-controls="lv-help" onClick={() => setHelpOpen((o) => !o)}>
+              <Icon name="help" size={15} />
+            </button>
+          }
+        />
         {helpOpen && (
           <div className="lv-help" id="lv-help" data-testid="logs-search-help">
             <code>severity:err</code>

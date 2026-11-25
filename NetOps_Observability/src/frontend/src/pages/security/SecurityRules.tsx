@@ -9,6 +9,7 @@ import { Group } from "../../components/board/panels";
 import { fidelityTone, mitreList, rulesPutPayload } from "./model";
 import { operatorError } from "../../lib/errors";
 import AskIris from "../../components/AskIris";
+import { PageHeader } from "../../components/kit";
 // WORD SWEEP (2026-09-06, tracker 270): what fidelity means, and what disabling
 // a rule costs, are ai/skills/explain/rules.*.md behind the `(i)`.
 //
@@ -109,7 +110,7 @@ export default function SecurityRules() {
   ], [pending, rules]);
 
   return (
-    <div className="sec dm-board">
+    <div className="sec dm-board"><PageHeader icon="sliders" title="Detection Rules" />
       <Group title="Detection rules" hue="#0ea5e9">
         <div className="sec-toolbar">
           <button className="btn accent" type="button" disabled={payload.length === 0 || busy} onClick={() => { void save(); }}>

@@ -102,7 +102,7 @@ export default function DiscoveryHub() {
 
   return (
     <div className="adm discovery-hub">
-      <AdminPageHeader title="Discovery" topic="admin.discovery" />
+      <AdminPageHeader icon="radio-tower" title="Discovery" topic="admin.discovery" />
       {visibleSections(platform).map((s, i) => (
         <AdminSection key={s.id} id={s.id} title={`${i + 1}. ${s.title}`} summary={s.summary} open={open.has(s.id)} onToggle={toggle}>
           {/* One section failing must not blank the other four. */}

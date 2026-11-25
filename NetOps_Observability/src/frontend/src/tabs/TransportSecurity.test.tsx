@@ -106,7 +106,8 @@ describe("TransportSecurity — platform scope", () => {
   it("discloses drift in a warning badge and exceptions with owner/date/age/reason", async () => {
     render(<TransportSecurity />);
     const drift = await screen.findByText("declared tls, running plaintext");
-    expect(drift).toHaveClass("badge", "warn");
+    // A state is a StatusChip (visual language): icon + word + the warning tone.
+    expect(drift.closest(".kit-status")).toHaveAttribute("data-tone", "warn");
     expect(screen.getByText(new RegExp(`rao, accepted ${fmtDate("2026-07-01T00:00:00Z")}, 36d, SNMPv2 fleet`))).toBeInTheDocument();
   });
 
