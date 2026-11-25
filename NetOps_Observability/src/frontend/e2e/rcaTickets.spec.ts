@@ -40,7 +40,8 @@ test("steps unlock in order: destinations → rules → deliveries", async ({ pa
   const w: World = { pagerduty: false, policies: [], running: true, outbox: [] };
   await boot(page, w);
   await page.goto("/#/admin/ticketing");
-  await expect(page.getByRole("heading", { name: "RCA Tickets" })).toBeVisible();
+  // First paint compiles the lazy page chunk on the cold dev server: the repo-wide 30 s first-paint wait (#396).
+  await expect(page.getByRole("heading", { name: "RCA Tickets" })).toBeVisible({ timeout: 30_000 });
   await expect(step(page, "rules")).toContainText("Finish step 1 first.");
   await expect(step(page, "deliveries")).toContainText("Finish step 2 first.");
   // Vendor case routing serves TAC escalation on its own — never locked.
@@ -48,7 +49,7 @@ test("steps unlock in order: destinations → rules → deliveries", async ({ pa
 
   w.pagerduty = true;
   await page.reload();
-  await expect(step(page, "destinations").locator('[data-testid="dest-pagerduty"]')).toContainText("Connected");
+  await expect(step(page, "destinations").locator('[data-testid="dest-pagerduty"]')).toContainText("Connected", { timeout: 30_000 });
   await expect(step(page, "rules")).not.toContainText("Finish step");
   await expect(step(page, "deliveries")).not.toContainText("Finish step");
 });
@@ -59,6 +60,9 @@ test("a failed delivery is visible while the steps before it are locked", async 
     outbox: [{ id: "ob-1", corr_object_id: "11111111-1111-1111-1111-111111111111", system: "servicenow", status: "dead", attempts: 5, last_error: "401 Unauthorized from the provider", created_at: new Date().toISOString(), updated_at: new Date().toISOString() }],
   });
   await page.goto("/#/admin/ticketing");
+  // A negative assertion passes on a page that has not painted yet: wait for the
+  // step itself first, with the repo-wide 30 s first-paint wait (#396).
+  await expect(step(page, "deliveries")).toBeVisible({ timeout: 30_000 });
   await expect(step(page, "deliveries")).not.toContainText("Finish step");
   await expect(step(page, "deliveries")).toContainText("1 in the outbox");
   await expect(step(page, "rules")).toContainText("Finish step 1 first.");
@@ -67,6 +71,6 @@ test("a failed delivery is visible while the steps before it are locked", async 
 test("the old Ticket Delivery address lands on the Deliveries step", async ({ page }) => {
   await boot(page, { pagerduty: true, policies: [], running: true, outbox: [] });
   await page.goto("/#/admin/ticket-delivery");
-  await expect(page).toHaveURL(/#\/admin\/ticketing\/deliveries$/);
+  await expect(page).toHaveURL(/#\/admin\/ticketing\/deliveries$/, { timeout: 30_000 });
   await expect(step(page, "deliveries")).toBeVisible();
 });
