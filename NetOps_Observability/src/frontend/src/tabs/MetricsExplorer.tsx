@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "../components/EChart";
+import { PageHeader } from "../components/kit";
 import { api, PromSeries } from "../services/api";
 import { deviceDisplayName, useDeviceNames } from "../lib/deviceNames";
 import { chartBase, axisStyle, timeAxisTicks, paletteColor, colorForMetric } from "../theme/charts";
@@ -272,10 +273,7 @@ export default function MetricsExplorer({ rangeMinutes = 60 }: Props) {
   return (
     <>
       <div className="card">
-        <div className="xpl-head">
-          <h2>Metric Workbench</h2>
-          <span className="xpl-sub">Pick a metric from the catalog, or write a query</span>
-        </div>
+        <PageHeader icon="metrics" title="Metric Workbench" subtitle="Pick a metric from the catalog, or write a query" />
 
         {/* categorized quick-picks of real telemetry. */}
         <div className="xpl-picks">

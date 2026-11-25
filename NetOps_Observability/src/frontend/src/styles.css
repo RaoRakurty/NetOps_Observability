@@ -859,6 +859,9 @@ code, kbd, pre, .mono, td.mono {
   flex: 1 1 auto; min-height: 0;
 }
 .page.page-bleed .topo-root { flex: 1 1 auto; min-height: 0; }
+/* Visual language: the Topology page header sits inside the 6px bleed gutter;
+   a tighter bottom gap keeps the canvas as tall as before. */
+.topo-root > .kit-ph { margin: 4px 6px 8px; padding-bottom: 8px; flex: none; }
 /* The stage's 60vh floor exists for pages that scroll; inside the bleed layout it
    would re-introduce overflow on a short viewport. Here the flex chain sizes it. */
 .page.page-bleed .topo-stage { min-height: 0; }

@@ -23,6 +23,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Segmented } from "../components/ui";
+import { PageHeader } from "../components/kit";
+import Icon from "../components/Icon";
 import { RefreshTickContext, useRefreshTick } from "../lib/refreshTick";
 import { fmtDateTime } from "../lib/time";
 import RightNow from "./flows/RightNow";
@@ -101,10 +103,17 @@ export default function Flows({ rangeMinutes = 60 }: { rangeMinutes?: number } =
   return (
     <RefreshTickContext.Provider value={tick}>
       <div className="flows-page" data-testid="flows-page">
+        <PageHeader
+          icon="flows"
+          title="Flows"
+          actions={
+            <button type="button" className="kit-obtn" onClick={() => setAboutOpen(true)} aria-haspopup="dialog">
+              <Icon name="info" size={15} />About this data
+            </button>
+          }
+        />
         <div className="tr-head">
-          <h2>Flows</h2>
           <Segmented<FlowsTab> value={tab} ariaLabel="Flows tabs" options={TABS} onChange={(t) => go(t)} />
-          <button className="btn-ghost tr-about-btn" onClick={() => setAboutOpen(true)} aria-haspopup="dialog">About this data</button>
         </div>
 
         {win.problem && (

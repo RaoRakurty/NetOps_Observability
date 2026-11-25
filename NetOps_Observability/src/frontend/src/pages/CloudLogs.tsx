@@ -2,6 +2,7 @@
 // Copyright 2026 Correlix
 
 import { fmtDateTime, parseTs } from "../lib/time";
+import { PageHeader } from "../components/kit";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, OSHit, CloudResourceRow, CloudChangeRow } from "../services/api";
 import { severityColor } from "../theme/severity";
@@ -264,13 +265,11 @@ export default function CloudLogs() {
     <>
       <style>{CLOG_CSS}</style>
       <div className="card">
-        <div className="xpl-head">
-          <h2>Cloud Logs</h2>
-          <span className="xpl-sub">
-            Every cloud log family in one place — raw, tagged, searchable. A lane
-            shows only what actually ingested.
-          </span>
-        </div>
+        <PageHeader
+          icon="cloud"
+          title="Cloud Logs"
+          subtitle="Every cloud log family in one place — raw, tagged, searchable. A lane shows only what actually ingested."
+        />
 
         <div className="clog-tabs" role="tablist" aria-label="Cloud log families">
           {LANES.map((l) => (

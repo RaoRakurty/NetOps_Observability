@@ -15,7 +15,6 @@ import type {
 } from "../api/topologyTypes";
 import {
   HEALTH_COLOR,
-  HEALTH_GLYPH,
   HEALTH_LABEL,
   edgeEvidenceSummary,
   statusToHealth,
@@ -24,6 +23,7 @@ import {
   fmtUtil,
 } from "../utils/topologyHealth";
 import type { Health } from "../api/topologyTypes";
+import { StatusChip, type StatusKind } from "../../../components/kit";
 import { siteName, siteProvenance, isDiscoveredGroup } from "../utils/siteName";
 import ConfidencePanel from "./ConfidencePanel";
 import EvidencePanel from "./EvidencePanel";
@@ -47,28 +47,17 @@ const RELATIONSHIP_LABEL: Record<string, string> = {
   flow: "Traffic dependency",
 };
 
+// Visual language: health is a StatusChip (icon + word + semantic colour).
+const HEALTH_KIND: Record<Health, StatusKind> = {
+  ok: "healthy",
+  warning: "warning",
+  critical: "critical",
+  unknown: "unknown",
+  maintenance: "info",
+};
+
 function HealthBadge({ health }: { health: Health }) {
-  const color = HEALTH_COLOR[health];
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: 12.5,
-        fontWeight: 500,
-        color,
-        border: `1px solid ${color}`,
-        borderRadius: 5,
-        padding: "2px 8px",
-      }}
-    >
-      <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600 }}>
-        {HEALTH_GLYPH[health]}
-      </span>
-      {HEALTH_LABEL[health]}
-    </span>
-  );
+  return <StatusChip kind={HEALTH_KIND[health] ?? "unknown"} label={HEALTH_LABEL[health]} />;
 }
 
 const sectionTitle: React.CSSProperties = {

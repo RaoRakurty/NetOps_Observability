@@ -344,7 +344,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await boot(page, "#/explore/flows");
     await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
-    const transition = await page.evaluate(() => getComputedStyle(document.querySelector(".flows-page .btn-ghost")!).transitionDuration);
+    const transition = await page.evaluate(() => getComputedStyle(document.querySelector(".flows-page .kit-obtn, .flows-page .btn-ghost")!).transitionDuration);
     expect(transition.split(",").every((d) => parseFloat(d) === 0)).toBe(true);
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     const table = page.getByRole("grid", { name: "Busiest links" });
