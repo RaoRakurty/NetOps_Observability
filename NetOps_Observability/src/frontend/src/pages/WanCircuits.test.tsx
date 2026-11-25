@@ -219,13 +219,36 @@ describe("measured paths on the rows", () => {
   it("lists a path no row claims apart, collapsed, and opens it too", async () => {
     mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
     render(<WanCircuits measured={probed([TRACE, ELSEWHERE])} />);
-    const box = await screen.findByTestId("paths-other");
+    // Wait for the LOADED rows, not for the box: the box is only meaningful once
+    // the interface list has answered (it used to appear first, counting 2).
+    await screen.findByTestId("path-cell");
+    const box = screen.getByTestId("paths-other");
     expect(box.tagName).toBe("DETAILS");
     expect((box as HTMLDetailsElement).open).toBe(false);
     expect(within(box).getByText("Measured paths to other targets (1)")).toBeTruthy();
     expect(within(box).getByTestId("path-verdict").textContent).toBe("Not reached");
     fireEvent.click(within(box).getByTestId("paths-other-open"));
     expect(within(screen.getByTestId("path-panel")).getByRole("heading", { name: "To 8.8.8.8" })).toBeTruthy();
+  });
+
+  it("counts no path as unclaimed until the interface list has answered", async () => {
+    let release: (v: unknown) => void = () => {};
+    mockApi.wanInterfaces.mockReturnValue(new Promise((r) => { release = r; }));
+    render(<WanCircuits measured={probed([TRACE, ELSEWHERE])} />);
+    // Before the read answers: no box — the old page showed "(2)" here, every
+    // path unclaimed because no row had been read yet.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("paths-other")).toBeNull();
+    release({ interfaces: [wanRow()] });
+    await screen.findByTestId("path-cell");
+    expect(within(screen.getByTestId("paths-other")).getByText("Measured paths to other targets (1)")).toBeTruthy();
+  });
+
+  it("a failed interface read says the claim is unknown instead of counting every path unclaimed", async () => {
+    mockApi.wanInterfaces.mockRejectedValue(new Error("502 Bad Gateway"));
+    render(<WanCircuits measured={probed([TRACE, ELSEWHERE])} />);
+    expect(await screen.findByTestId("paths-other-unknown")).toBeTruthy();
+    expect(screen.queryByTestId("paths-other")).toBeNull();
   });
 
   it("shows a dash for a row with no measured path, and opens nothing", async () => {
