@@ -4,10 +4,22 @@
 import { fmtDateTime, parseTs } from "../lib/time";
 import { useEffect, useMemo, useState } from "react";
 import { api, Finding } from "../services/api";
-import { severityClass, severityColor, severityRank } from "../theme/severity";
+import { severityColor, severityRank } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
-import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import { NocKpis, NocKpi, LiveChip } from "../components/noc";
+import { PageHeader, PillSelect, StatusChip, type StatusKind } from "../components/kit";
+import { deviceDisplayName, useDeviceNames } from "../lib/deviceNames";
+
+/** A finding's severity → its semantic tone (critical red, warning amber, info blue). */
+function severityKind(sev: string | undefined): StatusKind {
+  switch ((sev || "").toLowerCase()) {
+    case "critical": case "crit": case "high": return "critical";
+    case "warning": case "warn": return "warning";
+    case "info": return "info";
+    default: return "unknown";
+  }
+}
 import Logs from "./Logs";
 import { operatorError } from "../lib/errors";
 // Findings are written by the Correlation/AI service into ClickHouse
@@ -26,6 +38,7 @@ export default function Findings() {
   const [severity, setSeverity] = useState<string>("");
   const [sel, setSel] = useState<string | null>(null);
   const ws = useWorkspace();
+  const names = useDeviceNames();
 
   const columns = useMemo<Column<Finding>[]>(() => [
     { key: "ts", header: "Time", width: 168, sortable: true,
@@ -33,18 +46,20 @@ export default function Findings() {
       render: (f) => <span style={mono}>{fmtDateTime(f.ts)}</span> },
     { key: "severity", header: "Severity", width: 92, sortable: true,
       text: (f) => f.severity, sortValue: (f) => severityRank(f.severity),
-      render: (f) => <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span> },
+      render: (f) => <StatusChip kind={severityKind(f.severity)} label={f.severity || "unknown"} /> },
     { key: "kind", header: "Kind", width: 120, sortable: true, text: (f) => f.kind,
-      render: (f) => <span title={f.kind}>{f.kind}</span> },
+      render: (f) => <span className="kit-muted" title={f.kind}>{f.kind}</span> },
     { key: "device", header: "Device", width: 150, sortable: true, text: (f) => f.device ?? "",
-      render: (f) => <span style={mono} title={f.device || ""}>{f.device || "—"}</span> },
+      render: (f) => f.device
+        ? <span className="kit-host-name" title={`${deviceDisplayName(f.device, names)} (id ${f.device})`}>{deviceDisplayName(f.device, names)}</span>
+        : <span className="kit-muted">—</span> },
     { key: "component", header: "Component", width: 120, text: (f) => f.component ?? "",
-      render: (f) => <span title={f.component || ""}>{f.component || "—"}</span> },
+      render: (f) => <span className="kit-muted" title={f.component || ""}>{f.component || "—"}</span> },
     { key: "summary", header: "Summary", text: (f) => f.summary,
       render: (f) => <span title={f.summary}>{f.summary}</span> },
     { key: "score", header: "Score", width: 64, align: "right", sortable: true,
       sortValue: (f) => Number(f.score) || 0, render: (f) => f.score?.toFixed(1) },
-  ], []);
+  ], [names]);
 
   useEffect(() => {
     let alive = true;
@@ -91,31 +106,40 @@ export default function Findings() {
   const fInfo = items.filter((f) => f.severity === "info").length;
   return (
     <div className="dm-board cc-board">
-      <NocHeader
-        title="Detected Findings"
+      <PageHeader
+        icon="flag"
+        title="Findings"
+        count={items.length}
         subtitle="Observations that deviate from baseline and may contribute to incidents or RCA candidates."
-        chips={<><Chip label={`${items.length} findings`} /><LiveChip detail="anomaly + correlation" /></>}
-      >
+        actions={<LiveChip detail="anomaly + correlation" />}
+      />
+      <div className="cc-hero" style={{ paddingTop: 0 }}>
         <NocKpis cols={4}>
           <NocKpi n={items.length} label="Findings" interp="detected this window" />
           <NocKpi n={fCrit} label="Critical" interp="severe deviation" tone={fCrit ? "var(--crit)" : undefined} />
           <NocKpi n={fWarn} label="Warning" interp="above baseline" tone={fWarn ? "var(--warn)" : undefined} />
           <NocKpi n={fInfo} label="Informational" interp="low-severity signal" />
         </NocKpis>
-      </NocHeader>
+      </div>
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Findings</h3>
           <span className="cc-panel-meta">{items.length}</span>
         </div>
         <div style={{ padding: "11px 13px" }}>
-          <div style={{ marginBottom: 10 }}>
-            <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
-              <option value="">All severities</option>
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="critical">Critical</option>
-            </select>
+          <div style={{ marginBottom: 10, display: "flex", gap: 8, alignItems: "center" }}>
+            <PillSelect
+              label="Severity"
+              icon="alert-circle"
+              value={severity}
+              onChange={setSeverity}
+              options={[
+                { value: "", label: "All severities" },
+                { value: "info", label: "Info" },
+                { value: "warning", label: "Warning" },
+                { value: "critical", label: "Critical" },
+              ]}
+            />
           </div>
           {err && (
             <div className="empty" role="alert" style={{ color: "var(--bad)" }}>
@@ -167,7 +191,7 @@ export function FindingDetailBody({ finding: f, onViewLogs }: { finding: Finding
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <span className={`badge ${severityClass(f.severity)}`}>{f.severity}</span>
+        <StatusChip kind={severityKind(f.severity)} label={f.severity || "unknown"} />
         <span className="badge">{f.kind}</span>
         {typeof f.score === "number" && (
           <span style={{ fontSize: 12.5, color: "var(--muted)" }}>score {f.score.toFixed(1)}</span>

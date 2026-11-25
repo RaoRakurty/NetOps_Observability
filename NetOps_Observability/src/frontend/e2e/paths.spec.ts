@@ -286,7 +286,8 @@ async function textBelowFloor(page: Page, root: string): Promise<string[]> {
       const cs = getComputedStyle(host);
       if (cs.display === "none" || cs.visibility === "hidden") continue;
       const px = parseFloat(cs.fontSize);
-      const chip = Boolean(host.closest(".badge, .ph-badge, .tsl-state"));
+      // .kit-status = the visual-language StatusChip — a chip like .badge.
+      const chip = Boolean(host.closest(".badge, .ph-badge, .tsl-state, .kit-status"));
       if (px < (chip ? 12.5 : 14)) out.push(`${px}px "${text.slice(0, 40)}" <${host.tagName.toLowerCase()} class="${host.className}">`);
     }
     return out;

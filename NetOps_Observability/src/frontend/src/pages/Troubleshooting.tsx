@@ -3,6 +3,7 @@
 
 import { useEffect } from "react";
 import InvestigationPage from "./troubleshoot/InvestigationPage";
+import { PageHeader } from "../components/kit";
 import {
   hashWithoutSection,
   parseInvestigationHash,
@@ -55,6 +56,7 @@ export default function Troubleshooting({ rangeMinutes = 60 }: { rangeMinutes?: 
 
   return (
     <div className="dm-board">
+      <PageHeader icon="tool" title="Troubleshooting" />
       <InvestigationPage rangeMinutes={rangeMinutes} initialCaseId={initial.caseId} />
     </div>
   );

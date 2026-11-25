@@ -5,6 +5,7 @@ import { fmtDateTime } from "../lib/time";
 import { useEffect, useState } from "react";
 import { api, SavedObject } from "../services/api";
 import { useShell } from "../context/shell";
+import { PageHeader, OutlinedButton } from "../components/kit";
 
 // Saved searches — the list side of the Search → save → reopen loop.
 // Opening one applies its query to the global omni-search and jumps to
@@ -49,7 +50,7 @@ export default function SavedSearches() {
 
   return (
     <div className="card">
-      <h2>Saved searches</h2>
+      <PageHeader icon="bookmark" title="Saved searches" count={loading ? undefined : items.length} />
       {error && <p style={{ color: "var(--bad)" }}>{error}</p>}
       {loading ? (
         <div className="empty">Loading…</div>
@@ -71,17 +72,15 @@ export default function SavedSearches() {
           <tbody>
             {items.map((o) => (
               <tr key={o.id}>
-                <td>{o.name}</td>
-                <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
-                  {o.body?.query ?? "*"}
-                </td>
-                <td>{o.body?.signal || "all"}</td>
-                <td style={{ color: "var(--muted)", fontSize: 12.5 }}>
-                  {fmtDateTime(o.updated_at)}
-                </td>
-                <td style={{ textAlign: "right" }}>
-                  <button onClick={() => open(o)}>Open</button>{" "}
-                  <button onClick={() => remove(o)} title="Delete">✕</button>
+                <td><span className="kit-host-name">{o.name}</span></td>
+                <td className="kit-mono">{o.body?.query ?? "*"}</td>
+                <td className="kit-muted">{o.body?.signal || "all"}</td>
+                <td className="kit-muted kit-mono">{fmtDateTime(o.updated_at)}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  <span style={{ display: "inline-flex", gap: 6 }}>
+                    <OutlinedButton icon="close" label={`Delete ${o.name}`} onClick={() => remove(o)} />
+                    <OutlinedButton chevron onClick={() => open(o)}>Open</OutlinedButton>
+                  </span>
                 </td>
               </tr>
             ))}
