@@ -904,7 +904,7 @@ describe("Storage", () => {
     });
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Storage" });
-    expect(within(sec).getByText("measured total (lower bound)")).toBeTruthy();
+    expect(await within(sec).findByText("measured total (lower bound)")).toBeTruthy();
     expect(within(sec).getByText("Events queued on the bus")).toBeTruthy();
   });
 
@@ -912,7 +912,7 @@ describe("Storage", () => {
     setup();
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Storage" });
-    expect(within(sec).getByText("Every store weighed")).toBeTruthy();
+    expect(await within(sec).findByText("Every store weighed")).toBeTruthy();
   });
 
   it("renders one row per store under the data's name, with the query behind it", async () => {
@@ -974,7 +974,9 @@ describe("Storage", () => {
     setup({ storage: new Error("502 Bad Gateway: {}") });
     render(<DataProtection />);
     const sec = await screen.findByRole("region", { name: "Storage" });
-    expect(within(sec).getByRole("alert")).toBeTruthy();
+    // The region mounts before the read fails: await the error (the sync
+    // getByRole lost that race on CI, #424, 2026-11-25).
+    expect(await within(sec).findByRole("alert")).toBeTruthy();
     expect(within(sec).queryAllByText("3.0 GiB")).toEqual([]);
   });
 });
