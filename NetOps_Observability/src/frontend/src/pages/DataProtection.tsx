@@ -134,6 +134,7 @@ import {
   type Tone,
 } from "./dataProtection.model";
 
+import { PageHeader } from "../components/kit";
 /** How often a running operation's progress is re-read. */
 const OP_POLL_MS = 2000;
 
@@ -1256,7 +1257,7 @@ export default function DataProtection() {
   );
 
   return (
-    <div className="dp-page">
+    <div className="dp-page"><PageHeader icon="lock" title="Data Protection" />
       {/* ── the answer ── */}
       {coverage.error ? (
         <div className="dp-answer dp-bad" data-section="answer" role="region" aria-label="Recovery">

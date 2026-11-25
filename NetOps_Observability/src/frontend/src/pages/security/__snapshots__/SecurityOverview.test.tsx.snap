@@ -4,6 +4,35 @@ exports[`Security Overview — snapshot > matches the rendered posture page for 
 <div
   class="sec dm-board"
 >
+  <header
+    class="kit-ph"
+  >
+    <span
+      aria-hidden="true"
+      class="kit-ph-tile"
+    >
+      <svg
+        aria-hidden="true"
+        fill="none"
+        height="17"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.75"
+        viewBox="0 0 24 24"
+        width="17"
+      >
+        <path
+          d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+        />
+      </svg>
+    </span>
+    <h1
+      class="kit-ph-title"
+    >
+      Security Overview
+    </h1>
+  </header>
   <details
     class="dm-group"
     open=""

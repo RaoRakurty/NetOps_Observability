@@ -40,6 +40,7 @@ import { httpFailure, operatorError } from "../../lib/errors";
 import { Stat, StatStrip } from "../../components/ui";
 import AskIris from "../../components/AskIris";
 
+import { PageHeader } from "../../components/kit";
 const PAGE = 50;
 
 type Load =
@@ -141,7 +142,7 @@ export default function Quarantine() {
   const hasMore = offset + shown < total;
 
   return (
-    <div className="adm">
+    <div className="adm"><PageHeader icon="archive" title="Quarantine" />
       {head}
       <div className="admin-head-row" style={{ marginTop: "var(--sp-2)" }}>
         <StatStrip>

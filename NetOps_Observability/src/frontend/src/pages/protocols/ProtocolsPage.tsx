@@ -28,6 +28,7 @@ import {
   PROTOCOL_TABS, deviceIndex, problemsByDevice, tabFromHash, tabHash, type ProtocolTab,
 } from "./protocolsModel";
 
+import { PageHeader } from "../../components/kit";
 /** A closed-by-default group whose body mounts only once it is opened. */
 function Trends({ title, keyNote, children }: { title: string; keyNote?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -79,8 +80,8 @@ export default function ProtocolsPage({ rangeMinutes = 60 }: { rangeMinutes?: nu
 
   return (
     <div className="paths-shell paths-page protocols-page" data-testid="protocols-page">
+      <PageHeader icon="share" title="Protocol Monitoring" />
       <div className="paths-head">
-        <h2>Protocol Monitoring</h2>
         <nav className="paths-tabs" role="tablist" aria-label="Protocols">
           {PROTOCOL_TABS.map((t) => (
             <button key={t.id} type="button" role="tab" id={`protocols-tab-${t.id}`}

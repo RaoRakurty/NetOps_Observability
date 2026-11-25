@@ -16,6 +16,7 @@ import {
   type CollectorRow,
   type FlowSourceRow,
 } from "./stackCollection";
+import { PageHeader } from "../components/kit";
 // Stack Health — the platform's OWN infrastructure monitoring: the data
 // backends, event bus, state stores and visualization that make up the stack
 // behind the app. Platform-owner only (the API returns 403 otherwise); the nav
@@ -70,9 +71,7 @@ function Dot({ status }: { status: string }) {
 function Header() {
   return (
     <div className="pw-head">
-      <span className="pw-head-icon"><Icon name="stack" size={18} /></span>
       <div>
-        <h2>Stack Health</h2>
         <p className="pw-sub">
           Live status of the platform's own infrastructure — the search, metrics,
           OLAP, analytics, event-bus, state and visualization backends behind the
@@ -278,7 +277,7 @@ export default function StackHealth() {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack"><PageHeader icon="activity" title="Stack Health" />
       <div className="card sh-card">
         <Header />
 

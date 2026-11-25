@@ -17,6 +17,7 @@ import AskIris from "../components/AskIris";
 import { useTenantView, type TenantView } from "../components/useTenantView";
 import { confirmText, foreignOwnerNote, tenantLabel } from "../lib/tenantOwner";
 
+import { PageHeader } from "../components/kit";
 // NMS Integrations (#95) — the vendor-controller gallery + guided setup +
 // integration manager. Controller INTELLIGENCE ingestion: each connected
 // platform's computed state/metrics/alarms become normalized RCA evidence
@@ -227,7 +228,7 @@ export default function NmsIntegrations() {
   }
 
   return (
-    <div className="nms-page">
+    <div className="nms-page"><PageHeader icon="link" title="NMS Integrations" />
       <PageHead />
       <StatStrip>
         <Stat label="Vendors available" value={connectors ? connectors.length : <Skeleton w={24} />} />
@@ -328,7 +329,6 @@ function PageHead() {
   return (
     <div className="nms-head">
       <div>
-        <h2>NMS Integrations</h2>
         <div className="nms-sub">
           Controller intelligence — harvest what each vendor platform already computed (state, SLA metrics,
           alarms) as normalized RCA evidence. Read-only; a controller alone never confirms a root cause.

@@ -16,6 +16,7 @@ import {
 } from "./model";
 import AskIris from "../../components/AskIris";
 
+import { PageHeader } from "../../components/kit";
 // Exposures — the findings workbench (P3-T8). A faceted, cursor-paginated list
 // over the tenant's own security findings, with the full Finding detail in the
 // Inspector: observed vs intended, the by-reference evidence pointer, the
@@ -174,7 +175,7 @@ export default function Exposures() {
   const chosen = activeFilterNames(filters);
 
   return (
-    <div className="sec dm-board">
+    <div className="sec dm-board"><PageHeader icon="eye" title="Exposures" />
       <Group title="Exposures" hue="#e11d48">
         <div className="sec-toolbar">
           <Segmented

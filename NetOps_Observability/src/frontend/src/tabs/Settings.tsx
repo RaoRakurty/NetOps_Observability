@@ -11,6 +11,7 @@ import SystemNetworkCard from "../pages/SystemNetwork";
 import VerificationSettingsCard from "./VerificationSettingsCard";
 import { Modal } from "../components/ui";
 
+import { PageHeader } from "../components/kit";
 // Default landing page — the platform-wide page users land on after sign-in.
 // Stored on the global tenant (the platform default); individual tenants can
 // override it in Identity & Access → (org) → Tenants. Discoverable home: here.
@@ -141,9 +142,8 @@ export default function Settings() {
   const platformAdmin = !!user?.platform_admin;
 
   return (
-    <>
+    <><PageHeader icon="settings" title="Settings" />
       <div className="card">
-        <h2 style={{ margin: 0 }}>Settings</h2>
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>
           Platform configuration. Integration credentials live with their connectors
           (Administration → Integrations and Notifications); discovery sources are under

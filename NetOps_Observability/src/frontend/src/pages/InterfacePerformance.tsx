@@ -9,6 +9,7 @@ import {
 } from "../components/board/panels";
 import { ifRateBps, ifUtilPct } from "../lib/ifUtilisation";
 
+import { PageHeader } from "../components/kit";
 // Interface Performance — per-device / per-interface deep dive.
 // Scoped by a device + interface picker;
 // drillable from the Device Monitoring inventory row via
@@ -86,7 +87,7 @@ export default function InterfacePerformance({ rangeMinutes = 60, initialDevice 
   const deviceAddr = devices.find((d) => d.id === device)?.address || "";
 
   return (
-    <div className="dm-board">
+    <div className="dm-board"><PageHeader icon="gauge" title="Interface Performance" />
       {/* Scope bar */}
       <div className="card dm-scopebar">
         <div className="dm-scope-fields">

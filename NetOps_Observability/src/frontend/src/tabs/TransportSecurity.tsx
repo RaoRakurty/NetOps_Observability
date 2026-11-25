@@ -14,6 +14,7 @@ import { fmtDate, fmtDateTime } from "../lib/time";
 import { StatStrip, Stat } from "../components/ui";
 import AdminPageHeader from "../components/admin/AdminPageHeader";
 
+import { StatusChip } from "../components/kit";
 // ---- shared chrome (admin.tsx keeps these private; replicated, not imported) --
 
 const AdminHead = AdminPageHeader;
@@ -50,7 +51,7 @@ export function observedText(r: PostureRow): string {
 // Drift is a warning (declared ≠ current); an accepted exception is disclosed
 // with its owner, date, age and reason — never hidden behind a checkmark.
 function DriftCell({ r }: { r: PostureRow }) {
-  if (r.drift) return <span className="badge warn">{r.drift}</span>;
+  if (r.drift) return <StatusChip kind="warn" label={r.drift} />;
   if (r.exception) {
     return (
       <span className="mini-meta">
@@ -132,7 +133,7 @@ export function TransportSecurity() {
   if (!data) {
     return (
       <>
-        <AdminHead title="Transport Security" sub="Read-only TLS posture of every internal transport path." topic="tls.transport-posture" />
+        <AdminHead icon="lock" title="Transport Security" sub="Read-only TLS posture of every internal transport path." topic="tls.transport-posture" />
         <ErrLine msg={err} />
         {!err && <div className="empty">Loading transport posture…</div>}
       </>
@@ -143,7 +144,7 @@ export function TransportSecurity() {
     const lanes = data.device_lanes ?? [];
     return (
       <>
-        <AdminHead title="Transport Security" sub="Read-only TLS posture of your devices' telemetry lanes." topic="tls.transport-posture" />
+        <AdminHead icon="lock" title="Transport Security" sub="Read-only TLS posture of your devices' telemetry lanes." topic="tls.transport-posture" />
         <ErrLine msg={err} />
         <div className="card" style={{ paddingTop: 8 }}>
           <h3 style={{ margin: "0 0 var(--sp-2)" }}>Your fleet: {data.device_count ?? 0} devices</h3>
@@ -163,7 +164,7 @@ export function TransportSecurity() {
   const v = data.validator;
   return (
     <>
-      <AdminHead title="Transport Security" sub="Read-only TLS posture of every internal transport path." topic="tls.transport-posture" />
+      <AdminHead icon="lock" title="Transport Security" sub="Read-only TLS posture of every internal transport path." topic="tls.transport-posture" />
       <ErrLine msg={err} />
       <StatStrip>
         <Stat label="Paths" value={rows.length} />

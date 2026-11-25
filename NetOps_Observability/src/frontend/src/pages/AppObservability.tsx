@@ -104,6 +104,7 @@ import {
   healthMetricCell, healthCurrentCell, healthBaselineCell, healthReasonCell,
 } from "./appobs/healthCells";
 
+import { PageHeader } from "../components/kit";
 // async loader with explicit loading/error/empty states (no fake-data fallback —
 // an empty inventory shows an honest "connect a cloud account" state).
 function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): { data: T | null; status: LoadState } {
@@ -335,7 +336,7 @@ export function ApplicationsShell() {
   if (sel) return <AppDetail app={sel} onBack={() => setSel(null)} />;
 
   return (
-    <div className="ao">
+    <div className="ao"><PageHeader icon="app-window" title="Applications" />
       <NocHeader title="Applications" subtitle="What runs, and who owns it" />
       <nav className="ao-tabs" role="tablist" aria-label="Applications">
         {APP_TABS.map((tk) => (

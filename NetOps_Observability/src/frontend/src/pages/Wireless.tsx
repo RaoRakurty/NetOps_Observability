@@ -6,6 +6,7 @@ import { api, WirelessAP, WirelessBSSID, WirelessController, WirelessWLAN } from
 import { Skeleton, Stat, StatStrip } from "../components/ui";
 import AskIris from "../components/AskIris";
 
+import { PageHeader } from "../components/kit";
 // Wireless (#128 Phase 7) — the wireless canonical inventory: controllers
 // (logical clusters + physical members), APs with radios and their LAN uplink
 // (the rank-1 wireless↔LAN join), and WLAN profiles with their SSIDs.
@@ -157,7 +158,7 @@ export default function Wireless() {
 
   const empty = !controllers!.length && !aps!.length && !wlans!.length;
   return (
-    <div className="page-pad wireless-page">
+    <div className="page-pad wireless-page"><PageHeader icon="wireless" title="Wireless" />
       <StatStrip>
         <Stat label="Controllers" value={String(controllers!.length)} />
         <Stat label="Access points" value={String(stats.total)} />

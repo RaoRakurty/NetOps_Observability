@@ -141,7 +141,7 @@ export default function IrisAdmin() {
 
   return (
     <div className="adm iris-admin">
-      <AdminPageHeader title="Iris" sub="Models, knowledge and review." topic="admin.iris" />
+      <AdminPageHeader icon="copilot" title="Iris" sub="Models, knowledge and review." topic="admin.iris" />
 
       <nav className="iris-admin-tabs" role="tablist" aria-label="Iris settings">
         {IRIS_ADMIN_TABS.map((t) => (

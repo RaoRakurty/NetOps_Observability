@@ -24,6 +24,7 @@ import {
 } from "./reliabilityMeta";
 import { buildTimeMetricsSeries, METRIC_TTD, METRIC_TTR_RECOVERY } from "./timeMetricsSeries";
 
+import { PageHeader } from "../components/kit";
 const WINDOWS = [{ value: "604800", label: "7d" }, { value: "2592000", label: "30d" }, { value: "7776000", label: "90d" }];
 const OWNERS = ["", "isp", "cloud_provider", "saas", "app_team", "netops"];
 const OWNER_LABEL: Record<string, string> = { "": "all owners", isp: "ISP", cloud_provider: "Cloud", saas: "SaaS", app_team: "App", netops: "LAN / Network" };
@@ -212,10 +213,10 @@ export default function ReliabilityScorecard() {
 
   return (
     <div className="page rsc">
+      <PageHeader icon="award" title="Recovery Scorecard" />
       <div className="rsc-head">
         <div>
           <div className="rsc-title-row">
-            <h1 className="rsc-title">NOC Recovery Scorecard</h1>
             {readiness && (
               <span className={`rsc-readiness rsc-rd-${readiness.state.replace(/\s/g, "").toLowerCase()}`}>
                 <span className="rsc-rd-state">Recovery Readiness: {readiness.state}</span>
