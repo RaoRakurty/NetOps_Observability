@@ -7,6 +7,8 @@ import { signatureNocTitle, entityLabel, friendlyProblemId } from "../components
 import DataTable, { type Column } from "../components/DataTable";
 import { LogTime } from "../lib/logfmt";
 import AskIris from "../components/AskIris";
+import Icon from "../components/Icon";
+import { StatusChip, type StatusKind } from "../components/kit";
 import { timeRank } from "./appobs/sortRanks";
 import {
   type ActionItem, type RcaState, type OwnerState, type TicketState, type Sev,
@@ -75,8 +77,17 @@ const RCA_TONE: Record<RcaState, string> = {
   Confirmed: "var(--crit)", Suspected: "var(--warn)", Blocked: "var(--warn)",
   Correlated: "var(--accent)", "RCA running": "var(--accent)", New: "var(--fg-subtle)", Resolved: "var(--ok)",
 };
+// Every chip here is a STATE, so it renders as the kit's StatusChip (icon + word +
+// semantic colour, visual language rule 3). The tone tokens the callers pass map
+// to their meaning; the accent is not a state colour, so "accent" reads as info.
+const TONE_KIND: Record<string, StatusKind> = {
+  "var(--crit)": "critical", "var(--bad)": "critical",
+  "var(--warn)": "warning",
+  "var(--ok)": "ok", "var(--good)": "ok",
+  "var(--accent)": "info", "var(--info)": "info",
+};
 const ccChip = (text: string, tone: string, title?: string) => (
-  <span className="cc-badge" style={{ color: tone, borderColor: tone }} title={title}>{text}</span>
+  <StatusChip kind={TONE_KIND[tone] ?? "neutral"} label={text} title={title} />
 );
 const OWNER_TONE: Record<OwnerState, string> = { Assigned: "var(--ok)", Recommended: "var(--accent)", Missing: "var(--crit)", Escalated: "var(--warn)" };
 const TICKET_TONE: Record<TicketState, string> = {
@@ -427,13 +438,14 @@ export default function CommandCenter() {
   const syncFailed = items.filter((i) => i.ticket === "Sync failed").length;
 
   const pressure = critical >= 3 ? "Severe" : critical >= 1 ? "Elevated" : suspected > 0 ? "Watch" : "Nominal";
-  const pressureTone = pressure === "Severe" ? "var(--crit)" : pressure === "Elevated" ? "var(--warn)" : pressure === "Watch" ? "var(--accent)" : "var(--ok)";
+  const pressureTone = pressure === "Severe" ? "var(--crit)" : pressure === "Elevated" ? "var(--warn)" : pressure === "Watch" ? "var(--info)" : "var(--ok)";
 
   return (
     <div className="dm-board cc-board">
-      <div className="cc-hero">
+      <div className="cc-hero cc-hero-kit">
         <div className="cc-hero-head">
           <div className="cc-h1-row">
+            <span className="kit-ph-tile" aria-hidden><Icon name="home" size={17} /></span>
             <h1 className="cc-h1">Command Center</h1>
             <AskIris topic="page.command-center" label="Command Center" />
           </div>

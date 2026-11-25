@@ -10,3 +10,4 @@ export { PillSelect, FieldSelect, SortLabel } from "./Select";
 export type { SelectOption, PillSelectProps } from "./Select";
 export { default as FilterSection } from "./FilterSection";
 export type { FilterOption, FilterSectionProps } from "./FilterSection";
+export { severityStatus } from "./severityStatus";

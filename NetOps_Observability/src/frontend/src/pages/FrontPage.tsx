@@ -8,6 +8,7 @@ import PathHealthList from "../components/PathHealthList";
 import ErrorBoundary from "../components/ErrorBoundary";
 import RcaPathCausality from "../components/rca/RcaPathCausality";
 import { SiteHealth } from "./overview/boardParts";
+import { PageHeader } from "../components/kit";
 import { deviceDisplayName, nameDevicesIn, useDeviceNames } from "../lib/deviceNames";
 import { signatureNocTitle, signatureName, kindLabel, ownerLabel, OWNER_EXTERNAL, isInternalStackAffected, mentionsInternal } from "../components/rca/labels";
 import { CorrSignal } from "../services/api";
@@ -648,15 +649,18 @@ export default function FrontPage({ platformAdmin = false, picker }: { platformA
   // data-theme on <html>); the Operations Overview just reads the tokens.
   return (
     <div className="fp dm-board">
-      <div className="fp-masthead">
-        <h1 className="fp-title">Operations Overview</h1>
-        <span className="fp-sub">Network health, root cause &amp; impact — at a glance</span>
-        <div className="fp-mast-meta">
-          <span className="fp-live"><span className="fp-live-dot" /> Live</span>
-          <span>Auto-refresh 20s</span>
-          {picker}
-        </div>
-      </div>
+      <PageHeader
+        icon="dashboards"
+        title="Operations Overview"
+        subtitle="Network health, root cause & impact — at a glance"
+        actions={
+          <>
+            <span className="fp-live"><span className="fp-live-dot" /> Live</span>
+            <span className="fp-mast-refresh">Auto-refresh 20s</span>
+            {picker}
+          </>
+        }
+      />
       {/* Dense top: operational KPIs above the fold + the headline sentence
           (replaces the tall hero — density over whitespace, NOC-battle-station). */}
       <Safe><KpiStrip /></Safe>

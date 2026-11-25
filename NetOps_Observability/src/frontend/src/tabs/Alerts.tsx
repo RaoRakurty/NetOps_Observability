@@ -4,10 +4,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fmtDateTime } from "../lib/time";
 import { api, AlertEpisode } from "../services/api";
-import { severityClass, severityColor, severityRank, SEVERITY_TONES } from "../theme/severity";
+import { severityColor, severityRank, SEVERITY_TONES } from "../theme/severity";
 import DataTable, { Column } from "../components/DataTable";
 import { useWorkspace } from "../context/workspace";
-import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import { NocHeader, NocKpis, NocKpi, LiveChip } from "../components/noc";
+import { StatusChip, severityStatus } from "../components/kit";
 import AskIris from "../components/AskIris";
 import EvIcon from "../components/event/EvIcon";
 import SidePanel from "../components/event/SidePanel";
@@ -17,7 +18,7 @@ import { useDeviceNames } from "../lib/deviceNames";
 import { useIsPhone } from "../lib/useIsPhone";
 import {
   ALERT_TABS, type AlertsTab, type AlertFilters, type AlertView,
-  isSuppressed, statusLabel, statusTone, toAlertView, alertTiles, filterAlerts, facetValues, activeAlertFilterCount,
+  isSuppressed, statusLabel, statusKind, toAlertView, alertTiles, filterAlerts, facetValues, activeAlertFilterCount,
   alertSummary,
 } from "./alertsModel";
 
@@ -42,7 +43,9 @@ export default function Alerts() {
   const [items, setItems] = useState<AlertEpisode[]>([]);
   const [total, setTotal] = useState(0);
   const [truncated, setTruncated] = useState(false);
-  const [rawFiring, setRawFiring] = useState(0);
+  // null = the raw-alert read did not return a list: the firing count is unknown,
+  // so the header chip leaves it out instead of printing "undefined" or a false 0.
+  const [rawFiring, setRawFiring] = useState<number | null>(0);
   const [tab, setTab] = useState<AlertsTab>("active");
   const [filters, setFilters] = useState<AlertFilters>({});
   const [sel, setSel] = useState<string | null>(null);
@@ -62,7 +65,7 @@ export default function Alerts() {
       setItems(ep.episodes ?? []);
       setTotal(ep.total ?? (ep.episodes ?? []).length);
       setTruncated(!!ep.truncated);
-      setRawFiring((raw ?? []).length);
+      setRawFiring(Array.isArray(raw) ? raw.length : null);
       setLoadErr(null);
     } catch (e) {
       setLoadErr(operatorError(e, "Alerts could not be loaded."));
@@ -97,22 +100,23 @@ export default function Alerts() {
   const set = (patch: Partial<AlertFilters>) => setFilters((f) => ({ ...f, ...patch }));
 
   const columns = useMemo<Column<AlertView>[]>(() => {
-    const sevCell = (v: AlertView) => <span className={`badge ${severityClass(v.episode.state)}`}>{v.episode.state}</span>;
+    const sevCell = (v: AlertView) => <StatusChip kind={severityStatus(v.episode.state)} label={v.episode.state} />;
     const statusCell = (v: AlertView) => {
       const e = v.episode;
       return (
         <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
-          <Chip label={statusLabel(e.status)} tone={statusTone(e.status)} />
-          {e.flapping && <Chip label="Flapping" tone="var(--warn)" title={`Rapid state changes detected (${e.flip_count ?? 0} flips)`} />}
+          <StatusChip kind={statusKind(e.status)} label={statusLabel(e.status)} />
+          {e.flapping && <StatusChip kind="warning" label="Flapping" title={`Rapid state changes detected (${e.flip_count ?? 0} flips)`} />}
           {isSuppressed(e) && (
-            <Chip
+            <StatusChip
+              kind="neutral"
               label={e.muted ? "Notifications paused" : `Snoozed until ${fmt(e.snoozed_until)}`}
-              tone="var(--fg-subtle)"
               title="Notifications are paused for this episode. It stays visible here."
             />
           )}
-          {e.acknowledged_by && <Chip label={`Ack · ${e.acknowledged_by}`} tone="var(--ok)" />}
-          {e.assigned_to && <Chip label={`→ ${e.assigned_to}`} tone="var(--accent)" title={`Assigned to ${e.assigned_to}`} />}
+          {e.acknowledged_by && <StatusChip kind="ok" label={`Ack · ${e.acknowledged_by}`} />}
+          {/* An assignee is a fact, not a state: neutral. */}
+          {e.assigned_to && <StatusChip kind="neutral" label={`→ ${e.assigned_to}`} title={`Assigned to ${e.assigned_to}`} />}
         </span>
       );
     };
@@ -176,18 +180,20 @@ export default function Alerts() {
       <NocHeader
         title="Active Alerts"
         topic="page.active-alerts"
+        icon="bell"
+        count={loadErr ? undefined : active.length}
         chips={
           <>
             {loadErr ? (
-              <Chip
+              <StatusChip
+                kind="critical"
                 label="Feed unavailable"
-                tone="var(--crit)"
                 title="The alert episode API did not answer — the counts below are unknown, not zero."
               />
             ) : (
-              <Chip
-                label={`Firing ${rawFiring} · Episodes ${active.length}`}
-                tone={active.length ? "var(--warn)" : "var(--ok)"}
+              <StatusChip
+                kind={active.length ? "warning" : "ok"}
+                label={rawFiring === null ? `Episodes ${active.length}` : `Firing ${rawFiring} · Episodes ${active.length}`}
                 title="Currently-firing alerts, folded into episodes"
               />
             )}
@@ -388,10 +394,10 @@ export function EpisodeDetailBody({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <span className={`badge ${severityClass(ep.state)}`}>{ep.state}</span>
+        <StatusChip kind={severityStatus(ep.state)} label={ep.state} />
         <span style={{ fontWeight: 500 }}>{ep.signal}</span>
-        <Chip label={statusLabel(ep.status)} tone={statusTone(ep.status)} />
-        {ep.flapping && <Chip label="Flapping" tone="var(--warn)" title={`Rapid state changes detected (${ep.flip_count ?? 0} flips)`} />}
+        <StatusChip kind={statusKind(ep.status)} label={statusLabel(ep.status)} />
+        {ep.flapping && <StatusChip kind="warning" label="Flapping" title={`Rapid state changes detected (${ep.flip_count ?? 0} flips)`} />}
       </div>
       {ep.summary && <div style={{ fontSize: 14 }}>{alertSummary(ep, deviceName || ep.resource || "")}</div>}
       {isSuppressed(ep) && (

@@ -5173,6 +5173,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .dm-group-head::-webkit-details-marker { display: none; }
 .dm-group-head:hover { background: color-mix(in srgb, var(--g, var(--accent)) 22%, var(--surface)); }
 .dm-group-chevron { transition: transform .15s ease; color: var(--g, var(--accent)); flex: 0 0 auto; }
+/* A group heading is structure, not a state (visual language): a Group / LazyGroup
+   with no hue is drawn in the neutral tone instead of the accent. */
+.dm-group-head.dm-group-neutral { --g: var(--fg-muted, var(--muted)); }
 .dm-group[open] .dm-group-chevron { transform: rotate(90deg); }
 .dm-group-body { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
 .dm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
@@ -5244,6 +5247,8 @@ table.loc-editor input:focus { outline: none; border-color: var(--accent); }
 .fp-mast-meta { margin-left: auto; display: flex; align-items: center; gap: 16px;
   font-size: 12.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-subtle); }
 .fp-live { display: inline-flex; align-items: center; gap: 7px; color: var(--fg-muted); }
+/* The refresh note beside "Live" in the PageHeader actions (visual language phase 3). */
+.fp-mast-refresh { font-size: 14px; color: var(--fg-muted); }
 .fp-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
   box-shadow: 0 0 0 3px var(--accent-soft); animation: fp-pulse 2.6s ease-in-out infinite; }
 @keyframes fp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }

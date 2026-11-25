@@ -4,11 +4,12 @@
 import { fmtDateTime } from "../lib/time";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, Incident, TimelineEntry } from "../services/api";
-import { severityClass, severityColor, severityRank } from "../theme/severity";
+import { severityColor, severityRank } from "../theme/severity";
+import { StatusChip, severityStatus } from "../components/kit";
 import DataTable, { Column } from "../components/DataTable";
 import Icon from "../components/Icon";
 import { friendlyIncidentId } from "../components/rca/labels";
-import { NocHeader, NocKpis, NocKpi, Chip, LiveChip } from "../components/noc";
+import { NocHeader, NocKpis, NocKpi, LiveChip } from "../components/noc";
 import AskIris, { askIrisAbout } from "../components/AskIris";
 import { useAIEntitlements } from "../lib/aiEntitlements";
 import TacCaseChip from "../components/tac/TacCaseChip";
@@ -150,7 +151,7 @@ export default function Incidents() {
   };
 
   const columns = useMemo<Column<Incident>[]>(() => {
-    const sevCell = (i: Incident) => <span className={`badge ${severityClass(i.severity)}`}>{i.severity}</span>;
+    const sevCell = (i: Incident) => <StatusChip kind={severityStatus(i.severity)} label={i.severity} />;
     const whatCell = (i: Incident) => (
       <div className="lv-two">
         <span className="al-title" title={incidentTitle(i, places)}>{incidentTitle(i, places)}</span>
@@ -219,10 +220,11 @@ export default function Incidents() {
       <NocHeader
         title="Incidents"
         topic="page.incidents"
+        icon="incident"
+        count={error ? undefined : total}
         chips={<>{error
-          ? <Chip label="Feed unavailable" tone="var(--crit)" title="The incident list did not answer — the counts below are unknown, not zero." />
-          : <Chip label={`Incidents ${total.toLocaleString()}`} />}
-          {!error && <LiveChip />}</>}
+          ? <StatusChip kind="critical" label="Feed unavailable" title="The incident list did not answer — the counts below are unknown, not zero." />
+          : <LiveChip />}</>}
       >
         <NocKpis cols={4}>
           <NocKpi n={error ? "—" : iOpen} label="Open" topic="incidents.open" tone={error ? "var(--fg-subtle)" : iOpen ? "var(--warn)" : undefined} />
@@ -410,7 +412,7 @@ export function IncidentDetailBody({ incident, onChanged, onAsked, inPanel = fal
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
         {!inPanel && (
           <h2 style={{ margin: 0 }}>
-            <span className={`badge ${severityClass(inc.severity)}`}>{inc.severity}</span> {title}
+            <StatusChip kind={severityStatus(inc.severity)} label={inc.severity} /> {title}
           </h2>
         )}
         {/* N-E4 entry point: an incident row carries no RCA case id, so the

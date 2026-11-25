@@ -56,6 +56,7 @@ export default function ExperiencePage() {
     <div className="dm-board cc-board dx">
       <NocHeader
         title="Digital Experience"
+        icon="globe"
         subtitle="What people actually experienced, what broke it, and how much of that we could see"
       />
 

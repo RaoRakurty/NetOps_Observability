@@ -127,3 +127,7 @@
 /* ── SourceNote: a neutral marker beside a value whose sources disagree (tracker 389) ── */
 .kit-srcnote { display: inline-flex; align-items: center; margin-left: 6px; vertical-align: middle; color: var(--fg-muted, var(--muted)); cursor: help; }
 .kit-srcnote:hover { color: var(--fg); }
+
+/* ── NocHeader in the PageHeader look (phase 3: NocHeader `icon` / `count`) ── */
+.cc-hero-kit .cc-h1-row { gap: 10px; }
+.cc-hero-kit .cc-h1 { font-family: inherit; font-size: 17px; font-weight: 600; letter-spacing: 0; }
