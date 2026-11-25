@@ -264,7 +264,9 @@ describe("measured paths on the rows", () => {
     mockApi.wanInterfaces.mockResolvedValue({ interfaces: [wanRow()] });
     render(<WanCircuits measured={{ index: null, error: "Measured paths could not be read.", loaded: true }} />);
     expect((await screen.findByTestId("paths-read-error")).textContent).toContain("Measured paths could not be read.");
-    expect(screen.getByText("Gi0/0/2")).toBeTruthy();
+    // The error line comes from props and renders at once; the rows come from
+    // the interface read — await them (the sync getByText lost that race on CI, #423).
+    expect(await screen.findByText("Gi0/0/2")).toBeTruthy();
   });
 
   it("has no Path column outside the Paths page", async () => {
