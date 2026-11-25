@@ -73,10 +73,17 @@ function gen(anchors: number, neigh: number, marks: boolean): TopologyContext {
   return read({ state: "topology_only", nodes, edges, faults, causal: [], sources: [] });
 }
 
+// The full grid is 7 × 30 × 2 = 420 topologies, each an O(n²) pairwise overlap
+// check. It is deterministic CPU work, not a race: measured 2.25 s at host load 16
+// and over vitest's 5 s default at load ~21 (2026-11-25). The grid stays whole —
+// thinning it would drop shapes the guarantee exists for — so this one test gets
+// an explicit budget: ~13× the loaded measurement, still a hard stop on a hang.
+const FULL_GRID_TIMEOUT_MS = 30_000;
+
 describe("ego-graph geometry — P-7EE84E", () => {
   it("never overlaps at the screen's text size (0–6 anchors × 1–30 neighbours, with and without marks)", () => {
     for (let a = 0; a <= 6; a++) for (let n = 1; n <= 30; n++) for (const m of [false, true]) assertClean(gen(a, n, m), `a=${a} n=${n} marks=${m}`);
-  });
+  }, FULL_GRID_TIMEOUT_MS);
 
   it("matches the server document's positions (shared golden written by the Go twin)", () => {
     const golden = JSON.parse(readFileSync(GOLDEN, "utf8")) as { cases: GoldenCase[] };
