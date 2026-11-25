@@ -13,12 +13,12 @@
 
 import { useMemo, useState } from "react";
 import { api, type Device } from "../../services/api";
-import { buildDeviceNames } from "../../lib/deviceNames";
+import { asDeviceList, buildDeviceNames } from "../../lib/deviceNames";
 import { Segmented } from "../../components/ui";
 import { fetchCoverage } from "../flowEmpty";
 import type { TopNRow } from "../flowNames";
 import {
-  checkAddress, checkPort, deviceOptions, filterChips, FLOW_SOURCES, interfaceOptions, protoNumber,
+  checkAddress, checkPort, deviceOptions, filterChips, FLOW_SOURCES, interfaceOptions, listOf, protoNumber,
   serverFilterKeys, toFlowFilters, withoutChip, type IfDir, type TalkFilters,
 } from "./flowsModel";
 import {
@@ -51,11 +51,11 @@ export default function WhoIsTalking({ since, filters, onFilters, includePlatfor
   const q: FlowQuery = { since, ftype: filters.type ?? "", filters: flowFilters, fkey, direction: filters.direction ?? "" };
 
   // Pickers: inventory devices + exporters that send flows; the chosen device's interfaces.
-  const devices = useTicked<Device[]>(() => api.devices(), []);
+  const devices = useTicked<Device[]>(() => api.devices().then(asDeviceList), []);
   const names = useMemo(() => buildDeviceNames(devices.data ?? []), [devices.data]);
   const exporters = useTicked(() => api.flowsTopN("device", since, 200), [since]);
   const devOpts = useMemo(
-    () => deviceOptions(devices.data ?? [], ((exporters.data?.data as TopNRow[]) ?? []).map((r) => String(r.k)), names),
+    () => deviceOptions(devices.data ?? [], listOf<TopNRow>(exporters.data?.data).map((r) => String(r.k)), names),
     [devices.data, exporters.data, names],
   );
   const ifRows = useTicked(

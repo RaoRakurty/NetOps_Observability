@@ -640,7 +640,7 @@ export default function PipelineDebugger() {
             evidence={(row) => {
               const got = stageEvidence[row.stage];
               if (typeof got === "string") return <span className="pdbg-reason">{got}</span>;
-              const entry = got ?? (status?.stages ?? []).find((e) => e.stage === row.stage);
+              const entry = got ?? (Array.isArray(status?.stages) ? status.stages : []).find((e) => e.stage === row.stage);
               if (!entry) {
                 return (
                   <span className="pdbg-reason">
@@ -688,7 +688,7 @@ export default function PipelineDebugger() {
           <Honest tone="muted" headline="Nothing has been saved here yet." detail={sessions.data?.reason} />
         ) : (
           <ul className="pdbg-sessions">
-            {(sessions.data?.sessions ?? []).map((s) => (
+            {(Array.isArray(sessions.data?.sessions) ? sessions.data.sessions : []).map((s) => (
               <li key={s.id} className={`pdbg-session${openSession?.session.id === s.id ? " on" : ""}`}>
                 <span>
                   <span className="pdbg-session-id">{s.id}</span>

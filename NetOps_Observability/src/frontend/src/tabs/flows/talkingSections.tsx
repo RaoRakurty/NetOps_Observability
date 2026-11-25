@@ -50,6 +50,7 @@ import { StatStrip, Stat, Segmented } from "../../components/ui";
 import { IANA_PROTO_NAMES } from "../../proto";
 import { type TopNRow, topNDisplay, topNRowId } from "../flowNames";
 import { useTicked } from "./useTicked";
+import { listOf } from "./flowsModel";
 
 /** The shared inputs every Who-is-talking panel reacts to. */
 export type FlowQuery = { since: number; ftype: string; filters: FlowFilters; fkey: string; direction: string };
@@ -218,7 +219,7 @@ export function TopNPanel({
   dim?: FlowDimension;
 }) {
   const r = useTicked(() => api.flowsTopN(by, q.since, limit, q.ftype, q.filters), [by, q.since, q.ftype, q.fkey, limit]);
-  const rows = ((r.data?.data as TopNRow[] | undefined) ?? []);
+  const rows = listOf<TopNRow>(r.data?.data);
   return (
     <TopNView
       title={title} rows={rows} err={errText(r.error, `${title} could not be read for this window.`)}
@@ -234,7 +235,7 @@ type TalkerRow = { src: string; dst: string; bytes_total: number; packets_total:
 /** The busiest conversations (initiator → responder, or both ends as one). */
 export function ConversationsSection({ q, limit = 25, title = "Conversations" }: { q: FlowQuery; limit?: number; title?: string }) {
   const r = useTicked(() => api.topTalkers(q.since, limit, q.ftype, q.filters, q.direction), [q.since, q.ftype, q.fkey, q.direction, limit]);
-  const rows = (r.data?.data as TalkerRow[] | undefined) ?? [];
+  const rows = listOf<TalkerRow>(r.data?.data);
   const err = errText(r.error, "Conversations could not be read for this window.");
   const talkerKeys = useMemo(() => rows.flatMap((x) => [x.src, x.dst]), [rows]);
   const apps = useAppNames(talkerKeys);
@@ -568,7 +569,7 @@ type ProtoRow = { proto: number; proto_name?: string; bytes_total: number; packe
 
 export function ProtocolsSection({ q }: { q: FlowQuery }) {
   const r = useTicked(() => api.flowsByProto(q.since, q.ftype, q.filters), [q.since, q.ftype, q.fkey]);
-  const rows = (r.data?.data as ProtoRow[] | undefined) ?? [];
+  const rows = listOf<ProtoRow>(r.data?.data);
   const err = errText(r.error, "Protocols could not be read for this window.");
   const name = (p: ProtoRow) => p.proto_name || IANA_PROTO_NAMES[String(p.proto)] || `IP/${p.proto}`;
   return (
@@ -623,8 +624,8 @@ export function CountriesSection({ q }: { q: FlowQuery }) {
   const s = useTicked(() => api.flowsGeo("src", q.since, q.ftype, q.filters), [q.since, q.ftype, q.fkey]);
   const d = useTicked(() => api.flowsGeo("dst", q.since, q.ftype, q.filters), [q.since, q.ftype, q.fkey]);
   const coerce = (rows: GeoRow[]) => rows.map((x) => ({ ...x, bytes_total: Number(x.bytes_total), packets_total: Number(x.packets_total), flows: Number(x.flows) }));
-  const src = coerce((s.data?.data as GeoRow[] | undefined) ?? []);
-  const dst = coerce((d.data?.data as GeoRow[] | undefined) ?? []);
+  const src = coerce(listOf<GeoRow>(s.data?.data));
+  const dst = coerce(listOf<GeoRow>(d.data?.data));
   const err = errText(s.error || d.error, "Countries could not be read for this window.");
   // The unmatched bucket (private / unrouted space) is excluded from the
   // ranking but its share is stated.

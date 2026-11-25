@@ -18,6 +18,7 @@ import Icon from "../../components/Icon";
 import { fmtNum } from "../../components/board/panels";
 import { PlatformTrafficToggle, samplingNote, fetchCoverage } from "../flowEmpty";
 import { useTicked } from "./useTicked";
+import { listOf } from "./flowsModel";
 import DeclaredSampling from "./DeclaredSampling";
 
 type ByTypeRow = { flow_type: string; flows: number; exporters: number };
@@ -41,7 +42,7 @@ export default function AboutData({ open, onClose, since, includePlatform, onInc
   const cov = useTicked(() => fetchCoverage(since, "", filters), [since, includePlatform, open], open);
   const geo = useTicked(() => api.flowsGeo("src", since), [since, open], open);
   const q = { since, ftype: "", filters, fkey: JSON.stringify(filters) };
-  const types = (byType.data?.data as ByTypeRow[] | undefined) ?? [];
+  const types = listOf<ByTypeRow>(byType.data?.data);
   const c = cov.data;
   const geoOn = !!geo.data && geo.data.geo_enabled !== false;
   const asOn = !!c && (c.flows_with_as > 0 || c.asn_dataset_loaded);

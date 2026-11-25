@@ -174,19 +174,38 @@ export default function InvestigationPage({ rangeMinutes = 60, initialCaseId = "
 
   useEffect(() => {
     let alive = true;
+    // Read boundary (2026-11-25): each answer is shape-checked before it is
+    // stored. `x ?? []` caught only null — an object where a list belongs
+    // reached `.map`/`.filter` and sent the page to its error screen. An
+    // unreadable CASE list is said to be unreadable (never shown as "no open
+    // cases", which would be a false all-clear); the optional reads degrade
+    // to nothing.
     api.correlations(25, 86400, "open")
-      .then((r) => { if (alive) { setCases(r?.data ?? []); setCasesErr(""); } })
+      .then((r) => {
+        if (!alive) return;
+        const data = (r as { data?: unknown } | null | undefined)?.data;
+        if (Array.isArray(data)) { setCases(data as CorrObject[]); setCasesErr(""); }
+        else setCasesErr("Open cases could not be read.");
+      })
       .catch((e: unknown) => { if (alive) setCasesErr(operatorError(e, "Open cases could not be loaded.")); });
     // The operator's own described investigations. Best-effort: a deployment
     // with no incident store still lists its correlated cases.
     api.listIncidents({ limit: 25 })
-      .then((list) => { if (alive) setMine(list ?? []); })
+      .then((list) => { if (alive) setMine(Array.isArray(list) ? list : []); })
       .catch(() => { /* no incident store on this backend — nothing to add */ });
     api.seams("active")
-      .then((list) => { if (!alive) return; const m: Record<string, Seam> = {}; (list ?? []).forEach((s) => { m[s.seam_id] = s; }); setSeams(m); })
+      .then((list) => {
+        if (!alive) return;
+        const m: Record<string, Seam> = {};
+        (Array.isArray(list) ? list : []).forEach((s) => { if (s && typeof s === "object" && s.seam_id) m[s.seam_id] = s; });
+        setSeams(m);
+      })
       .catch(() => { /* seam inventory optional — class labels still render */ });
     api.getSeamOwners()
-      .then((r) => { if (alive) setSeamOwners(r?.seam_owners ?? {}); })
+      .then((r) => {
+        const owners = (r as { seam_owners?: unknown } | null | undefined)?.seam_owners;
+        if (alive) setSeamOwners(owners && typeof owners === "object" && !Array.isArray(owners) ? owners as typeof seamOwners : {});
+      })
       .catch(() => { /* registry optional */ });
     return () => { alive = false; };
   }, []);

@@ -75,6 +75,64 @@ const COUNTERS: { key: string; label: string; bad?: boolean }[] = [
   { key: "lost_total", label: "No durable copy", bad: true },
 ];
 
+// ── the read boundary (2026-11-25) ──────────────────────────────────────────
+// The panel used to trust the response shape: a body with no `tenants` array,
+// or a missing number, threw while rendering and took the page down. Now the
+// answer is checked once, here. Not an object, or no tenants list → the lane
+// answered but its status could not be read (an honest error, never a page
+// crash). A missing number stays missing (NaN → "not stated"), never zero.
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
+const optNum = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+function readRow(raw: Record<string, unknown>): SecLaneScanStatus {
+  return {
+    tenant_id: str(raw.tenant_id),
+    tenant_seg: str(raw.tenant_seg),
+    last_scan_id: str(raw.last_scan_id),
+    last_scan_at: str(raw.last_scan_at),
+    outcome: str(raw.outcome),
+    trigger: str(raw.trigger),
+    duration_ms: num(raw.duration_ms),
+    findings_emitted: num(raw.findings_emitted),
+    transitions_emitted: optNum(raw.transitions_emitted),
+    unchanged_suppressed: optNum(raw.unchanged_suppressed),
+    findings_truncated: num(raw.findings_truncated),
+    devices_assessed: num(raw.devices_assessed),
+    errors: Array.isArray(raw.errors) ? raw.errors.filter((e): e is string => typeof e === "string") : undefined,
+  };
+}
+
+/** The lane status as the panel can render it, or null when the answer has no
+ *  readable shape. Exported for the malformed-payload tests. */
+export function readLaneStatus(raw: unknown): SecLaneStatus | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.tenants)) return null;
+  const metrics: Record<string, number> = {};
+  if (r.metrics && typeof r.metrics === "object" && !Array.isArray(r.metrics)) {
+    for (const [k, v] of Object.entries(r.metrics as Record<string, unknown>)) {
+      if (typeof v === "number" && Number.isFinite(v)) metrics[k] = v;
+    }
+  }
+  return {
+    enabled: r.enabled === true,
+    interval_seconds: num(r.interval_seconds),
+    max_findings_per_tenant: num(r.max_findings_per_tenant),
+    topic: str(r.topic),
+    metrics,
+    metrics_scope: r.metrics_scope === "tenant" || r.metrics_scope === "platform" ? r.metrics_scope : undefined,
+    tenants: r.tenants
+      .filter((t): t is Record<string, unknown> => !!t && typeof t === "object" && !Array.isArray(t))
+      .map(readRow),
+  };
+}
+
+/** A count, or "not stated" when the lane did not send one. */
+function count(n: number): string {
+  return Number.isFinite(n) ? n.toLocaleString() : "not stated";
+}
+
 function secs(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "not stated";
   if (n % 60 === 0) return `${n / 60} min`;
@@ -103,9 +161,9 @@ function TenantRow({ row }: { row: SecLaneScanStatus }) {
       <td>{row.trigger || "not stated"}</td>
       <td>{row.last_scan_at ? fmtDateTime(row.last_scan_at) : "never"}</td>
       <td>{row.duration_ms > 0 ? `${row.duration_ms.toLocaleString()} ms` : "not measured"}</td>
-      <td>{row.devices_assessed.toLocaleString()}</td>
+      <td>{count(row.devices_assessed)}</td>
       <td>
-        {row.findings_emitted.toLocaleString()}
+        {count(row.findings_emitted)}
         {row.findings_truncated > 0 && <span className="sec-line"> · {row.findings_truncated.toLocaleString()} over the cap</span>}
       </td>
       <td>{sentToCorrelation(row)}</td>
@@ -121,7 +179,11 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
 
   const read = useCallback(async (): Promise<SecLaneStatus | null> => {
     try {
-      const st = await api.securityLaneStatus();
+      const st = readLaneStatus(await api.securityLaneStatus());
+      if (!st) {
+        setLoad({ kind: "error", message: "The security lane answered, but its status could not be read." });
+        return null;
+      }
       setLoad({ kind: "ready", status: st });
       return st;
     } catch (e) {
@@ -231,7 +293,7 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
     <Panel title="Security lane" action={scanAction}>
       <p className="sec-line" style={{ marginTop: 0 }}>
         Every {secs(st.interval_seconds)} · <code>{st.topic}</code> ·{" "}
-        {st.max_findings_per_tenant.toLocaleString()} findings per run
+        {count(st.max_findings_per_tenant)} findings per run
         <AskIris topic="lane.security-lane" label="the security lane" />
       </p>
 
@@ -252,8 +314,8 @@ export default function LaneHealth({ pollMs = 4000, maxPolls = 15 }: { pollMs?: 
       {scan.kind === "done" && (
         <p className="sec-line" role="status">
           Scan finished {scan.row.outcome === "ok" ? "cleanly" : `with outcome ${scan.row.outcome}`} —{" "}
-          {scan.row.findings_emitted.toLocaleString()} finding{scan.row.findings_emitted === 1 ? "" : "s"} published
-          from {scan.row.devices_assessed.toLocaleString()} device{scan.row.devices_assessed === 1 ? "" : "s"} assessed.
+          {count(scan.row.findings_emitted)} finding{scan.row.findings_emitted === 1 ? "" : "s"} published
+          from {count(scan.row.devices_assessed)} device{scan.row.devices_assessed === 1 ? "" : "s"} assessed.
           {scan.row.transitions_emitted !== undefined && (
             <> {scan.row.transitions_emitted.toLocaleString()} new or changed sent to correlation
               {scan.row.unchanged_suppressed !== undefined && <>; {scan.row.unchanged_suppressed.toLocaleString()} unchanged, stored only</>}.</>
