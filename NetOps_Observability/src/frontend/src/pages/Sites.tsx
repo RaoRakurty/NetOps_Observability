@@ -19,6 +19,7 @@
 import { useEffect, useState } from "react";
 import DeviceGeomap, { GeoView } from "./DeviceGeomap";
 
+import { PageHeader } from "../components/kit";
 function viewFromHash(): GeoView {
   const seg = location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[2];
   return seg === "sites" || seg === "locations" ? seg : "map";
@@ -35,13 +36,13 @@ export default function Sites() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   return (
-    <DeviceGeomap
+    <><PageHeader icon="map-pin" title="Sites" /><DeviceGeomap
       view={view}
       onViewChange={(v) => {
         const next = `#/infrastructure/sites/${v}`;
         if (location.hash.split("?")[0] !== next) window.history.replaceState(null, "", next);
         setView(v);
       }}
-    />
+    /></>
   );
 }

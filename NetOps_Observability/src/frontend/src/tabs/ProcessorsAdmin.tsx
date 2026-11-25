@@ -11,6 +11,7 @@ import DataTable, { Column } from "../components/DataTable";
 import { Modal } from "../components/ui";
 import { Chip } from "../components/noc";
 import { operatorError } from "../lib/errors";
+import { PageHeader } from "../components/kit";
 // Pipeline Processors — the tenant's log-processing chain.
 //
 // The page renders from the ENGINE's own catalog (/catalog): registered
@@ -645,7 +646,7 @@ export default function ProcessorsAdmin() {
   ], []);
 
   return (
-    <div>
+    <div><PageHeader icon="automation" title="Processors" />
       <div className="cc-panel">
         <div className="cc-panel-h">
           <h3 className="cc-panel-t">Pipeline processors</h3>

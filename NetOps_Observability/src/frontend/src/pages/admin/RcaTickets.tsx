@@ -30,6 +30,7 @@ import { IncidentPoliciesAdmin } from "../../tabs/admin";
 import TicketDelivery from "./TicketDelivery";
 import { CONNECTOR_CHIP, connectorState } from "../troubleshoot/tacModel";
 
+import { StatusChip } from "../../components/kit";
 export type Destination = { id: string; name: string; on: boolean };
 
 /** Which ticket destinations are connected (configured AND enabled). */
@@ -110,7 +111,7 @@ export default function RcaTickets() {
             {dests.map((d) => (
               <li key={d.id} data-testid={`dest-${d.id}`}>
                 <span className="rca-dest-name">{d.name}</span>
-                <span className={`badge ${d.on ? "good" : ""}`}>{d.on ? "Connected" : "Not connected"}</span>
+                <StatusChip kind={d.on ? "ok" : "off"} label={d.on ? "Connected" : "Not connected"} />
               </li>
             ))}
             {(connectors ?? []).filter(usableConnector).map((c) => (
@@ -156,7 +157,7 @@ export default function RcaTickets() {
 
   return (
     <div className="adm rca-tickets">
-      <AdminPageHeader title="RCA Tickets" sub="One ticket per root cause." topic="admin.rca-ticketing" />
+      <AdminPageHeader icon="ticket" title="RCA Tickets" sub="One ticket per root cause." topic="admin.rca-ticketing" />
       <StepFlow steps={steps} label="Set up RCA tickets" />
     </div>
   );

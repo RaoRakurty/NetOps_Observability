@@ -3376,32 +3376,19 @@ body.dtv-resizing { cursor: col-resize !important; user-select: none !important;
 }
 .adm .mini-meta { font-size: 12.5px; line-height: 1.5; }
 
-/* ----- Administration colour scope (admin/adminTheme.ts) -----
-   App.tsx wraps every Administration leaf in `.adm-scope` and sets the group's
-   three shades (--adm-hue / --adm-ink / --adm-solid). Re-pointing the accent
-   HERE is what makes buttons, tabs, focus rings and stat accents follow the
-   group without per-page CSS. Mild by design (owner 2026-10-18): colour on the
-   header bar, a hairline on cards, primary buttons and focus — bodies stay
-   neutral. Text uses ink on light themes and the hue on dark ones; white text
-   only ever sits on the solid (≥ 4.5:1, adminTheme.test.ts). */
-.adm-scope {
-  --accent: var(--adm-ink);
-  --accent-bright: var(--adm-hue);
-  --accent-grad: linear-gradient(135deg, var(--adm-solid) 0%, color-mix(in srgb, var(--adm-solid) 82%, #000) 100%);
-  --accent-soft: color-mix(in srgb, var(--adm-hue) 10%, transparent);
-  --accent-ring: color-mix(in srgb, var(--adm-hue) 40%, transparent);
+/* ----- Administration scope (App.tsx wraps every Administration leaf in
+   `.adm-scope`). The per-group colours of 2026-10-18 (--adm-hue / --adm-ink /
+   --adm-solid re-pointing the accent, a coloured header bar, a tinted hairline
+   on cards) are RETIRED by the visual language (owner 2026-11-24,
+   docs/design/visual-language.md): one accent everywhere, colour only where it
+   means something. adminTheme.ts still sets the variables; nothing here reads
+   them for colour any more. */
+.admin-head { margin-bottom: var(--sp-2); }
+.admin-head .kit-ph { margin-bottom: 0; }
+.admin-section-title {
+  margin: 0; font-size: 16px; font-weight: 600; color: var(--fg);
+  display: flex; align-items: center; gap: 6px;
 }
-:root[data-theme="dark"] .adm-scope, :root[data-theme="oled"] .adm-scope,
-:root[data-theme="indigo"] .adm-scope, :root[data-theme="graphite"] .adm-scope {
-  --accent: var(--adm-hue);
-}
-.adm-scope .admin-head {
-  border-left: 3px solid var(--adm-hue);
-  padding: var(--sp-2) var(--sp-3);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--adm-hue) 7%, transparent);
-}
-.adm-scope .card { border-top: 2px solid color-mix(in srgb, var(--adm-hue) 45%, var(--panel-border)); }
 /* 14 px floor for Administration text (NOC-admin UI standard). */
 .adm-scope .admin-sub, .adm-scope .adm-line, .adm-scope .adm-grouphead,
 .adm-scope .adm .badge, .adm-scope .adm .conn-status, .adm-scope .adm .perm-pill,
@@ -8226,14 +8213,14 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 
 /* Administration hub sections (components/admin/AdminSection.tsx). */
 .adm-section { border: 1px solid var(--panel-border); border-radius: 10px; margin-bottom: var(--sp-2); background: var(--panel); }
-.adm-section.open { border-color: color-mix(in srgb, var(--adm-hue, var(--accent)) 45%, var(--panel-border)); }
+.adm-section.open { border-color: color-mix(in srgb, var(--accent) 45%, var(--panel-border)); }
 .adm-section-head {
   display: flex; align-items: baseline; gap: var(--sp-2); width: 100%;
   padding: var(--sp-3); background: none; border: 0; text-align: left; cursor: pointer;
   font: inherit; color: inherit;
 }
 .adm-section-head:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; border-radius: 10px; }
-.adm-section-chevron { color: var(--adm-hue, var(--accent)); width: 1em; }
+.adm-section-chevron { color: var(--fg-muted); width: 1em; }
 .adm-section-title { font-weight: 600; font-size: 15px; }
 .adm-section-summary { color: var(--muted); font-size: 14px; }
 .adm-section-body { padding: 0 var(--sp-3) var(--sp-3); }
@@ -8245,10 +8232,10 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .step-flow-head { display: flex; align-items: center; gap: var(--sp-2); }
 .step-flow-num {
   flex: none; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
-  font-weight: 600; font-size: 14px; color: var(--adm-ink, var(--accent));
-  background: color-mix(in srgb, var(--adm-hue, var(--accent)) 14%, transparent);
+  font-weight: 600; font-size: 14px; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.step-flow-step.done .step-flow-num { color: #fff; background: var(--adm-solid, var(--accent)); }
+.step-flow-step.done .step-flow-num { color: #fff; background: var(--accent); }
 .step-flow-title { margin: 0; font-size: 16px; font-weight: 600; }
 .step-flow-opt { color: var(--muted); font-weight: 400; font-size: 14px; }
 .step-flow-status { margin-left: auto; color: var(--muted); font-size: 14px; }
@@ -8269,7 +8256,7 @@ button.iris-chip-v { cursor: pointer; text-decoration: underline dotted; text-un
 .lic-sec-note { font-size: 14px; }
 .lic-sec-fold > details > summary { cursor: pointer; list-style: none; border-bottom: 0; padding-bottom: 0; margin-bottom: 0; }
 .lic-sec-fold > details > summary::-webkit-details-marker { display: none; }
-.lic-sec-fold > details > summary::before { content: "▸"; color: var(--adm-hue, var(--accent)); width: 1em; }
+.lic-sec-fold > details > summary::before { content: "▸"; color: var(--fg-muted); width: 1em; }
 .lic-sec-fold > details[open] > summary { border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; margin-bottom: 8px; }
 .lic-sec-fold > details[open] > summary::before { content: "▾"; }
 .lic-carried { border: 1px dashed var(--panel-border); border-radius: 8px; padding: var(--sp-2) var(--sp-3); }

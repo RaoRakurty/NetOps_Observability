@@ -33,6 +33,7 @@ import {
   MAX_SMS_RECIPIENTS,
 } from "./platformAlertsModel";
 
+import { PageHeader } from "../../components/kit";
 type Load = { kind: "loading" } | { kind: "denied" } | { kind: "error"; message: string } | { kind: "ready"; data: PlatformAlertRoute };
 
 const field: React.CSSProperties = { display: "grid", gap: 4, marginBottom: 10 };
@@ -149,8 +150,7 @@ export default function PlatformAlerts() {
   );
 
   return (
-    <div className="platform-alerts-page" style={{ fontSize: 14, maxWidth: 1000 }}>
-      <h2 style={{ margin: "0 0 4px" }}>Platform alerts</h2>
+    <div className="platform-alerts-page" style={{ fontSize: 14, maxWidth: 1000 }}><PageHeader icon="bell" title="Platform alerts" />
       <p style={{ margin: "0 0 8px" }}>
         Where Correlix sends alerts about its own health: an engine that stops working, data that stops arriving, storage
         that refuses writes. These are not your network alerts — those use Notification channels.

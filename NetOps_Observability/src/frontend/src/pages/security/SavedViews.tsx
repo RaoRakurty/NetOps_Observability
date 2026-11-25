@@ -7,6 +7,7 @@ import { api, SecFindingQuery, SecSavedView } from "../../services/api";
 import { Group } from "../../components/board/panels";
 import { operatorError } from "../../lib/errors";
 import AskIris from "../../components/AskIris";
+import { PageHeader } from "../../components/kit";
 // Saved views — named filter sets over the Exposures workbench. A view stores a
 // FILTER, never rows: applying one re-queries under the caller's own token, so
 // a view can never widen what its owner may see (§3a) and can never carry
@@ -83,7 +84,7 @@ export default function SavedViews() {
   };
 
   return (
-    <div className="sec dm-board">
+    <div className="sec dm-board"><PageHeader icon="bookmark" title="Saved Views" />
       <Group title="Saved views" hue="#14b8a6">
         <form className="sec-toolbar" onSubmit={create}>
           <label className="sr-only" htmlFor="sv-name">View name</label>

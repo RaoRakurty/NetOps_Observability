@@ -7,6 +7,7 @@ import { api, NetboxConfig, NetboxSyncStatus } from "../services/api";
 import Icon from "../components/Icon";
 import Wizard, { WizardStep } from "../components/Wizard";
 
+import { PageHeader } from "../components/kit";
 // Automation → Source of Truth. NetBox here is an OPTIONAL automation connector,
 // NOT the authority over what the platform monitors: the source of truth is the
 // platform's own SNMP-discovered inventory (Infrastructure → Devices) plus the
@@ -286,7 +287,7 @@ export default function SourceOfTruth() {
   };
 
   return (
-    <>
+    <><PageHeader icon="datasets" title="Source of Truth" />
       {/* Toolbar: title · status · inline controls. No vendor name, no new tab. */}
       <div className="card sot-head">
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>

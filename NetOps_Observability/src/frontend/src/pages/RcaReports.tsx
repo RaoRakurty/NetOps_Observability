@@ -7,6 +7,7 @@ import DataTable, { Column } from "../components/DataTable";
 import { NocHeader, Chip } from "../components/noc";
 import { fmtDateTime } from "../lib/time";
 
+import { PageHeader } from "../components/kit";
 // RCA Reports (#113) — the MANAGEMENT library. The owner's two-surface model:
 // the Correlations page shows every candidate (engineer surface, don't-hide);
 // this page lists ONLY promoted real outages — auto-promoted (confirmed verdict
@@ -125,7 +126,7 @@ export default function RcaReports() {
   ], []);
 
   return (
-    <div>
+    <div><PageHeader icon="docs" title="RCA Reports" />
       <NocHeader
         title="RCA Reports"
         subtitle="Promoted real outages and their documents — the management library. Every candidate (promoted or not) lives in Correlations."

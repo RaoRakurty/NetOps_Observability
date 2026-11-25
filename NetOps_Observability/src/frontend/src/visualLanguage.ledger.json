@@ -1,0 +1,632 @@
+{
+  "admin/adminTheme.ts": {
+    "colours": 14,
+    "hueMaps": 1,
+    "stateBadges": 0,
+    "reason": "retired Administration group hues (2026-11-24): variables still emitted, no CSS reads them \u2014 delete with App.tsx wiring"
+  },
+  "components/board/panels.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "components/event/event.css": {
+    "colours": 3,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "components/graph/shapes.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "components/IrisVocabulary.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "components/NmsControllerArt.tsx": {
+    "colours": 9,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "components/rca/labels.ts": {
+    "colours": 16,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "components/rca/rcaExport.ts": {
+    "colours": 101,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "self-contained printed/PDF RCA document (no CSS tokens in the export) \u2014 keep literals, mirror tokens"
+  },
+  "components/rca/RcaVerifyPanel.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "components/rca/RcaWorkspace.css": {
+    "colours": 104,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "components/Wizard.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "features/topology/components/CapacityPanel.tsx": {
+    "colours": 9,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/MapWorkflowSelector.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/NetworkPathView.tsx": {
+    "colours": 5,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/OverlaySelector.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/PathAnalysisPanel.tsx": {
+    "colours": 13,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/ProviderMark.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/RcaVerdictBanner.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/TopologyLegend.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/TopologySearch.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/components/TopologySideDrawer.tsx": {
+    "colours": 8,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/geo/GeoTopologyMap.tsx": {
+    "colours": 6,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/edges/BundledEdge.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/edges/DegradedEdge.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/edges/InferredEdge.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/edges/RcaOverlayEdge.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/edges/TopologyEdge.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/nodes/CloudNode.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/nodes/DeviceNode.tsx": {
+    "colours": 5,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/nodes/FirewallNode.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/nodes/GroupNode.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/nodes/RouterNode.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/react-flow/nodes/SwitchNode.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/sigma/sigmaGraph.ts": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/renderers/sigma/SigmaTopologyView.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/utils/rcaOverlay.ts": {
+    "colours": 7,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "features/topology/utils/topologyHealth.ts": {
+    "colours": 10,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "topology canvas renderer colours \u2014 move to tokens"
+  },
+  "iris/charts.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "chart/map series palette (data encoding, not decoration) \u2014 move to tokens"
+  },
+  "iris/IrisModelSettings.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 6,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/admin/RcaTickets.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/appobs/AppIdCoverage.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/appobs/GovernanceSettings.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/appobs/Registries.tsx": {
+    "colours": 3,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/capture/DevicePcapPanel.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/CloudLogs.tsx": {
+    "colours": 8,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "pages/ComplianceMonitoring.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 3,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/config/ConfigDrift.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/config/DeviceConfigPanel.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 4,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/DataSources.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/demoPanels.tsx": {
+    "colours": 37,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/DemoShowcase.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/device/deviceHealth.ts": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/device/VrfInterfaces.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/DeviceDetailPage.tsx": {
+    "colours": 8,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/DeviceGeomap.tsx": {
+    "colours": 21,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/DeviceMonitoring.tsx": {
+    "colours": 11,
+    "hueMaps": 0,
+    "stateBadges": 2,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/Devices.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/DeviceTerminal.tsx": {
+    "colours": 6,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/experience/experience.css": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/InterfacePerformance.tsx": {
+    "colours": 7,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/NewMonitor.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "pages/NmsIntegrations.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/overview/OverviewPage.tsx": {
+    "colours": 6,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "pages/panels.tsx": {
+    "colours": 29,
+    "hueMaps": 0,
+    "stateBadges": 4,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/paths/MeasuredPaths.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 2,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "pages/paths/PathData.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "pages/platform/pipelineDebugger.css": {
+    "colours": 3,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/PortsWorkbench.tsx": {
+    "colours": 11,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/Quality.tsx": {
+    "colours": 3,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "pages/RcaReports.tsx": {
+    "colours": 8,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/ReliabilityScorecard.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/Reports.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/ComplianceFrameworks.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/Exposures.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/ExposureStories.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/parts.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/SavedViews.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/SecurityCompliance.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/SecurityOverview.tsx": {
+    "colours": 6,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/SecurityRules.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 2,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/security/ThreatDetectionView.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/sites/DiscoveredSitesPanel.tsx": {
+    "colours": 6,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/SystemNetwork.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/telemetry/TelemetryCoverage.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/ThreatDetection.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/troubleshoot/investigation.css": {
+    "colours": 49,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "pages/VulnerabilityManagement.tsx": {
+    "colours": 3,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "pages/WanCircuits.tsx": {
+    "colours": 6,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "styles.css": {
+    "colours": 743,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "theme tokens + legacy component rules; shrinks as pages move to the kit"
+  },
+  "tabs/admin.tsx": {
+    "colours": 3,
+    "hueMaps": 0,
+    "stateBadges": 5,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "tabs/AdminSsoIdp.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 3,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "tabs/Alerts.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 2,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "tabs/Collectors.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 4,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "tabs/Correlations.tsx": {
+    "colours": 23,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "tabs/Findings.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 2,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "tabs/Incidents.tsx": {
+    "colours": 4,
+    "hueMaps": 0,
+    "stateBadges": 2,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "tabs/Iris.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "tabs/Rules.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 A/B area \u2014 pending its sweep"
+  },
+  "tabs/SnmpConfigGenerator.tsx": {
+    "colours": 2,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "tabs/SourceOfTruth.tsx": {
+    "colours": 1,
+    "hueMaps": 0,
+    "stateBadges": 1,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "tabs/Tunnels.tsx": {
+    "colours": 0,
+    "hueMaps": 0,
+    "stateBadges": 2,
+    "reason": "visual-language phase 3 residual \u2014 replace with tokens / StatusChip when the page is next touched"
+  },
+  "theme/charts.ts": {
+    "colours": 29,
+    "hueMaps": 2,
+    "stateBadges": 0,
+    "reason": "chart series palette (data encoding, not decoration) \u2014 the sanctioned chart colours"
+  },
+  "theme/flows-tokens.css": {
+    "colours": 38,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "theme token definitions (the one place literal colours belong)"
+  },
+  "theme/prefs.ts": {
+    "colours": 9,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "theme token definitions (the one place literal colours belong)"
+  },
+  "theme/severity.ts": {
+    "colours": 28,
+    "hueMaps": 0,
+    "stateBadges": 0,
+    "reason": "theme token definitions (the one place literal colours belong)"
+  }
+}

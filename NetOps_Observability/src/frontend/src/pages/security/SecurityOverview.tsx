@@ -21,6 +21,7 @@ import {
   mapFacetRows, seamCards, storyConfidence, storyList, topExposures, trendPoints,
 } from "./model";
 
+import { PageHeader } from "../../components/kit";
 // Security Overview — the CTEM command centre (P3-T8, design of record: the
 // owner-approved Security mockup). Four things, in the order an operator asks
 // them: how much of the estate did we actually assess · what is the pipeline
@@ -211,7 +212,7 @@ export default function SecurityOverview() {
   }
 
   return (
-    <div className="sec dm-board">
+    <div className="sec dm-board"><PageHeader icon="shield" title="Security Overview" />
       <Group title="Exposure pipeline" hue="#e11d48">
         <div className="sec-band">
           <CoverageCard coverage={coverage} />

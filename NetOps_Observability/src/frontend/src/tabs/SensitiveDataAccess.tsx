@@ -8,6 +8,7 @@ import DataTable, { Column } from "../components/DataTable";
 import { Chip } from "../components/noc";
 import AskIris from "../components/AskIris";
 import { operatorError } from "../lib/errors";
+import { PageHeader } from "../components/kit";
 // Sensitive Data Access — who revealed protected data, when, and why.
 //
 // This is the counterpart to the reveal endpoint: auditing a reveal is only
@@ -176,9 +177,8 @@ export default function SensitiveDataAccess() {
   ];
 
   return (
-    <div className="ccw-stack">
+    <div className="ccw-stack"><PageHeader icon="eye-off" title="Sensitive Data Access" />
       <header className="ccw-page-head">
-        <h2>Sensitive Data Access</h2>
         <p className="ccw-hint">
           Every attempt to reveal a sealed value — successful or refused. Revealed
           values are never recorded here, only the fact of the access.

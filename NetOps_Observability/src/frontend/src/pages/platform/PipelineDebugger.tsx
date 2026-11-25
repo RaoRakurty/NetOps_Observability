@@ -69,6 +69,7 @@ import {
   type Tone,
 } from "./pipelineDebugger.model";
 
+import { PageHeader } from "../../components/kit";
 /** How often a running trace is re-read. */
 const FOLLOW_INTERVAL_MS = 2000;
 
@@ -487,7 +488,7 @@ export default function PipelineDebugger() {
   const now = Date.now();
 
   return (
-    <div className="pdbg">
+    <div className="pdbg"><PageHeader icon="bug" title="Pipeline Debugger" />
       {/* ── 1. run a trace ─────────────────────────────────────────────── */}
       <Section
         id="trace"

@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, AuditEvent } from "../services/api";
 import DataTable, { Column } from "../components/DataTable";
 import { operatorError } from "../lib/errors";
+import { PageHeader } from "../components/kit";
 // Audit Log — the tenant-scoped trail of mutations and denials. The backend
 // returns only events the caller may see (platform owner: all; tenant admin:
 // own tenant). Admin-gated.
@@ -65,7 +66,7 @@ export default function AuditLog() {
   if (events.length === 0) return <div style={{ padding: 20, color: "var(--muted)" }}>No audit events yet.</div>;
 
   return (
-    <div className="page-stack">
+    <div className="page-stack"><PageHeader icon="list" title="Audit Log" />
       <DataTable<AuditEvent>
         rows={events}
         columns={columns}

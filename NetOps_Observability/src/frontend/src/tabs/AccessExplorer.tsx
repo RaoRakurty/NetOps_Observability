@@ -8,6 +8,7 @@ import { StatStrip, Stat, Skeleton } from "../components/ui";
 import Icon from "../components/Icon";
 import AskIris from "../components/AskIris";
 
+import { PageHeader } from "../components/kit";
 // AccessExplorer — the L3 "Explain" view. Type a person (or service/agent) and
 // see exactly what they can reach and WHY: every tenant they can act in, traced
 // back to the binding that grants it. Deny and break-glass are surfaced. This is
@@ -29,9 +30,8 @@ export default function AccessExplorer() {
   const bindings = exp?.bindings ?? [];
 
   return (
-    <>
+    <><PageHeader icon="directory" title="Access Explorer" />
       <div className="admin-head">
-        <h2 style={{ margin: 0, fontSize: "var(--fs-lg)" }}>Access Explorer</h2>
         <p className="admin-sub">
           What this account reaches, and the grant behind it.
           <AskIris topic="access.explorer" label="Access Explorer" />
