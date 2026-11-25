@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { api, type FlowSamplingExporter } from "../../services/api";
 import { operatorError } from "../../lib/errors";
 import { fmtNum } from "../../components/board/panels";
+import { listOf } from "./flowsModel";
 
 export default function DeclaredSampling() {
   const [rows, setRows] = useState<FlowSamplingExporter[] | null>(null);
@@ -22,7 +23,7 @@ export default function DeclaredSampling() {
 
   const load = () => {
     api.flowsSampling()
-      .then((r) => { setRows(r.exporters ?? []); setErr(null); })
+      .then((r) => { setRows(listOf(r?.exporters)); setErr(null); })
       .catch((e) => setErr(operatorError(e, "Declared rates could not be read.")));
   };
   useEffect(load, []);

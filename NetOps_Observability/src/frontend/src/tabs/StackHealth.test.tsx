@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../services/api", () => ({ api: { ...mocks } }));
 
-import StackHealth from "./StackHealth";
+import StackHealth, { readStackHealth } from "./StackHealth";
 
 const instant = (result: unknown[]) => ({ status: "success", data: { resultType: "vector", result } });
 const scalar = (v: number) => instant([{ metric: {}, value: [1, String(v)] }]);
@@ -137,5 +137,38 @@ describe("the Collection section", () => {
     expect(await sec.findByRole("button", { name: "Ask Iris about Exported versus indexed flows" }))
       .toBeInTheDocument();
     expect(sec.queryByText(/points at the devices/)).toBeNull();
+  });
+});
+
+// 2026-11-25: a malformed answer sent the whole page to its error screen or
+// crashed it (found rendering with empty mock data). Each of these threw before
+// the read boundary existed.
+describe("Stack Health — a malformed answer degrades, it never crashes", () => {
+  for (const [name, body] of [
+    ["an empty object", {}],
+    ["null", null],
+    ["components that is not a list", { overall: "healthy", components: { a: 1 } }],
+  ] as const) {
+    it(`${name} says the health could not be read`, async () => {
+      mocks.stackHealth.mockResolvedValue(body);
+      render(<StackHealth />);
+      expect(await screen.findByText(/health could not be read/i)).toBeInTheDocument();
+    });
+  }
+
+  it("a partial answer renders: missing counts and latencies read '—', an unknown status is not 'down'", async () => {
+    mocks.stackHealth.mockResolvedValue({ overall: "degraded", components: [{ name: "kafka", category: "bus", status: "weird" }] });
+    render(<StackHealth />);
+    expect(await screen.findByText("kafka")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/NaN|undefined/)).toBeNull();
+    expect(readStackHealth({ overall: "x", components: [{ status: "weird" }] })?.components[0].status).toBe("unknown");
+  });
+
+  it("the collection section survives a Prometheus result that is not a list", async () => {
+    mocks.metricsQuery.mockResolvedValue({ data: { result: { not: "a list" } } });
+    render(<StackHealth />);
+    const sec = within(await screen.findByText("Collection").then((el) => el.closest("[data-section='collection']") as HTMLElement));
+    expect(await sec.findByText("No collector reported.")).toBeInTheDocument();
   });
 });

@@ -132,8 +132,8 @@ export const linkRowKey = (l: Pick<LinkRow, "key" | "tenantId">) => (l.tenantId 
  * is MISSING (shown "Not exported"), never 0; "change" is given only when every
  * exported direction has a previous figure.
  */
-export function linksFromApi(rows: readonly FlowLinkRow[] = []): LinkRow[] {
-  return rows
+export function linksFromApi(rows: unknown): LinkRow[] {
+  return listOf<FlowLinkRow>(rows)
     .filter((r) => r.exporter && r.ifindex > 0 && !IF_SENTINELS.has(String(r.ifindex)))
     .map((r) => {
       const ifIndex = String(r.ifindex);
@@ -440,8 +440,16 @@ export function fmtPctOrDash(pct?: number): string {
 export type CapacityRow = FlowCapacityRow & { key: string };
 
 /** Keys each API row; interfaces without an index key by name (vManage). */
-export function capacityFromApi(rows: readonly FlowCapacityRow[] = []): CapacityRow[] {
-  return rows.map((r) => ({ ...r, key: `${r.device_id}|${r.ifindex || `name:${r.if_name}`}` }));
+/** An answer's row list, or [] when the field is not a list. `x ?? []` only
+ *  catches null/undefined: an object or a string there used to reach `.map` /
+ *  `.filter` and take the whole Flows page down (2026-11-25, minimal mock
+ *  payload). Junk entries (null, numbers) are dropped too. */
+export function listOf<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v.filter((x) => !!x && typeof x === "object") as T[]) : [];
+}
+
+export function capacityFromApi(rows: unknown): CapacityRow[] {
+  return listOf<FlowCapacityRow>(rows).map((r) => ({ ...r, key: `${r.device_id}|${r.ifindex || `name:${r.if_name}`}` }));
 }
 
 export const NO_SITE = "No site set";

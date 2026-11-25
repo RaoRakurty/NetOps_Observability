@@ -159,8 +159,8 @@ export default function Capacity({ win, onOpenLink }: { win: FlowsWindow; onOpen
           </div>
         )}
         <p className="mini-meta tr-note" data-testid="capacity-method">
-          Forecast needs {cap.data?.forecast.min_days ?? 14} days of steady daily history.
-          {cap.data?.forecast.unavailable ? " Daily history unreadable just now." : ""}
+          Forecast needs {cap.data?.forecast?.min_days ?? 14} days of steady daily history.
+          {cap.data?.forecast?.unavailable ? " Daily history unreadable just now." : ""}
         </p>
         {total > rows.length && <p className="fact-line tr-fact">The {rows.length} busiest of {total} links are shown.</p>}
       </div>
