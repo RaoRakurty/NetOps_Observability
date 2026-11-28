@@ -158,14 +158,18 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # ENGINE_SEMVER patched back to "3.7.0": it reproduces "512e7460b9882afd" exactly,
 # so `engine` is the ONLY moved input. This object has no threshold alarm and no
 # busy-poll device, and run_window never passes through the dwell.
-# RE-FROZEN, 2026-11-28, tracker 397 wording (owner 2026-11-25: "good opportunity
-# to tune the wordings"; was "b858f8f799a7c861" on main 1dc7faa24). Only the
-# narration TEXT of `sdwan-control-connection-loss` changed (title, phrases, blast
-# radius, first steps, false positives), which moves the catalog hash. CHECKED by
-# diffing every hashed input (nodes, signals, edges, hypotheses blob parsed, engine)
-# against 1dc7faa24: the ONLY differing leaf is `hypotheses/ranking/catalog_version`
-# (cat-f10d1a9e8e6b -> cat-41ba3a5ccb26). ENGINE_SEMVER does not move.
-FIXTURE_GOLDEN = "99d7e94e02151d9f"
+# RE-FROZEN, 2026-11-25, ENGINE_SEMVER 3.8.0 -> 3.9.0 (owner items 7–10; was
+# "b858f8f799a7c861" on main 0d4311fd1). The catalog moved (one template,
+# sig.ent.wan-edge.sdwan-controller-resource-sustained). CHECKED by recomputing this
+# snapshot with ENGINE_SEMVER patched back to "3.8.0" and that template removed: it
+# reproduces "b858f8f799a7c861" exactly; against it the ONLY differing leaves are
+# `engine` and `ranking/catalog_version`. No path graph and no controller signal,
+# so the hub cap and the polled dwell cannot touch it.
+# RE-FROZEN AGAIN, 2026-11-28, merge train #429–#433: #430's tracker-397 wording
+# (narration text of sdwan-control-connection-loss) and #432's 3.9.0 template each
+# moved only `catalog_version` (+ #432 `engine`), each proven against main above;
+# combined, those are still the only moved leaves.
+FIXTURE_GOLDEN = "f1481fafd18e4a5c"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

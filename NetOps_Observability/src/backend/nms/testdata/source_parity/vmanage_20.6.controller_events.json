@@ -30,6 +30,7 @@
    "component": "VPN",
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"
@@ -65,6 +66,7 @@
    "component": "VPN",
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"
@@ -100,6 +102,7 @@
    "component": "VPN",
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"
@@ -135,6 +138,7 @@
    "component": "VPN",
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"

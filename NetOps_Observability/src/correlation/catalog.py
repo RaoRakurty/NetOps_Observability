@@ -590,6 +590,9 @@ CHANGE_INDUCED_FAULT_KINDS = (
 # structure `controller_fan_in`). Named once: the edge-local template's
 # discriminator prefers it.
 SDWAN_CONTROLLER_UNREACHABLE_TEMPLATE_ID = "sig.ent.wan-edge.sdwan-controller-unreachable"
+# Owner 2026-11-25 (ENGINE_SEMVER 3.9.0): a controller node's own sustained CPU /
+# memory (NMS_TEMPLATES).
+SDWAN_CONTROLLER_RESOURCE_TEMPLATE_ID = "sig.ent.wan-edge.sdwan-controller-resource-sustained"
 
 # tracker 385: the change-induced sibling for an operator's interface shutdown.
 ADMIN_LINK_CHANGE_TEMPLATE_ID = "sig.ent.access.admin-link-change-induced"
@@ -3451,6 +3454,53 @@ NMS_TEMPLATES: list[dict] = [
         "operator_phrase": "Controller reports device unreachable",
         "manager_phrase": "A managed device stopped responding to its controller",
         "false_positives": ("controller-to-device management path loss with the device still forwarding",),
+    },
+    # Owner 2026-11-25 (ENGINE_SEMVER 3.9.0): an SD-WAN CONTROLLER node itself
+    # (vManage / vSmart / vBond, or another vendor's controller by role) running hot.
+    # Anchored on device_resource_anomaly whose node the connector STATES is a
+    # controller (`node_role`, signals.CLAUSE_ATTR_KEYS). What reaches the window
+    # is sustained by construction: the resource dwell (resource_dwell.py) holds a
+    # threshold raise until it has stood 300 s with no clear (event time on the
+    # polled lanes), so a flap across the line never anchors it. Lab, 7 days: the
+    # controllers' and edges' relayed cpu-usage events sat in 1,164 objects as
+    # controller_alarm, a kind no template reads (vBond alone in 462).
+    {
+        "id": SDWAN_CONTROLLER_RESOURCE_TEMPLATE_ID,
+        "title": "SD-WAN controller overloaded (sustained CPU or memory)",
+        "domain": "ent.wan-edge",
+        "seams": ["WAN_SDWAN"],
+        "deployment_scope": "hybrid",
+        "requires": [
+            {"kind": "device_resource_anomaly", "entity_type": "device",
+             "attrs": {"node_role": "controller"}, "anchor": True},
+            # What an overloaded controller does to the edges that rely on it.
+            {"kind": "controller_control_connection_loss|sdwan_control_down|controller_bfd_down",
+             "optional": True},
+        ],
+        "required_modalities": [],
+        "direction_expect": "controller resources -> control connections -> overlay routes and policy",
+        "causal_chain": [
+            {"stage": "SD-WAN controller resources", "root": True,
+             "witness": "device_resource_anomaly",
+             "unobserved_note": "No sustained CPU or memory reading from the controller"},
+            {"stage": "Edge control connections",
+             "witness": "controller_control_connection_loss|sdwan_control_down|controller_bfd_down",
+             "unobserved_note": "No edge has lost its control connection (yet)"},
+        ],
+        "verdict": {
+            "owner": "netops", "layer": "control-plane (SD-WAN controller)",
+            "first_steps": [
+                "Open the controller named here and see which processes use the CPU or memory",
+                "Check for a scheduled job, statistics export, backup or software upgrade running on it now",
+                "Watch the edges' control connections to this controller: if they start to drop, plan a failover or add capacity",
+            ],
+        },
+        "operator_phrase": "An SD-WAN controller has been short of CPU or memory for more than five minutes. The edges that rely on it may be slow to get route and policy updates, or lose their control connection to it.",
+        "manager_phrase": "One of the systems that runs the SD-WAN has been overloaded for several minutes; sites could be slow to receive changes or briefly lose contact with it.",
+        "blast_radius": "the edges that use this controller: their control connections, and the overlay routes, policy or onboarding it provides",
+        "false_positives": (
+            "a planned heavy job on the controller (backup, statistics export, upgrade) that finishes on its own",
+        ),
     },
 ]
 BUILTIN_TEMPLATES.extend(NMS_TEMPLATES)

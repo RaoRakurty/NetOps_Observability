@@ -70,7 +70,27 @@ from signals import (
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.8.0"  # 3.8.0 = resource-threshold dwell + busy-poll CPU context (tracker 489).
+ENGINE_SEMVER = "3.9.0"  # 3.9.0 = controller dwell (event time) + path-hop hub cap + controller-resource template (+ storm arm, dormant).
+# 3.9.0: owner decisions 2026-11-25 (items 7–10). Lab, 7 days: controller-relayed
+# cpu-usage events (mean lag 280 s) sat in 1,164 objects as controller_alarm; the
+# prober reaches all 7 edges through vEdge-20 (7 of 8 path observations), welding
+# them into one rolling object; storm mode was declared 21 % of a quiet day by the
+# backlog arm alone (window ≤ 167 of 50,000).
+#   stage [1] controller resource thresholds (nms/vmanage_kinds.go): vManage
+#     cpu-usage / memory-usage events and CPU_Usage / Memory_Usage alarms arrive as
+#     device_resource_anomaly[_clear] with `resource` and `node_role` hints, lifted
+#     into attrs (controller_events.py); Source.CONTROLLER joins the resource dwell
+#     on EVENT time (resource_dwell.py §3; kill switch CORR_RESOURCE_DWELL_POLLED=0).
+#   stage [3] the storm backlog-age arm CAN ignore evidence old on arrival: polled
+#     paths (via_controller, via_cloud_api) and onset-stamped episodes
+#     (main.backlog_age_s). SHIPS DORMANT: CORR_STORM_BACKLOG_EXCLUDE_LAGGING
+#     defaults OFF (3.8.0 behaviour) until the t-storm-2.5k rerun (tracker 492).
+#   stage [4] path-hop hub cap (path_graph.CORR_PATH_HOP_HUB_CAP = 3, 0 = off): a
+#     transit hop on a vantage's paths to > 3 destinations grounds a pair through a
+#     shared observation only when one node's signal is about that path.
+#   stage [6] template sig.ent.wan-edge.sdwan-controller-resource-sustained, anchored
+#     on device_resource_anomaly with node_role=controller (CLAUSE_ATTR_KEYS +=
+#     node_role).
 # 3.8.0: owner decisions 2026-11-24 on tracker 489 (lab, 7 days: the vEdges' CPU
 # threshold traps + syslog twins flapped every ~66 s; 92 % of critical raises cleared
 # within 120 s, median 4 s; ~148 single-node undetermined objects a week).

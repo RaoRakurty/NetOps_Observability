@@ -147,6 +147,38 @@ def controller_link_cause(kind: str, hints: dict) -> str:
     return cause if cause in CONTROLLER_LINK_CAUSES else ""
 
 
+#: Owner 2026-11-25 (ENGINE_SEMVER 3.9.0): the resource a controller connector
+#: STATES for a CPU / memory threshold event (nms/vmanage_kinds.go Resource).
+#: Stage [1] lifts it into the signal's `resource` attr — the key the resource
+#: dwell (resource_dwell.threshold_resource) holds on — for the resource kind
+#: only. Closed set, fail-closed: anything else states nothing, and the event
+#: is then not a threshold alarm (it passes the dwell unheld, as before).
+CONTROLLER_RESOURCES: frozenset[str] = frozenset({"cpu", "memory"})
+_RESOURCE_KINDS: frozenset[str] = frozenset({"device_resource_anomaly"})
+#: The SD-WAN node roles a connector may state (nms/vmanage_kinds.go vmNodeRole).
+CONTROLLER_NODE_ROLES: frozenset[str] = frozenset({"controller", "edge"})
+
+
+def controller_resource(kind: str, hints: dict) -> str:
+    """The resource a controller threshold event states, or "" when none."""
+    if kind.removesuffix("_clear") not in _RESOURCE_KINDS:
+        return ""
+    raw = hints.get("resource")
+    if not isinstance(raw, str):
+        return ""
+    res = raw.strip().lower()
+    return res if res in CONTROLLER_RESOURCES else ""
+
+
+def controller_node_role(hints: dict) -> str:
+    """The SD-WAN role a connector states for the event's node, or ""."""
+    raw = hints.get("node_role")
+    if not isinstance(raw, str):
+        return ""
+    role = raw.strip().lower()
+    return role if role in CONTROLLER_NODE_ROLES else ""
+
+
 def count_bgp_not_a_session_failure(cls: str) -> None:
     """Count one relayed transition that built no session-failure signal."""
     if cls in BGP_NOT_A_SESSION_FAILURE:
@@ -275,6 +307,8 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
     )
 
     link_cause = controller_link_cause(kind, hints)
+    resource = controller_resource(kind, hints)
+    node_role = controller_node_role(hints)
     tokens = tuple(t for t in (device, site, tunnel, iface, peer) if t)
     return Signal(
         tenant_id=tenant,
@@ -316,5 +350,9 @@ def controller_event_to_signal(ev: dict, ingest_ts: datetime) -> Signal | None:
                if ev.get("correlation_hints") else {}),
             # Tracker 388(c): a cause the connector STATED (closed vocabulary).
             **({"link_cause": link_cause} if link_cause else {}),
+            # Owner 2026-11-25 (3.9.0): the threshold's resource (the dwell key)
+            # and the node's stated SD-WAN role (closed vocabularies).
+            **({"resource": resource} if resource else {}),
+            **({"node_role": node_role} if node_role else {}),
         },
     )

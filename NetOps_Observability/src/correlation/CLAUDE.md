@@ -207,6 +207,24 @@ a CPU signal (that threshold alarm, or the metric lane's `device_cpu_*` episode)
 drops a component made only of context kinds with it in (§2). Residual: a CPU that hovers across
 a threshold line on an ordinary box never stands 300 s and so never surfaces through the alarm;
 the metric lane's CPU episode still sees a sustained level change.
+**Controller-relayed thresholds, on event time (owner 2026-11-25, ENGINE_SEMVER 3.9.0).** vManage's
+`cpu-usage` / `memory-usage` events and `CPU_Usage` / `Memory_Usage` alarms are canonical
+`device_resource_anomaly` ("back to normal" / alarm cleared → `_clear`) with
+`correlation_hints.resource` and, on events, `node_role` from `device_type` (vmanage/vsmart/vbond →
+controller, vedge/cedge → edge; `nms/vmanage_kinds.go`); stage [1] lifts both into attrs from closed
+vocabularies (`controller_events.controller_resource` / `controller_node_role`). `Source.CONTROLLER`
+joins the dwell, but on EVENT time, because a 5-minute poll (lab mean lag 280 s) puts a raise and its
+clear 4 s later a whole poll apart in arrival: a clear in [first raise, first raise + 300 s]
+suppresses the group in either delivery order (recent clears per key are kept, a poll can carry the
+clear first); the group is released once its integration's watermark (`ResourceDwell.observe`, every
+controller signal at the window entry) passes first raise + 300 s + `CORR_RESOURCE_DWELL_POLL_MARGIN_S`
+(120 s = the vManage cursor overlap), or a clear past the dwell proves it stood, or the lane has been
+silent 600 s past that (fail-open, counted). The release is stamped at the newest time the lane
+proves it still stood (watermark − margin, no later than the clear that ended it, never before first
+raise + 300 s), keeping its stored signal_id and naming its onset in `attrs.dwell_onset`: unstamped,
+a polled release is ~700 s behind and the 516.5 s horizon prunes it before it correlates. Counted
+`corr_resource_dwell_polled_total{outcome}`; kill switch `CORR_RESOURCE_DWELL_POLLED=0` (3.8.0). Lab
+week replayed offline: 25,046 relayed raises → 20 releases (arrival clock: 170).
 
 **BGP transition semantics (tracker 387, 2026-11-10).** Owner rule: only an ESTABLISHED
 session going down is a session failure. The receiver decodes the peer from the row index
@@ -452,6 +470,11 @@ States are `open|closed|merged` only; there is no "stable" (init.sql:442).
 
 **Storm mode.**
 - Entered at buffer ≥90% or oldest pending ≥120 s; exits at ≤45% (M:1220-1269).
+- **Dormant (3.9.0, default OFF until the t-storm-2.5k rerun, tracker 492):** the backlog arm can measure ENGINE backlog (`main.backlog_age_s`): a pending signal on a
+  polled path (`via_controller`, `via_cloud_api`) or stamped at an episode onset (`phase=onset`) is
+  old on arrival, not behind, and is ignored (counted `corr_storm_backlog_lagging_ignored_total`;
+  `CORR_STORM_BACKLOG_EXCLUDE_LAGGING=1` turns it on; the default is the 3.8.0 arm). Today one vManage poll trips the arm:
+  storm mode 21 % of a quiet lab day with the window ≤ 167 signals.
 - In storm mode: smaller cohorts, severity-ordered persistence, node dedup that leaves
   the verdict unchanged (E:3413-3452), and a single per-tenant noise object for
   below-floor singletons (E:3823-3873).
@@ -470,6 +493,11 @@ States are `open|closed|merged` only; there is no "stable" (init.sql:442).
 
 - Ranks 1–5 can be authoritative; 6–7 never are (E:528-532).
 - A token shared by more than 64 nodes never grounds (E:596).
+- **Path-hop hub cap (3.9.0, `path_graph.CORR_PATH_HOP_HUB_CAP` = 3, 0 = off).** A responding
+  transit hop on one vantage's paths to more than 3 distinct destinations is a hub; a membership at
+  it grounds a pair through that observation only when one node declares the path (§6 rule 5: its
+  signal is about it). The lab prober reaches all 7 edges through vEdge-20, which welded every
+  edge's events onto vEdge-20's into one rolling object. Counted `corr_path_hop_hub_skipped_total`.
 - **An ungrounded pair is a gap hint, never an edge** (E:1513).
 
 **Edge weight** = `min(exp(-gap/τ300)·w_topo·w_r, 1)`, admitted at ≥0.3; gap = 0 when
@@ -495,7 +523,9 @@ graph (SC:14-19, 266, 1018).
 ## 4. Scoring — [6] (SC): competing hypotheses, already built
 
 **Catalog.** Built-in templates only; PG/tenant overrides are not wired (M:1357,
-M:1420). 151 templates, 105 enabled. The version hash changes on any edit (C:382-397).
+M:1420). 152 templates, 106 enabled (3.9.0 added
+`sig.ent.wan-edge.sdwan-controller-resource-sustained`: `device_resource_anomaly` with
+`node_role=controller`, anchored; management plane, so suspected at most). The version hash changes on any edit (C:382-397).
 
 **Template** (C:257-303):
 - `requires` clauses: kind `a|b`, optional `entity_type` / `min_deviation` /
@@ -833,7 +863,7 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   / `vtep_state_change` declare `emit.clear_when` (`$state == up`), so an up is
   `<kind>_clear` at info with the same entity, tokens, native_id and attrs (same
   signal_id). Before it the up was the FAULT kind at warn — a live node — and because
-  clauses key on kind only (`CLAUSE_ATTR_KEYS` is `{link_cause}`) a recovery alone
+  clauses key on kind only (`CLAUSE_ATTR_KEYS` was `{link_cause}`; `node_role` since 3.9.0) a recovery alone
   CONFIRMED `bgp-peer-flap` beside a CPU episode and headlined `local-link-fault` after
   a reboot (lab, 2026-11-18). No template needs the up: a flap is read from its downs.
   Stage [1] only — no catalog, gate or constant moved; ENGINE_SEMVER stays 3.6.0. The
@@ -897,7 +927,8 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   ENGINE_SEMVER 3.2.0 (3.3.0 since tracker 385, 3.3.1 since P-424934, 3.4.0 since the
   controller fan-in, 3.5.0 since owner D1–D3, 3.6.0 since the tracker-397 control-session
   rung, 3.7.0 since the 2026-11-24 traffic-judgement decisions, 3.8.0 since the tracker-489
-  resource-threshold dwell and busy-poll CPU context); byte-identical when no
+  resource-threshold dwell and busy-poll CPU context, 3.9.0 since the 2026-11-25 controller
+  dwell, path-hop hub cap and controller-resource template, with the storm-arm change dormant); byte-identical when no
   tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage

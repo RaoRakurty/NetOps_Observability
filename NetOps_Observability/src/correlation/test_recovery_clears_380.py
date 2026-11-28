@@ -184,5 +184,6 @@ def test_main_reads_the_base_kind_where_it_keyed_on_the_fault_kind():
 
 
 def test_the_engine_did_not_move():
-    # Tracker 380 moved no engine constant; 3.7.0 and 3.8.0 (2026-11-24) are later changes.
-    assert E.ENGINE_SEMVER == "3.8.0"
+    # Tracker 380 moved no engine constant; 3.7.0, 3.8.0 (2026-11-24) and 3.9.0
+    # (2026-11-25) are later changes.
+    assert E.ENGINE_SEMVER == "3.9.0"

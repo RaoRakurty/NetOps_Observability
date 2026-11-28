@@ -31,6 +31,7 @@
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
    "controller_peer_id": "192.168.200.34",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"
@@ -67,6 +68,7 @@
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
    "controller_peer_id": "192.168.200.34",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"
@@ -103,6 +105,7 @@
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
    "controller_peer_id": "192.168.200.34",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"
@@ -139,6 +142,7 @@
    "controller_device_id": "10.255.255.81",
    "controller_instance_basis": "host",
    "controller_peer_id": "192.168.200.34",
+   "node_role": "edge",
    "system_ip": "10.255.255.81"
   },
   "controller_instance": "ci-6928741e67584839"

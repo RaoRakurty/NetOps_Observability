@@ -284,7 +284,7 @@ def test_no_template_reads_the_context_kind():
 
 
 def test_engine_semver_and_counter_lines():
-    assert E.ENGINE_SEMVER == "3.8.0"
+    assert E.ENGINE_SEMVER == "3.9.0"   # 3.9.0 (2026-11-25) is a later change
     lines = E.cpu_context_metric_lines()
     assert lines[1] == "# TYPE corr_cpu_context_singletons_total counter"
 
