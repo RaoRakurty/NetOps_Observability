@@ -482,8 +482,23 @@ func (b *auditSignalBridge) mirror(e AuditEvent) {
 	}
 }
 
+// auditInternalPrefix is the machine-to-machine surface: shared-secret,
+// platform-global receivers that no person or tenant client calls (today the
+// vmalert Alertmanager-v2 webhook, alertwebhook.Path). A delivery there is
+// plumbing, not a change anyone made.
+const auditInternalPrefix = "/api/internal/"
+
 // auditSignalWorthy: only successfully-allowed mutations are changes. The
 // synthetic methods some call sites use (e.g. "TRIAGE") count as mutating.
+//
+// Tracker 493 (2026-11-28): the /api/internal/ receivers are NOT mirrored.
+// vmalert POSTs every evaluation's alerts (the always-firing AlertingHeartbeat
+// included), ≈ 25k audit rows a day on the lab against ≈ 20 real changes, and
+// every one landed in the platform owner's "What changed" feed (class=changes)
+// under an empty tenant. The durable audit trail still records each request —
+// only the change-feed mirror skips them (owner 2026-10-18: audit logs stay
+// complete). The correlation engine never read these rows: the bridge writes
+// corr_signals directly, not the bus the engine consumes.
 func auditSignalWorthy(e AuditEvent) bool {
 	if e.Decision != "allow" {
 		return false
@@ -492,7 +507,7 @@ func auditSignalWorthy(e AuditEvent) bool {
 	case http.MethodGet, http.MethodHead, http.MethodOptions, auditMethodLogRead, auditMethodConsole:
 		return false
 	}
-	return true
+	return !strings.HasPrefix(e.Path, auditInternalPrefix)
 }
 
 func (b *auditSignalBridge) run() {

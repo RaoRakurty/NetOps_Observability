@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"netops/backend/internal/alertwebhook"
 )
 
 func TestAuditSignalWorthy(t *testing.T) {
@@ -27,6 +29,15 @@ func TestAuditSignalWorthy(t *testing.T) {
 		{"errored POST is not a change", AuditEvent{Method: http.MethodPost, Decision: "error"}, false},
 		{"GET denial stays out of the feed", AuditEvent{Method: http.MethodGet, Decision: "deny"}, false},
 		{"GET allow", AuditEvent{Method: http.MethodGet, Decision: "allow"}, false},
+		// Tracker 493: machine-to-machine receivers are plumbing, not changes.
+		{"vmalert webhook delivery is not a change",
+			AuditEvent{Method: http.MethodPost, Decision: "allow", Path: "/api/internal/vmalert/api/v2/alerts"}, false},
+		{"any /api/internal/ receiver is not a change",
+			AuditEvent{Method: http.MethodPut, Decision: "allow", Path: "/api/internal/future-hook"}, false},
+		{"a lookalike outside /api/internal/ still is",
+			AuditEvent{Method: http.MethodPost, Decision: "allow", Path: "/api/internalized/x"}, true},
+		{"a person's change still is",
+			AuditEvent{Method: http.MethodPost, Decision: "allow", Path: "/api/dem/targets"}, true},
 	}
 	for _, c := range cases {
 		if got := auditSignalWorthy(c.e); got != c.want {
@@ -95,3 +106,39 @@ func TestUUIDv5Shape(t *testing.T) {
 		t.Fatal("uuidV5 must be deterministic")
 	}
 }
+
+// The prefix the bridge skips is the one the vmalert receiver is mounted on —
+// if the receiver ever moves, this fails instead of the feed silently flooding.
+func TestAuditInternalPrefixCoversTheVMAlertReceiver(t *testing.T) {
+	if !strings.HasPrefix(alertwebhook.AlertsPath, auditInternalPrefix) {
+		t.Fatalf("vmalert receiver %q is outside %q — the change feed would mirror every delivery again",
+			alertwebhook.AlertsPath, auditInternalPrefix)
+	}
+}
+
+// The durable trail still gets the internal delivery; only the mirror skips it.
+func TestAuditBridgeKeepsInternalDeliveriesInTheTrail(t *testing.T) {
+	inner := &recordingAuditRepo{}
+	b := &auditSignalBridge{inner: inner, queue: make(chan AuditEvent, 4)}
+	e := AuditEvent{Method: http.MethodPost, Decision: "allow", Path: "/api/internal/vmalert/api/v2/alerts"}
+	b.Record(e)
+	if len(inner.recorded) != 1 {
+		t.Fatalf("trail recorded %d events, want 1 — the audit trail must stay complete", len(inner.recorded))
+	}
+	if len(b.queue) != 0 {
+		t.Fatalf("the change-feed mirror queued %d internal deliveries, want 0", len(b.queue))
+	}
+}
+
+// recordingAuditRepo is the durable trail stand-in: it keeps every event.
+type recordingAuditRepo struct{ recorded []AuditEvent }
+
+func (r *recordingAuditRepo) Record(e AuditEvent) { r.recorded = append(r.recorded, e) }
+func (r *recordingAuditRepo) RecordStrict(e AuditEvent) error {
+	r.recorded = append(r.recorded, e)
+	return nil
+}
+func (r *recordingAuditRepo) List(string, bool, auditQuery) ([]AuditEvent, error) {
+	return r.recorded, nil
+}
+func (r *recordingAuditRepo) Count(string, bool, auditQuery) int { return len(r.recorded) }
