@@ -261,9 +261,26 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 				e.CorrelationHints["bgp_peer_routerid"] = "unset"
 			}
 		}
-		if pt := vmPeerType(det["peer-type"]); pt != "" {
+		peerType := vmPeerType(det["peer-type"])
+		if (stateKind == "control_conn" || stateKind == "omp") && isEdgePeerType(peerType) &&
+			net.ParseIP(strings.TrimSpace(det["peer-system-ip"])) != nil {
+			// Tracker 397 (control_session.go): the CONTROLLER reported this
+			// session and named the edge as its peer. Flip it edge-centred —
+			// "edge <peer-system-ip> lost controller <system_ip>" — so the engine
+			// reads the edge as the side that lost connectivity and the reporter
+			// as the controller it lost. The reporter is kept in the hints.
+			edge := strings.TrimSpace(det["peer-system-ip"])
+			e.DeviceID, e.DeviceName, e.PeerID = edge, "", r.SystemIP
+			e.CorrelationHints["system_ip"] = edge
+			e.CorrelationHints["reported_by"] = r.SystemIP
+			e.CorrelationHints["session_direction"] = "edge_lost_controller"
+			if role := vmPeerType(det["personality"]); isControllerRole(role) {
+				// vsmart | vbond | vmanage — which controller role the edge lost.
+				e.CorrelationHints["peer_type"] = role
+			}
+		} else if peerType != "" {
 			// vsmart | vbond | vmanage — which controller role the lost session ran to.
-			e.CorrelationHints["peer_type"] = pt
+			e.CorrelationHints["peer_type"] = peerType
 		}
 		if linkCause != "" {
 			// The event's own name states the cause (vmanage_kinds.go LinkCause):

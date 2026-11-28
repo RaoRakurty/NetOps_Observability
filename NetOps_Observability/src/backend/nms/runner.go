@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"netops/backend/wireless"
@@ -128,6 +129,31 @@ func NewPipeline(seenCap int) *Pipeline {
 	return &Pipeline{Seen: NewSeenSet(seenCap), State: NewStateTracker()}
 }
 
+// controlSessionFlip: for a control-session state the CONTROLLER's own row
+// reported (its peer is an edge), the edge and controller ids the change event
+// is emitted with (tracker 397). s has been canonicalized: its DeviceID is the
+// controller's inventory id where known, and the native key it replaced rides in
+// Data["controller_device_id"]. The peer (the edge) is resolved here with the
+// same lookup. nil for any other state.
+func (p *Pipeline) controlSessionFlip(s ControllerState) *ControlSessionFlip {
+	if !isControlSessionKind(s.StateKind) || strings.TrimSpace(s.PeerID) == "" {
+		return nil
+	}
+	pt, _ := s.Data["peer_type"].(string) // discard: a non-string type is no type
+	if !isEdgePeerType(pt) {
+		return nil // an edge's own row (peer = a controller) is already edge-centred
+	}
+	ctrlNative := s.DeviceID
+	if v, ok := s.Data["controller_device_id"].(string); ok && v != "" {
+		ctrlNative = v
+	}
+	edge := s.PeerID
+	if id, ok := resolveDeviceKey(p.Resolver, p.KeyKind, &p.names, s.TenantID, s.PeerID); ok {
+		edge = id
+	}
+	return &ControlSessionFlip{EdgeID: edge, EdgeNative: s.PeerID, ControllerID: s.DeviceID, ControllerNative: ctrlNative}
+}
+
 // Route processes one Batch: metrics → lines, states → tracker (emitting
 // changes), events → deduped. Pure aside from the tracker/seen-set it owns.
 func (p *Pipeline) Route(b Batch) Routed {
@@ -145,6 +171,7 @@ func (p *Pipeline) Route(b Batch) Routed {
 		rec, chg := p.State.Apply(s)
 		out.States = append(out.States, rec)
 		if chg != nil {
+			chg.Session = p.controlSessionFlip(s)
 			out.StateChanges = append(out.StateChanges, *chg)
 		}
 	}

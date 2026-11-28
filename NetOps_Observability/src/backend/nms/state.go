@@ -39,6 +39,10 @@ type StateChange struct {
 	Record StateRecord
 	From   string
 	To     string
+	// Session is set (Pipeline.Route) for a control session the CONTROLLER's
+	// own row reported — its peer is an edge — so the change event is emitted
+	// edge-centred (tracker 397, control_session.go). nil for everything else.
+	Session *ControlSessionFlip
 }
 
 // StateTracker maintains current state + flap history. Safe for concurrent use.

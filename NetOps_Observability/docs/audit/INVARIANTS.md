@@ -1011,6 +1011,27 @@ sessions were back in ~10 s. PROVEN on the rig:
   fan-in discriminator pushed the right reading, edge-local `sdwan-control-connection-loss`,
   to 0.2. With the orientation right, cEDGE-80 lost controllers of two peer types — the
   transport look-alike — so no fan-in, and the edge-local reading leads.
+- **FIXED at stage [1] (owner decision 2026-11-28; Go connector only, no engine change,
+  ENGINE_SEMVER unchanged).** `nms/control_session.go`: a control / OMP session whose
+  reporter's peer is an edge role (`vedge|cedge|edge`) is emitted ON the edge
+  (`peer-system-ip`, which must be an address) with the reporting controller as `peer_id`,
+  its `personality` as `peer_type`, and `reported_by` / `session_direction=edge_lost_controller`
+  hints — on the `/dataservice/event` lane (`vmanage_events.go`) and on the polled
+  `control/connections` state lane (`Pipeline.Route` → `StateChange.Session` →
+  `SDWANStateChangeEvents`, which also drops the controller's site). After the inventory
+  join both lanes carry the controller's system-ip in `correlation_hints.controller_peer_id`,
+  as `signals.controller_peer` reads it. Edge-reported and controller↔controller sessions
+  keep their shape. PROVEN on the recorded rows: the drill, through the production
+  transform + runtime (golden `nms/testdata/source_parity/vmanage_20.6.control_connection_drill.controller_events.json`,
+  `TestControlConnectionDrillGolden`) and the engine (`test_control_session_direction_397.py`),
+  is one object on cEDGE-80 headlined `sdwan-control-connection-loss` (1.0, suspected) with
+  no controller-unreachable headline; the pre-fix shape still reproduces the drill's
+  misattribution (regression witness); five edges each losing the same vSmart still
+  headline `sdwan-controller-unreachable`. Consequence for item 5: a single edge's loss now
+  forms its nodes on the EDGE, so the drill's controller-side `ctl:` star no longer arises
+  from this shape; in a controller outage the star needs a node on the controller (its
+  unreachable alarm or a controller↔controller loss), which items 2 and 6 still have to
+  show on the rig.
 
 ## 32. SD-WAN tunnel identity across lanes — BUILT, not proven on the rig (tracker 430, 2026-11-21)
 
