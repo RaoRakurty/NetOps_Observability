@@ -321,3 +321,87 @@ tests:
               assert!(!exists(.vendor_source))
               assert!(!exists(.vendor))
               assert!(!exists(.device_id))
+
+  # Owner rule 2026-11-23: a device is named by its hostname, never its address.
+  # An rfc3164 IOS sender writes no hostname, so syslog-ng's host is the source
+  # address; the title names the device from the registry instead, while the
+  # registry KEY (.hostname) and the address fields stay exactly as received.
+  - name: "a frame with no hostname is titled with the inventory's device name, not its address"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "192.168.222.107"
+          source_ip: "192.168.222.107"
+          appname: "unknown"
+          severity: "notice"
+          message: "%DMI-5-AUTH_PASSED: R0/0: dmiauthd: User 'vmanage-admin' authenticated successfully from 10.255.255.1:51806 and was authorized for netconf over ssh. External groups:"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(contains(string!(.title), "cEDGE-40"), message: "title: " + string!(.title))
+              assert!(!contains(string!(.title), "192.168.222.107"), message: "title: " + string!(.title))
+              assert_eq!(.device_name, "cEDGE-40")
+              assert_eq!(.hostname, "192.168.222.107")
+              assert_eq!(.source_ip, "192.168.222.107")
+              assert_eq!(.tenant_id, "lab")
+              assert_eq!(.device_id, "cedge-40-fdf7b64f")
+
+  - name: "a hostname the device sent is never replaced by the inventory's name"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "cisco-edge1"
+          source_ip: "10.1.1.1"
+          appname: "unknown"
+          severity: "notice"
+          message: "%DMI-5-AUTH_PASSED: R0/0: dmiauthd: User 'vmanage-admin' authenticated successfully from 10.255.255.1:51806 and was authorized for netconf over ssh. External groups:"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(contains(string!(.title), "cisco-edge1"), message: "title: " + string!(.title))
+              assert!(!contains(string!(.title), "Edge-One-Inventory"), message: "title: " + string!(.title))
+              assert_eq!(.hostname, "cisco-edge1")
+
+  - name: "an address the inventory does not know keeps the address, no guess"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "192.168.250.250"
+          source_ip: "192.168.250.250"
+          appname: "unknown"
+          severity: "notice"
+          message: "%DMI-5-AUTH_PASSED: R0/0: dmiauthd: User 'vmanage-admin' authenticated successfully from 10.255.255.1:51806 and was authorized for netconf over ssh. External groups:"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(contains(string!(.title), "192.168.250.250"), message: "title: " + string!(.title))
+              assert!(!exists(.device_name))
+              assert_eq!(.tenant_registry, "miss")
+
+  - name: "another tenant's address is named from that tenant's own row"
+    inputs:
+      - insert_at: syslog_normalized
+        type: log
+        log_fields:
+          hostname: "192.168.9.9"
+          source_ip: "192.168.9.9"
+          appname: "unknown"
+          severity: "notice"
+          message: "%DMI-5-AUTH_PASSED: R0/0: dmiauthd: User 'vmanage-admin' authenticated successfully from 10.255.255.1:51806 and was authorized for netconf over ssh. External groups:"
+    outputs:
+      - extract_from: syslog_normalized
+        conditions:
+          - type: vrl
+            source: |
+              assert!(contains(string!(.title), "B-ROUTER"), message: "title: " + string!(.title))
+              assert_eq!(.device_name, "B-ROUTER")
+              assert_eq!(.tenant_id, "t_b")

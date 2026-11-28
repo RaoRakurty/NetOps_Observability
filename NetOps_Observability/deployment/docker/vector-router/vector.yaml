@@ -123,6 +123,7 @@ enrichment_tables:
       model: string
       site: string
       role: string
+      name: string
 
 sources:
   internal_metrics:

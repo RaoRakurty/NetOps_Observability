@@ -71,7 +71,7 @@ const enrichmentFileName = "device_tenant.csv"
 
 // enrichmentCSVHeader is the file's contract with both readers. New columns go on
 // the END: the engine reads the first two by position.
-var enrichmentCSVHeader = []string{"identity", "tenant_id", "device_id", "vendor", "model", "site", "role"}
+var enrichmentCSVHeader = []string{"identity", "tenant_id", "device_id", "vendor", "model", "site", "role", "name"}
 
 // maxEnrichmentCellRunes bounds one fact. It lands on every record of the device,
 // so an inventory field somebody pasted a paragraph into must not ride along.
@@ -89,6 +89,13 @@ type enrichmentRow struct {
 	Model    string
 	Site     string
 	Role     string
+	// Name is the device's display name (its hostname as the inventory knows
+	// it) — what an operator reads. The ingest tier puts it on a syslog frame
+	// that carried no hostname (an IOS rfc3164 sender writes none, so the
+	// frame's host is its source address); it never replaces a hostname the
+	// device sent and never decides a tenant. Owner rule 2026-11-23: show
+	// hostnames, never addresses or internal ids, as a device's name.
+	Name string
 }
 
 // cleanEnrichmentCell makes one inventory value safe to stamp on telemetry: no
@@ -111,13 +118,13 @@ func enrichmentSite(d models.Device, bindings map[string]string) string {
 
 // identityFacts gathers the facts of every device claiming one identity.
 type identityFacts struct {
-	deviceIDs, vendors, models, sites, roles map[string]bool
+	deviceIDs, vendors, models, sites, roles, names map[string]bool
 }
 
 func newIdentityFacts() *identityFacts {
 	return &identityFacts{
 		deviceIDs: map[string]bool{}, vendors: map[string]bool{}, models: map[string]bool{},
-		sites: map[string]bool{}, roles: map[string]bool{},
+		sites: map[string]bool{}, roles: map[string]bool{}, names: map[string]bool{},
 	}
 }
 
@@ -204,6 +211,7 @@ func buildEnrichmentRowsIdentity(devices []models.Device, siteBindings func(tena
 			value string
 		}{
 			{f.deviceIDs, d.ID}, {f.vendors, vendor}, {f.models, model}, {f.sites, site}, {f.roles, role},
+			{f.names, d.Name},
 		} {
 			if v := cleanEnrichmentCell(c.value); v != "" {
 				c.into[v] = true
@@ -245,7 +253,7 @@ func buildEnrichmentRowsIdentity(devices []models.Device, siteBindings func(tena
 			rows = append(rows, enrichmentRow{
 				Identity: identity, Tenant: t,
 				DeviceID: soleFact(f.deviceIDs), Vendor: soleFact(f.vendors), Model: soleFact(f.models),
-				Site: soleFact(f.sites), Role: soleFact(f.roles),
+				Site: soleFact(f.sites), Role: soleFact(f.roles), Name: soleFact(f.names),
 			})
 		}
 	}
@@ -290,6 +298,7 @@ func controllerRegistryRows(devs []models.Device, directHeld map[string]map[stri
 			Identity: c.Identity, Tenant: t, DeviceID: cleanEnrichmentCell(d.ID),
 			Vendor: cleanEnrichmentCell(vendor), Model: cleanEnrichmentCell(f.Model.Value),
 			Site: cleanEnrichmentCell(f.Site.Value), Role: cleanEnrichmentCell(f.Role.Value),
+			Name: cleanEnrichmentCell(d.Name),
 		})
 	}
 	return rows, stats
@@ -316,7 +325,7 @@ func writeEnrichmentCSV(dir string, rows []enrichmentRow) (bool, error) {
 		return false, err
 	}
 	for _, r := range rows {
-		if err := w.Write([]string{r.Identity, r.Tenant, r.DeviceID, r.Vendor, r.Model, r.Site, r.Role}); err != nil {
+		if err := w.Write([]string{r.Identity, r.Tenant, r.DeviceID, r.Vendor, r.Model, r.Site, r.Role, r.Name}); err != nil {
 			return false, err
 		}
 	}
