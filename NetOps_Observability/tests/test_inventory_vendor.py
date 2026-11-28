@@ -48,7 +48,7 @@ ENV_STUBS = [
     "INGEST_TOKEN_PROBES=preflight-stub", "INGEST_TOKEN_METRICS=preflight-stub",
     "INGEST_TOKEN_BUS=preflight-stub",
 ]
-FACT_COLUMNS = ("device_id", "vendor", "model", "site", "role")
+FACT_COLUMNS = ("device_id", "vendor", "model", "site", "role", "name")
 HEADER = ("identity", "tenant_id") + FACT_COLUMNS
 
 _SKIP = ("docker is unavailable, so the inventory suite DID NOT RUN against the shipped "

@@ -197,9 +197,9 @@ func TestWriteEnrichmentCSV_RoundTrip(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	want := [][]string{
-		{"identity", "tenant_id", "device_id", "vendor", "model", "site", "role"},
-		{"10.0.0.1", "acme", "", "", "", "", ""},
-		{"spine1", "", "", "", "", "", ""},
+		{"identity", "tenant_id", "device_id", "vendor", "model", "site", "role", "name"},
+		{"10.0.0.1", "acme", "", "", "", "", "", ""},
+		{"spine1", "", "", "", "", "", "", ""},
 	}
 	if !reflect.DeepEqual(recs, want) {
 		t.Fatalf("csv mismatch:\n got=%v\nwant=%v", recs, want)

@@ -48,8 +48,9 @@ func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (B
 		// substring guess remains only for a rule the table does not know.
 		net, stateKind := vmanageNormType(a.Type, a.Component, a.EventName)
 		recovery := !a.Active
+		resource := ""
 		if k, ok := vmanageAlarmKind(a.RuleDisp); ok {
-			net, stateKind = k.Kind, k.StateKind
+			net, stateKind, resource = k.Kind, k.StateKind, k.Resource
 			if k.Recovery {
 				recovery = true
 			}
@@ -82,6 +83,10 @@ func (VManageTransformer) Transform(tenant, integrationID string, raw []byte) (B
 			RawPayload:          mustJSON(a),
 			EvidenceRole:        roleForEventType(net),
 			CorrelationHints:    map[string]string{"component": a.Component, "system_ip": systemIP, "rule": a.RuleDisp},
+		}
+		if resource != "" {
+			// CPU_Usage / Memory_Usage (owner 2026-11-25): see vmAlarmKind.Resource.
+			e.CorrelationHints["resource"] = resource
 		}
 		if recovery {
 			// A cleared alarm is a RECOVERY, not a fault: before 2026-10-25 it

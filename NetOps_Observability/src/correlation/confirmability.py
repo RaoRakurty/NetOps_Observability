@@ -372,6 +372,22 @@ DEMO_CONFIRMABILITY_EXCEPTIONS: dict[str, dict] = {
                              "controller) plus a direct reachability probe of "
                              "the controller",
     },
+    # Owner 2026-11-25 (ENGINE_SEMVER 3.9.0).
+    "sig.ent.wan-edge.sdwan-controller-resource-sustained": {
+        "reason": "its anchor reads `node_role=controller`, which only the "
+                  "controller connector states (management_plane): the "
+                  "controller node's sustained CPU / memory is relayed by its "
+                  "manager, a support plane that never anchors (owner D1), and "
+                  "the optional edge control-loss clause is the same relay. The "
+                  "suspected ceiling is honest until a measurement plane sees "
+                  "the controller itself",
+        "owner": "correlix",
+        "date_added": "2026-11-25",
+        "target_resolution": "tracker 492(c): the controller node's own trap / "
+                             "syslog / SNMP CPU (device_telemetry) stating its "
+                             "role from the registry, so a measurement plane "
+                             "anchors the same clause",
+    },
 }
 
 

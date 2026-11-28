@@ -285,6 +285,9 @@
             "device_id": {
               "type": "keyword"
             },
+            "device_name": {
+              "type": "keyword"
+            },
             "model": {
               "type": "keyword"
             },

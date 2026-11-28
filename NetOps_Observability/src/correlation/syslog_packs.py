@@ -251,12 +251,25 @@ def _metric_value(raw: str) -> float | None:
     return v if math.isfinite(v) else None
 
 
+def display_host(ev: Mapping[str, Any], host: str) -> str:
+    """The host a title SHOWS. A frame with no hostname of its own (an rfc3164 IOS
+    sender writes none, so syslog-ng's host is the source address) is named by the
+    inventory's display name for that device (`device_name`, from the registry);
+    a hostname the device sent is never replaced, and an unknown sender keeps its
+    address — no guess. Owner rule 2026-11-23: hostnames, never addresses, as a
+    device's name. Mirrors the generated VRL (cx_pk_dname)."""
+    name = str(ev.get("device_name") or "")
+    if name and host == str(ev.get("source_ip") or ""):
+        return name
+    return host
+
+
 def _event_model(g: Grammar, m: re.Match[str], ev: Mapping[str, Any], out: dict[str, Any]) -> None:
     """The rich event fields (tracker 387; the trap lane's names): templates, metrics,
     pack guidance and the provenance of each field. Stage B writes the same, generated
     from the same rows."""
     host = str(ev.get("hostname") or "unknown")
-    record = {"host": host, "device": str(ev.get("device_id") or "") or host,
+    record = {"host": display_host(ev, host), "device": str(ev.get("device_id") or "") or host,
               "minute": record_minute(ev.get("timestamp"))}
     observed = [k for k in _OBSERVED_ORDER if out.get(k)]
     derived = ["normalized_severity"]
