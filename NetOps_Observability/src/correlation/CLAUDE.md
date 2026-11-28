@@ -786,7 +786,12 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   `sdwan-control-connection-loss` (now matchable: its mandatory kind was the
   producer-less `sdwan_control_down`). Stage [1]: the syslog control-connection rows emit
   the controller as a token (trap rows already did); vManage events read
-  `peer-system-ip` + `peer-type` (nms/vmanage_events.go). **Fleet-scale limit:** the
+  `peer-system-ip` + `peer-type` (nms/vmanage_events.go). vManage reports a lost
+  session FROM the controller (peer-type=vedge), so the connector flips it edge-centred —
+  ON the edge, the reporting controller as peer, its personality as `peer_type`
+  (nms/control_session.go, both the event and the polled-state lane; tracker 397,
+  2026-11-28; Go only, ENGINE_SEMVER unchanged). Before it one edge's drill read as two
+  controllers "losing" the edge and headlined controller-unreachable. **Fleet-scale limit:** the
   edges meet ONLY on that rank-7 token, and a token on more than `CORR_TOKEN_HUB_CAP` = 64
   NODES never grounds — about 32 edges when each reports through two lanes (one node per
   spelling while `CORR_IDENTITY_CANON` is off). Past it there is no controller verdict at

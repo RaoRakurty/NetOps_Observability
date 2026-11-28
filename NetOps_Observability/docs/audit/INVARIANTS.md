@@ -982,6 +982,57 @@ days). The proof is the owner's vSmart-shutdown drill (as on 2026-11-10), record
    down session decides the export window).
 Past the cap on real telemetry needs the drill with `CORR_TOKEN_HUB_CAP=4` (owner call).
 
+**Single-edge drill, 2026-11-25 23:23:32Z (tracker 399; NOT the vSmart-shutdown drill,
+which stays owed).** `clear sdwan control connections` on cEDGE-80 (10.255.255.80); its
+sessions were back in ~10 s. PROVEN on the rig:
+- **The real event shape (recorded, `nms/testdata/vmanage_20.6/events_control_connection.json`).**
+  vManage 20.6.1 reports the transition FROM THE CONTROLLER that lost the session —
+  `system_ip` = vSmart 10.255.255.2 / vManage 10.255.255.1, `personality=vsmart|vmanage`,
+  `peer-type=vedge` (vManage's word for a cEdge too), `peer-system-ip=10.255.255.80`,
+  `new-state=down|up`, plus `public-ip`, `src-color`, `remote-color`, `uptime`. The edge sent
+  no control-connection event of its own (and no syslog or trap: its syslog does not point
+  at Correlix). The connector parses it into `controller_control_connection_loss` / `_clear`
+  bound to the controller with the edge as `peer_id` (`TestControlConnectionEventNamesTheLostController`
+  now runs on the recorded rows).
+- Item 1: 19 `sdwan_control` rows in `topology_links.json`, as expected.
+- Item 3: rank-3 `ctl:` edges exist (`ctl:10.255.255.1--cedge-80-…`, `ctl:10.255.255.2--cedge-80-…`)
+  from each controller-side loss node to cEDGE-80's nodes (object 6377593c, version 94).
+- Item 4: no "no authoritative edge" cap reason on that object.
+- Item 5: the loss nodes ARE on the controllers (that is the recorded shape), at the event's
+  own time (23:23:38–39).
+- **Found, attribution INVERTED (proposal in tracker 397, owner decision).** `signals.controller_peer`
+  reads every lane as "the reporting entity is the edge, the peer is the controller", which
+  is true for the syslog / trap rows and false for the recorded vManage shape. So
+  `controller_fan_in` counted vSmart and vManage as two "edges" that lost "controller
+  10.255.255.80 (vedge)" and attested the fan-in: the object headlined
+  `sdwan-controller-unreachable` ("Possibly an SD-WAN controller outage: several edges lost
+  their control connection to the same controller at once"), note `controller fan-in: 2
+  edges lost their control connection to controller 10.255.255.80 (vedge)`, and the
+  fan-in discriminator pushed the right reading, edge-local `sdwan-control-connection-loss`,
+  to 0.2. With the orientation right, cEDGE-80 lost controllers of two peer types — the
+  transport look-alike — so no fan-in, and the edge-local reading leads.
+- **FIXED at stage [1] (owner decision 2026-11-28; Go connector only, no engine change,
+  ENGINE_SEMVER unchanged).** `nms/control_session.go`: a control / OMP session whose
+  reporter's peer is an edge role (`vedge|cedge|edge`) is emitted ON the edge
+  (`peer-system-ip`, which must be an address) with the reporting controller as `peer_id`,
+  its `personality` as `peer_type`, and `reported_by` / `session_direction=edge_lost_controller`
+  hints — on the `/dataservice/event` lane (`vmanage_events.go`) and on the polled
+  `control/connections` state lane (`Pipeline.Route` → `StateChange.Session` →
+  `SDWANStateChangeEvents`, which also drops the controller's site). After the inventory
+  join both lanes carry the controller's system-ip in `correlation_hints.controller_peer_id`,
+  as `signals.controller_peer` reads it. Edge-reported and controller↔controller sessions
+  keep their shape. PROVEN on the recorded rows: the drill, through the production
+  transform + runtime (golden `nms/testdata/source_parity/vmanage_20.6.control_connection_drill.controller_events.json`,
+  `TestControlConnectionDrillGolden`) and the engine (`test_control_session_direction_397.py`),
+  is one object on cEDGE-80 headlined `sdwan-control-connection-loss` (1.0, suspected) with
+  no controller-unreachable headline; the pre-fix shape still reproduces the drill's
+  misattribution (regression witness); five edges each losing the same vSmart still
+  headline `sdwan-controller-unreachable`. Consequence for item 5: a single edge's loss now
+  forms its nodes on the EDGE, so the drill's controller-side `ctl:` star no longer arises
+  from this shape; in a controller outage the star needs a node on the controller (its
+  unreachable alarm or a controller↔controller loss), which items 2 and 6 still have to
+  show on the rig.
+
 ## 32. SD-WAN tunnel identity across lanes — BUILT, not proven on the rig (tracker 430, 2026-11-21)
 
 Stage [1], `canon.py` `tunnel` axis, under `CORR_IDENTITY_CANON` (default OFF, so dormant

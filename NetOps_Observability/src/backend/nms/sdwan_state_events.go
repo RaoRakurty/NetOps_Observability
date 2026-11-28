@@ -94,6 +94,22 @@ func SDWANStateChangeEvents(spec ConnectorSpec, tenant, integrationID string, ch
 			EvidenceRole:        role,
 			CorrelationHints:    hints,
 		}
+		if f := ch.Session; f != nil && isControlSessionKind(ch.Record.StateKind) {
+			// Tracker 397: the controller's own row reported this session and
+			// named the edge as its peer — emit it edge-centred ("edge lost
+			// controller"). The site on the record is the controller's, not the
+			// edge's, so it is dropped; the native keys are kept so the engine
+			// spells the controller by the same system-ip on every lane.
+			ev.DeviceID, ev.PeerID, ev.SiteID = f.EdgeID, f.ControllerID, ""
+			hints["reported_by"] = f.ControllerNative
+			hints["session_direction"] = "edge_lost_controller"
+			if f.ControllerNative != "" && f.ControllerNative != f.ControllerID {
+				hints["controller_peer_id"] = f.ControllerNative
+			}
+			if f.EdgeNative != "" && f.EdgeNative != f.EdgeID {
+				hints["controller_device_id"] = f.EdgeNative
+			}
+		}
 		ev.DedupeKey = DedupeKey(ev)
 		out = append(out, ev)
 	}

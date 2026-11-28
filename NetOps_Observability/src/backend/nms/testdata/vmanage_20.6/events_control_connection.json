@@ -1,0 +1,40 @@
+{
+ "data": [
+  {
+   "component": "Control",
+   "details": "host-name=vSmart; personality=vsmart; peer-type=vedge; peer-system-ip=10.255.255.80; peer-vmanage-system-ip=0.0.0.0; public-ip=200.80.1.80; public-port=12346; src-color=default; remote-color=biz-internet; uptime=3:00:29:46; new-state=down",
+   "entry_time": 1795649018000,
+   "eventname": "control-connection-state-change",
+   "host_name": "vSmart",
+   "id": "NmwFFaIBC1VyrBpqnLp_",
+   "system_ip": "10.255.255.2"
+  },
+  {
+   "component": "Control",
+   "details": "host-name=vManage; personality=vmanage; peer-type=vedge; peer-system-ip=10.255.255.80; peer-vmanage-system-ip=0.0.0.0; public-ip=200.80.1.80; public-port=12346; src-color=default; remote-color=biz-internet; uptime=3:00:29:27; new-state=down",
+   "entry_time": 1795649019000,
+   "eventname": "control-connection-state-change",
+   "host_name": "vManage",
+   "id": "N2wFFaIBC1VyrBpqnLrF",
+   "system_ip": "10.255.255.1"
+  },
+  {
+   "component": "Control",
+   "details": "host-name=vManage; personality=vmanage; peer-type=vedge; peer-system-ip=10.255.255.80; peer-vmanage-system-ip=0.0.0.0; public-ip=200.80.1.80; public-port=12346; src-color=default; remote-color=biz-internet; uptime=0:00:00:00; new-state=up",
+   "entry_time": 1795649020000,
+   "eventname": "control-connection-state-change",
+   "host_name": "vManage",
+   "id": "OGwFFaIBC1VyrBpqoLrU",
+   "system_ip": "10.255.255.1"
+  },
+  {
+   "component": "Control",
+   "details": "host-name=vSmart; personality=vsmart; peer-type=vedge; peer-system-ip=10.255.255.80; peer-vmanage-system-ip=0.0.0.0; public-ip=200.80.1.80; public-port=12346; src-color=default; remote-color=biz-internet; uptime=0:00:00:00; new-state=up",
+   "entry_time": 1795649020000,
+   "eventname": "control-connection-state-change",
+   "host_name": "vSmart",
+   "id": "OWwFFaIBC1VyrBpqobpJ",
+   "system_ip": "10.255.255.2"
+  }
+ ]
+}

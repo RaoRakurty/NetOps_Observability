@@ -87,10 +87,7 @@ func canonicalize(r DeviceResolver, kind KeyKind, names *deviceNames, b Batch) B
 		names.learn(e.DeviceID, e.DeviceName)
 	}
 	resolve := func(tenant, key string) (string, bool) {
-		if key == "" {
-			return "", false
-		}
-		return r.ResolveDevice(tenant, kind, key, names.get(key))
+		return resolveDeviceKey(r, kind, names, tenant, key)
 	}
 
 	events := make([]ControllerEvent, len(b.Events))

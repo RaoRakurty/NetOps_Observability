@@ -85,7 +85,36 @@ func TestSourceParityGoldenVManage206PeerInInventory(t *testing.T) {
 // UPDATE_SOURCE_PARITY=1). It returns what was produced.
 func checkSourceParityGolden(t *testing.T, r DeviceResolver, golden string) []ControllerEvent {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/source_parity/vmanage_20.6_events_cedge81_bgp.json")
+	return checkRecordedEventsGolden(t, r, "testdata/source_parity/vmanage_20.6_events_cedge81_bgp.json", golden)
+}
+
+// Tracker 397: the cEDGE-80 control-connection drill (2026-11-25 23:23:32Z,
+// `clear sdwan control connections`), recorded from the lab vManage 20.6.1
+// (testdata/vmanage_20.6/events_control_connection.json), through the production
+// transform + runtime. vManage reports the lost sessions FROM the controllers;
+// the connector emits them edge-centred. src/correlation/
+// test_control_session_direction_397.py replays this golden through the engine.
+const controlDrillGolden = "testdata/source_parity/vmanage_20.6.control_connection_drill.controller_events.json"
+
+func TestControlConnectionDrillGolden(t *testing.T) {
+	r := sourceParityResolver{
+		"10.255.255.80": "cedge-80-b0afc197",
+		"10.255.255.2":  "vsmart-9d1c6a40",
+		"10.255.255.1":  "vmanage-bfa81d72",
+	}
+	got := checkRecordedEventsGolden(t, r, "testdata/vmanage_20.6/events_control_connection.json", controlDrillGolden)
+	for _, e := range got {
+		if e.DeviceID != "cedge-80-b0afc197" || e.CorrelationHints["session_direction"] != "edge_lost_controller" {
+			t.Fatalf("drill event not edge-centred: device=%q hints=%v", e.DeviceID, e.CorrelationHints)
+		}
+	}
+}
+
+// checkRecordedEventsGolden is checkSourceParityGolden for any recorded
+// /dataservice/event capture.
+func checkRecordedEventsGolden(t *testing.T, r DeviceResolver, input, golden string) []ControllerEvent {
+	t.Helper()
+	raw, err := os.ReadFile(input)
 	if err != nil {
 		t.Fatal(err)
 	}

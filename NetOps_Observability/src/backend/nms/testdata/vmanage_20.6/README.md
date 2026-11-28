@@ -21,3 +21,13 @@ for tracker 371 / the source-equivalence programme (E2a):
   timeouts — no change had been made in the window). Note the payload's own
   `tenant` field ("default", vManage's tenancy): the transform must never read
   it; the tenant is the integration's (§3a).
+- `events_control_connection.json` — the 4 `control-connection-state-change`
+  events of the tracker-399 drill (2026-11-25 23:23:32Z, `clear sdwan control
+  connections` on cEDGE-80). Recovered READ-ONLY from the connector's own
+  `netops.controller_events` messages on the lab bus (the connector keeps
+  `event_id`, `event_time`, the reporting `system_ip` / `host_name`, the
+  component and `eventname + " " + details` verbatim); `severity_level` is not
+  preserved downstream, so it is omitted (a down is high by kind; an up is the
+  clear). The real shape: the CONTROLLER reports it (vSmart / vManage,
+  `personality=vsmart|vmanage`, `peer-type=vedge` even for a cEdge) and names the
+  edge as `peer-system-ip`; the edge reported nothing itself.

@@ -224,29 +224,143 @@ func TestNoMappedKindIsAnOrphan(t *testing.T) {
 
 // TestControlConnectionEventNamesTheLostController: a control-connection
 // transition names its far end as `peer-system-ip` (BGP uses `peer`), and the
-// engine's controller fan-in needs it to tell WHICH controller several edges lost
-// together. CONSTRUCTED row in the recorded details grammar (`k=v;`), field names
-// from Cisco's control-connection-state-change notification.
+// engine's controller fan-in needs it to tell which session was lost.
+//
+// RECORDED (tracker 399, drill 2026-11-25 23:23:32Z: `clear sdwan control
+// connections` on cEDGE-80): testdata/vmanage_20.6/events_control_connection.json.
+// The real shape is the reverse of the constructed row this test used before:
+// vManage 20.6.1 reports the transition FROM THE CONTROLLER that lost the session
+// (system_ip = vSmart 10.255.255.2 / vManage 10.255.255.1, personality=vsmart|
+// vmanage, peer-type=vedge — even for a cEdge) and names the EDGE as
+// peer-system-ip. The edge reported no control-connection event of its own.
 func TestControlConnectionEventNamesTheLostController(t *testing.T) {
-	raw := `{"data":[{"id":"cc1","eventname":"control-connection-state-change","component":"Control","severity_level":"major",
-	 "entry_time":1793500000000,"system_ip":"10.255.255.20","host_name":"vEdge-20",
-	 "details":"host-name=vEdge-20; system-ip=10.255.255.20; personality=vedge; peer-type=vsmart; peer-system-ip=10.255.255.2; public-ip=200.250.250.2; public-port=12346; new-state=down"}]}`
+	raw, err := os.ReadFile("testdata/vmanage_20.6/events_control_connection.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := vmanageEventsTransform("t1", "i1", raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Events) != 4 {
+		t.Fatalf("want the 4 recorded transitions (vSmart + vManage, down + up), got %d", len(b.Events))
+	}
+	// Tracker 397 (owner decision 2026-11-28): the connector flips that shape
+	// edge-centred — the event is ON the edge and names the controller it lost
+	// (the reporter), with the controller's role as peer_type.
+	reporters := map[string]string{"10.255.255.2": "vsmart", "10.255.255.1": "vmanage"}
+	downs, ups := 0, 0
+	lost := map[string]bool{}
+	for _, e := range b.Events {
+		if e.DeviceID != "10.255.255.80" {
+			t.Errorf("event on %s: the session loss is the EDGE's (cEDGE-80, 10.255.255.80)", e.DeviceID)
+		}
+		role, ok := reporters[e.PeerID]
+		if !ok {
+			t.Errorf("PeerID = %q, want the controller that reported the lost session", e.PeerID)
+		}
+		lost[e.PeerID] = true
+		if got := e.CorrelationHints["peer_type"]; got != role {
+			t.Errorf("peer_type hint = %q, want the lost controller's role %q (its personality)", got, role)
+		}
+		if got := e.CorrelationHints["reported_by"]; got != e.PeerID {
+			t.Errorf("reported_by = %q, want the reporting controller %q", got, e.PeerID)
+		}
+		if got := e.CorrelationHints["session_direction"]; got != "edge_lost_controller" {
+			t.Errorf("session_direction = %q, want edge_lost_controller", got)
+		}
+		if e.DeviceName != "" {
+			t.Errorf("DeviceName = %q: the recorded host-name is the controller's, it must not label the edge", e.DeviceName)
+		}
+		switch e.NormalizedEventType {
+		case "controller_control_connection_loss":
+			downs++
+			if e.Severity != "high" {
+				t.Errorf("a session going down is high, got %q", e.Severity)
+			}
+		case "controller_control_connection_loss_clear":
+			ups++
+			if e.CorrelationHints["transition"] != "recovery" {
+				t.Errorf("new-state=up must be a recovery: %+v", e.CorrelationHints)
+			}
+		default:
+			t.Errorf("kind %q, want the control-connection loss or its clear", e.NormalizedEventType)
+		}
+	}
+	if downs != 2 || ups != 2 {
+		t.Errorf("downs/ups = %d/%d, want 2/2", downs, ups)
+	}
+	if len(lost) != 2 {
+		t.Errorf("the edge lost %d distinct controllers, want 2 (vSmart + vManage): %v", len(lost), lost)
+	}
+}
+
+// TestEdgeReportedControlConnectionIsNotFlipped (tracker 397): an edge's own
+// report (system_ip = the edge, peer-type = a controller role) is already
+// edge-centred and keeps its shape; a controller↔controller session (vSmart
+// losing vBond) is not an edge's loss and is not flipped either.
+func TestEdgeReportedControlConnectionIsNotFlipped(t *testing.T) {
+	raw := `{"data":[
+	 {"id":"e1","eventname":"control-connection-state-change","component":"Control","entry_time":1795649018000,
+	  "system_ip":"10.255.255.80","host_name":"cEDGE-80",
+	  "details":"host-name=cEDGE-80; personality=vedge; peer-type=vsmart; peer-system-ip=10.255.255.2; new-state=down"},
+	 {"id":"e2","eventname":"control-connection-state-change","component":"Control","entry_time":1795649018000,
+	  "system_ip":"10.255.255.2","host_name":"vSmart",
+	  "details":"host-name=vSmart; personality=vsmart; peer-type=vbond; peer-system-ip=10.255.255.3; new-state=down"}]}`
 	b, err := vmanageEventsTransform("t1", "i1", []byte(raw), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b.Events) != 1 {
-		t.Fatalf("want one event, got %+v", b.Events)
+	if len(b.Events) != 2 {
+		t.Fatalf("want 2 events, got %d", len(b.Events))
+	}
+	for i, want := range []struct{ dev, peer, ptype string }{
+		{"10.255.255.80", "10.255.255.2", "vsmart"},
+		{"10.255.255.2", "10.255.255.3", "vbond"},
+	} {
+		e := b.Events[i]
+		if e.DeviceID != want.dev || e.PeerID != want.peer || e.CorrelationHints["peer_type"] != want.ptype {
+			t.Errorf("event %d = (%s, %s, %s), want unchanged (%s, %s, %s)", i, e.DeviceID, e.PeerID,
+				e.CorrelationHints["peer_type"], want.dev, want.peer, want.ptype)
+		}
+		if _, ok := e.CorrelationHints["session_direction"]; ok {
+			t.Errorf("event %d was flipped: %+v", i, e.CorrelationHints)
+		}
+	}
+	if b.Events[0].DeviceName != "cEDGE-80" {
+		t.Errorf("an edge's own report keeps its host name, got %q", b.Events[0].DeviceName)
+	}
+}
+
+// TestControllerReportedSessionWithoutAValidEdgeIsNotFlipped: the flip needs a
+// real edge address — a garbage peer-system-ip names nobody, so the event keeps
+// its reported shape (untrusted controller output never invents an entity).
+func TestControllerReportedSessionWithoutAValidEdgeIsNotFlipped(t *testing.T) {
+	raw := `{"data":[{"id":"g1","eventname":"control-connection-state-change","component":"Control",
+	  "entry_time":1795649018000,"system_ip":"10.255.255.2","host_name":"vSmart",
+	  "details":"personality=vsmart; peer-type=vedge; peer-system-ip=not-an-ip; new-state=down"}]}`
+	b, err := vmanageEventsTransform("t1", "i1", []byte(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := b.Events[0]; e.DeviceID != "10.255.255.2" || e.CorrelationHints["session_direction"] != "" {
+		t.Errorf("flipped on an invalid edge address: %+v", e)
+	}
+}
+
+// TestControllerReportedOMPSessionIsFlipped: omp-peer-state-change from the
+// vSmart names the edge the same way and is flipped the same way.
+func TestControllerReportedOMPSessionIsFlipped(t *testing.T) {
+	raw := `{"data":[{"id":"o1","eventname":"omp-peer-state-change","component":"OMP",
+	  "entry_time":1795649018000,"system_ip":"10.255.255.2","host_name":"vSmart",
+	  "details":"personality=vsmart; peer-type=vedge; peer-system-ip=10.255.255.80; new-state=down"}]}`
+	b, err := vmanageEventsTransform("t1", "i1", []byte(raw), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 	e := b.Events[0]
-	if e.NormalizedEventType != "controller_control_connection_loss" || e.DeviceID != "10.255.255.20" {
-		t.Fatalf("kind/device: %+v", e)
-	}
-	if e.PeerID != "10.255.255.2" {
-		t.Errorf("PeerID = %q, want the lost controller 10.255.255.2", e.PeerID)
-	}
-	if e.CorrelationHints["peer_type"] != "vsmart" {
-		t.Errorf("peer_type hint = %q, want vsmart", e.CorrelationHints["peer_type"])
+	if e.DeviceID != "10.255.255.80" || e.PeerID != "10.255.255.2" || e.CorrelationHints["peer_type"] != "vsmart" {
+		t.Errorf("OMP session not flipped edge-centred: dev=%s peer=%s hints=%v", e.DeviceID, e.PeerID, e.CorrelationHints)
 	}
 }
 
