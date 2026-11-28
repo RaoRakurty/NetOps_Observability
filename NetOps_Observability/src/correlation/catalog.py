@@ -2014,7 +2014,7 @@ BUILTIN_TEMPLATES: list[dict] = [
         # mandatory clause (the optional duplicate is gone: it would only have
         # padded coverage and the satisfied count).
         "id": "sig.ent.wan-edge.sdwan-control-connection-loss",
-        "title": "SD-WAN controller/control-connection loss",
+        "title": "An SD-WAN edge lost its control connections",
         "domain": "ent.wan-edge",
         "seams": ["WAN_SDWAN"],
         "deployment_scope": "hybrid",
@@ -2037,16 +2037,24 @@ BUILTIN_TEMPLATES: list[dict] = [
         "direction_expect": "controller -> control-connections -> edge-policy/steering",
         "verdict": {
             "owner": "sdwan_vendor", "layer": "control-plane (SD-WAN)",
+            # Wording tuned 2026-11-25 (owner: "good opportunity to tune the
+            # wordings"), after the tracker-399 drill on cEDGE-80. Text only:
+            # requires, discriminators, owner and layer are unchanged.
             "first_steps": [
-                "Check controller/orchestrator reachability from the affected edges",
-                "Verify certificates and clock state (the classic control-connection killers)",
-                "Confirm which data tunnels still forward — control loss does not mean data down",
+                "On the edge, list its control connections and their recent history: which controllers dropped, when, and the reason given",
+                "If it lost every controller at once, check the edge's own WAN link first (interface, provider circuit, the NAT or firewall in front of it)",
+                "If it lost only one controller, check that controller's reachability, certificate and clock",
+                "Confirm the control connections and the overlay tunnels came back, and whether the site's traffic was affected",
             ],
         },
-        "operator_phrase": "Control-plane connectivity to SD-WAN management has failed — data paths may not all be down, but steering and policy are stale.",
-        "manager_phrase": "WAN orchestration visibility and control is impaired, which can destabilize path steering and failover.",
-        "blast_radius": "policy/steering for edges that lost the controller",
-        "false_positives": ["controller maintenance", "certificate rotation window", "management-plane-only outage"],
+        "operator_phrase": "Possibly a problem at this edge or on its WAN link: it lost its control connections to the SD-WAN controllers. Traffic on existing tunnels can keep flowing, but the edge gets no new routes or policy until the connections return.",
+        "manager_phrase": "One site briefly lost contact with the SD-WAN control system; its traffic can continue on existing paths, but changes and failover may be delayed until contact returns.",
+        "blast_radius": "this edge: its overlay routes, centralized policy and traffic steering; other sites only if they report the same loss",
+        "false_positives": [
+            "an operator resetting the edge's control connections on purpose",
+            "planned controller maintenance or upgrade",
+            "a certificate rotation window",
+        ],
     },
     {
         # 2026-11-10 lab outage: the vSmart was shut down; every edge lost its

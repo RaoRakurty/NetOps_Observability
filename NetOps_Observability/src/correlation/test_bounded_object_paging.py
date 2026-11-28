@@ -158,7 +158,14 @@ T0 = datetime(2026, 6, 12, 9, 42, 0, tzinfo=timezone.utc)
 # ENGINE_SEMVER patched back to "3.7.0": it reproduces "512e7460b9882afd" exactly,
 # so `engine` is the ONLY moved input. This object has no threshold alarm and no
 # busy-poll device, and run_window never passes through the dwell.
-FIXTURE_GOLDEN = "b858f8f799a7c861"
+# RE-FROZEN, 2026-11-28, tracker 397 wording (owner 2026-11-25: "good opportunity
+# to tune the wordings"; was "b858f8f799a7c861" on main 1dc7faa24). Only the
+# narration TEXT of `sdwan-control-connection-loss` changed (title, phrases, blast
+# radius, first steps, false positives), which moves the catalog hash. CHECKED by
+# diffing every hashed input (nodes, signals, edges, hypotheses blob parsed, engine)
+# against 1dc7faa24: the ONLY differing leaf is `hypotheses/ranking/catalog_version`
+# (cat-f10d1a9e8e6b -> cat-41ba3a5ccb26). ENGINE_SEMVER does not move.
+FIXTURE_GOLDEN = "99d7e94e02151d9f"
 
 
 def _sig(kind, et, eid, *, off=0.0, src=Source.METRIC, sev=Severity.HIGH,

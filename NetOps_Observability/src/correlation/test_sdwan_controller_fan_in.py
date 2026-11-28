@@ -410,6 +410,29 @@ def test_one_edge_losing_its_control_connection_is_a_local_cause():
     assert all(h.confidence_rank == 0.0 for h in ctl), "no fan-in, no controller verdict"
 
 
+def test_the_edge_local_reading_speaks_plainly():
+    """Owner 2026-11-25: "good opportunity to tune the wordings". The edge-local
+    reading follows the RCA wording rules: an honest "possibly", the fault place
+    named (this edge or its WAN link), what still works said plainly, the
+    controller-vs-transport triage in the first steps, no raw counts."""
+    local = _hyp(_objects([control_down("vEdge-20", 0), bfd_down("vEdge-20", 15)])[0]
+                 .ranking, LOCAL)
+    assert local.operator_phrase.startswith(
+        "Possibly a problem at this edge or on its WAN link")
+    assert "existing tunnels can keep flowing" in local.operator_phrase
+    assert "no new routes or policy" in local.operator_phrase
+    assert "One site" in local.manager_phrase
+    assert local.blast_radius.startswith("this edge")
+    steps = " ".join(local.first_steps)
+    assert "lost every controller at once" in steps and "WAN link" in steps
+    assert "lost only one controller" in steps
+    assert any("on purpose" in fp for fp in local.false_positives)
+    # Jargon the old text leaned on, and raw counts, stay out of the operator view.
+    for text in (local.operator_phrase, local.manager_phrase, local.blast_radius):
+        assert "orchestrat" not in text.lower() and "stale" not in text
+        assert not any(ch.isdigit() for ch in text)
+
+
 def test_controller_up_but_one_edges_wan_down_is_not_the_controller():
     """The edge's transport fails: it loses the vSmart AND the vManage, its BFD
     and its WAN link. Only one edge — no fan-in."""
