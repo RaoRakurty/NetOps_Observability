@@ -470,10 +470,10 @@ States are `open|closed|merged` only; there is no "stable" (init.sql:442).
 
 **Storm mode.**
 - Entered at buffer ≥90% or oldest pending ≥120 s; exits at ≤45% (M:1220-1269).
-- The backlog arm measures ENGINE backlog (3.9.0, `main.backlog_age_s`): a pending signal on a
+- **Dormant (3.9.0, default OFF until the t-storm-2.5k rerun, tracker 492):** the backlog arm can measure ENGINE backlog (`main.backlog_age_s`): a pending signal on a
   polled path (`via_controller`, `via_cloud_api`) or stamped at an episode onset (`phase=onset`) is
   old on arrival, not behind, and is ignored (counted `corr_storm_backlog_lagging_ignored_total`;
-  kill switch `CORR_STORM_BACKLOG_EXCLUDE_LAGGING=0`). Before it one vManage poll tripped the arm:
+  `CORR_STORM_BACKLOG_EXCLUDE_LAGGING=1` turns it on; the default is the 3.8.0 arm). Today one vManage poll trips the arm:
   storm mode 21 % of a quiet lab day with the window ≤ 167 signals.
 - In storm mode: smaller cohorts, severity-ordered persistence, node dedup that leaves
   the verdict unchanged (E:3413-3452), and a single per-tenant noise object for
@@ -928,7 +928,7 @@ The rig gate is `scripts/scale-miniladder.py` t-storm-2.5k (INVARIANTS.md §10).
   controller fan-in, 3.5.0 since owner D1–D3, 3.6.0 since the tracker-397 control-session
   rung, 3.7.0 since the 2026-11-24 traffic-judgement decisions, 3.8.0 since the tracker-489
   resource-threshold dwell and busy-poll CPU context, 3.9.0 since the 2026-11-25 controller
-  dwell, path-hop hub cap, storm arm and controller-resource template); byte-identical when no
+  dwell, path-hop hub cap and controller-resource template, with the storm-arm change dormant); byte-identical when no
   tunnel rows exist. The verdict tier still
   stays suspected for controller-only evidence until T2 changes the witness rule.
 - Controller evidence later than 516.5 s behind the watermark never correlates. vManage

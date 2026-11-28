@@ -70,7 +70,7 @@ from signals import (
 from verdicts import Verdict as GateVerdict
 from verdicts import VerdictTier
 
-ENGINE_SEMVER = "3.9.0"  # 3.9.0 = controller dwell (event time) + path-hop hub cap + storm arm + controller-resource template.
+ENGINE_SEMVER = "3.9.0"  # 3.9.0 = controller dwell (event time) + path-hop hub cap + controller-resource template (+ storm arm, dormant).
 # 3.9.0: owner decisions 2026-11-25 (items 7–10). Lab, 7 days: controller-relayed
 # cpu-usage events (mean lag 280 s) sat in 1,164 objects as controller_alarm; the
 # prober reaches all 7 edges through vEdge-20 (7 of 8 path observations), welding
@@ -81,9 +81,10 @@ ENGINE_SEMVER = "3.9.0"  # 3.9.0 = controller dwell (event time) + path-hop hub 
 #     device_resource_anomaly[_clear] with `resource` and `node_role` hints, lifted
 #     into attrs (controller_events.py); Source.CONTROLLER joins the resource dwell
 #     on EVENT time (resource_dwell.py §3; kill switch CORR_RESOURCE_DWELL_POLLED=0).
-#   stage [3] the storm backlog-age arm ignores evidence old on arrival: polled
+#   stage [3] the storm backlog-age arm CAN ignore evidence old on arrival: polled
 #     paths (via_controller, via_cloud_api) and onset-stamped episodes
-#     (main.backlog_age_s; kill switch CORR_STORM_BACKLOG_EXCLUDE_LAGGING=0).
+#     (main.backlog_age_s). SHIPS DORMANT: CORR_STORM_BACKLOG_EXCLUDE_LAGGING
+#     defaults OFF (3.8.0 behaviour) until the t-storm-2.5k rerun (tracker 492).
 #   stage [4] path-hop hub cap (path_graph.CORR_PATH_HOP_HUB_CAP = 3, 0 = off): a
 #     transit hop on a vantage's paths to > 3 destinations grounds a pair through a
 #     shared observation only when one node's signal is about that path.

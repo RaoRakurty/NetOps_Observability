@@ -5,7 +5,8 @@
 
   [1] controller-relayed CPU / memory thresholds join the resource dwell, on EVENT
       time (resource_dwell.py §3; nms/vmanage_kinds.go maps them).
-  [3] the storm backlog-age arm ignores evidence old on arrival (main.backlog_age_s).
+  [3] the storm backlog-age arm CAN ignore evidence old on arrival (main.backlog_age_s);
+      ships DORMANT (default OFF) until the t-storm-2.5k rerun (tracker 492).
   [4] the path-hop hub cap (path_graph.CORR_PATH_HOP_HUB_CAP).
   [6] sig.ent.wan-edge.sdwan-controller-resource-sustained.
 
@@ -360,6 +361,34 @@ def test_backlog_age_ignores_polled_and_onset_evidence(monkeypatch):
     behind = _syslog(400, n=1)                 # a live signal the engine is behind on
     assert main.backlog_age_s([polled, behind], window + [behind]) == 200.0
     assert main._storm_state.__name__          # the arm's consumer is unchanged
+
+
+def _switch_at_import(env: dict) -> str:
+    """CORR_STORM_BACKLOG_EXCLUDE_LAGGING as main parses it at import."""
+    import os
+    import subprocess
+    import sys
+    clean = {k: v for k, v in os.environ.items() if k != "CORR_STORM_BACKLOG_EXCLUDE_LAGGING"}
+    out = subprocess.run(
+        [sys.executable, "-c", "import main; print(main.CORR_STORM_BACKLOG_EXCLUDE_LAGGING)"],
+        env={**clean, **env}, cwd=os.path.dirname(os.path.abspath(__file__)),
+        capture_output=True, text=True, timeout=300, check=True)
+    return out.stdout.strip().splitlines()[-1]
+
+
+def test_the_storm_arm_change_ships_dormant():
+    # Owner 2026-11-25: rerun t-storm-2.5k before it goes live (tracker 492).
+    assert _switch_at_import({}) == "False"
+    assert _switch_at_import({"CORR_STORM_BACKLOG_EXCLUDE_LAGGING": "1"}) == "True"
+    assert _switch_at_import({"CORR_STORM_BACKLOG_EXCLUDE_LAGGING": "0"}) == "False"
+
+
+def test_backlog_age_default_off_is_3_8_0(monkeypatch):
+    monkeypatch.delenv("CORR_STORM_BACKLOG_EXCLUDE_LAGGING", raising=False)
+    live, polled, onset = _syslog(600), _ctl(RAISE, 300), _onset_episode(200)
+    # OFF: every pending signal counts, polled and onset included — the 3.8.0 arm.
+    monkeypatch.setattr(main, "CORR_STORM_BACKLOG_EXCLUDE_LAGGING", False)
+    assert main.backlog_age_s([polled, onset, live], [polled, onset, live]) == 400.0
 
 
 def test_backlog_age_kill_switch_is_3_8_0(monkeypatch):

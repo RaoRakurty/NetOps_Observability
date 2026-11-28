@@ -1402,11 +1402,14 @@ def _storm_state(buffered: int, maxlen: int, oldest_pending_age_s: float = 0.0) 
 # CUSUM onset. Each made the arm read "behind" while the engine was current: one
 # 5-minute poll alone is past the 120 s threshold, so the lab sat in storm mode
 # (smaller cohorts, noise objects) on a quiet fabric. Pure function of window
-# content, so the recorded flag stays replay-deterministic. Kill switch
-# CORR_STORM_BACKLOG_EXCLUDE_LAGGING=0 restores 3.8.0 (every pending signal counts).
+# content, so the recorded flag stays replay-deterministic.
+# SHIPS DORMANT (owner 2026-11-25: "rerun the storm benchmark" before it goes
+# live): CORR_STORM_BACKLOG_EXCLUDE_LAGGING defaults OFF = 3.8.0 (every pending
+# signal counts); =1 turns it on. Flip the default only after t-storm-2.5k passes
+# with it on (tracker 492).
 STORM_LAGGING_PATHS: frozenset[str] = frozenset({"via_controller", "via_cloud_api"})
 CORR_STORM_BACKLOG_EXCLUDE_LAGGING = os.environ.get(
-    "CORR_STORM_BACKLOG_EXCLUDE_LAGGING", "1").strip().lower() not in ("0", "false", "no", "off")
+    "CORR_STORM_BACKLOG_EXCLUDE_LAGGING", "0").strip().lower() in ("1", "true", "yes", "on")
 STORM_BACKLOG_LAGGING_IGNORED = 0   # pending signals the arm ignored (cumulative, per epoch)
 
 
@@ -4467,7 +4470,8 @@ async def _begin_epoch(now: datetime) -> _EngineEpoch:
         # still-unevaluated signal, measured against the newest retained event — pure
         # event-time, no wall-clock, so the recorded storm flag stays replay-deterministic.
         # 3.9.0: evidence old on arrival (polled lanes, onset-stamped episodes) is
-        # not backlog (backlog_age_s; kill switch CORR_STORM_BACKLOG_EXCLUDE_LAGGING).
+        # not backlog — DORMANT by default (backlog_age_s;
+        # CORR_STORM_BACKLOG_EXCLUDE_LAGGING=1 turns it on, tracker 492).
         _oldest_pending_age_s = backlog_age_s(pending_signals(), WINDOW_BUFFER)
         ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1,
                                 _oldest_pending_age_s)
@@ -16401,6 +16405,7 @@ def _health_payload() -> dict:
             # 3.9.0: the storm backlog arm's ignored lagging evidence; the path-hop
             # hub cap's skipped shared observations.
             "storm_backlog_lagging_ignored": STORM_BACKLOG_LAGGING_IGNORED,
+            "storm_backlog_exclude_lagging": CORR_STORM_BACKLOG_EXCLUDE_LAGGING,
             "path_hop_hub_skipped": path_hop_hub_skipped_total(),
             # P6 PR-E stage [1] canonicalisation (CORR_IDENTITY_CANON): calls by
             # overall outcome across lanes; the per-lane/axis split is
