@@ -123,6 +123,7 @@ enrichment_tables:
       model: string
       site: string
       role: string
+      name: string
 
 # ----------------------------------------------------------------------------
 # SOURCES
@@ -647,6 +648,7 @@ transforms:
       # all: the engine and the admission stamp narrow their grammars on it.
       del(.vendor_source)
       del(.device_id)
+      del(.device_name)
       del(.model)
       del(.site)
       del(.role)
@@ -1585,6 +1587,8 @@ transforms:
         cx_pk_host = .hostname
         cx_pk_device = string(cx_inv.device_id) ?? ""
         if cx_pk_device == "" { cx_pk_device = cx_pk_host }
+        cx_pk_dname = string(cx_inv.name) ?? ""
+        if cx_pk_dname != "" && cx_pk_host == (string(.source_ip) ?? "") { cx_pk_host = cx_pk_dname }
         cx_pk_ts = .timestamp
         if is_string(cx_pk_ts) { cx_pk_ts = parse_timestamp(string!(cx_pk_ts), "%+") ?? null }
         cx_pk_minute = ""
@@ -1804,6 +1808,12 @@ transforms:
       if cx_inv_v != "" { .site = cx_inv_v }
       cx_inv_v = string(cx_inv.role) ?? ""
       if cx_inv_v != "" { .role = cx_inv_v }
+      # The device's display name (its hostname as the inventory knows it). It never
+      # replaces .hostname — the registry KEY the engine re-derives the tenant from —
+      # it only names the device where a frame carried no hostname of its own
+      # (owner rule 2026-11-23: hostnames, never addresses, as a device's name).
+      cx_inv_v = string(cx_inv.name) ?? ""
+      if cx_inv_v != "" { .device_name = cx_inv_v }
 
       # ── Structured-body parsers (#31): turn the vendor log body into canonical
       # normalized fields (subsystem/facility/event_type/summary + embedded

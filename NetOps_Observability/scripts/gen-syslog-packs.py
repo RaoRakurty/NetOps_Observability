@@ -259,6 +259,12 @@ def _event_model_epilogue(rows: list[dict], tables: dict[str, dict]) -> list[str
            "  cx_pk_host = .hostname",
            '  cx_pk_device = string(cx_inv.device_id) ?? ""',
            '  if cx_pk_device == "" { cx_pk_device = cx_pk_host }',
+           # %host is what a title SHOWS: a frame with no hostname of its own (an
+           # rfc3164 IOS sender writes none, so its host is the source address) is
+           # named by the inventory's display name. %device and the record's
+           # .hostname (the registry key) are untouched (syslog_packs.display_host).
+           '  cx_pk_dname = string(cx_inv.name) ?? ""',
+           '  if cx_pk_dname != "" && cx_pk_host == (string(.source_ip) ?? "") { cx_pk_host = cx_pk_dname }',
            # The record's event time as its UTC minute (syslog_packs.record_minute); a
            # string time must state its zone, as the Python executor requires.
            "  cx_pk_ts = .timestamp",
