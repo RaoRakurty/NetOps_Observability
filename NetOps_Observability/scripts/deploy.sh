@@ -274,7 +274,18 @@ fi
 # apt install on a cold build cache, past the deploy timeout) and could restart
 # the TPM custody sidecar, whose unclean stops cause dictionary-attack lockouts.
 # A build failure happens BEFORE the running stack is touched.
-log "building ${SERVICES[*]}…"
+# Build identity: stamp the commit and build time into the images (the api reports
+# them at /admin/version; the stack watchdog flags "BUILD UNIDENTIFIED" when the api
+# was built without GIT_SHA). An operator-supplied GIT_SHA/BUILD_TIME wins.
+if [ -z "${GIT_SHA:-}" ]; then
+  if ! GIT_SHA="$(git -C "$ROOT" rev-parse HEAD 2>&1)"; then
+    warn "cannot read the git commit for the build identity ($(printf '%s' "$GIT_SHA" | head -1)) — the image will report buildSHA=unknown"
+    GIT_SHA=unknown
+  fi
+fi
+export GIT_SHA
+export BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+log "building ${SERVICES[*]} (commit ${GIT_SHA:0:12})…"
 if ! dc build "${SERVICES[@]}"; then
   die "image build failed — running stack left UNTOUCHED."; exit 1
 fi
