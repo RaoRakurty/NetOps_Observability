@@ -209,6 +209,9 @@ func TestNoMappedKindIsAnOrphan(t *testing.T) {
 		"controller_bfd_down": true, "controller_control_connection_loss": true,
 		"bgp_adjacency_change": true, "ospf_adjacency_change": true, "link_state_change": true,
 		"device_restart": true, "controller_policy_change": true, "transceiver_unsupported": true,
+		// Owner 2026-11-25 (ENGINE_SEMVER 3.9.0): CPU / memory thresholds — the
+		// kind the trap and syslog lanes already emit, held by the resource dwell.
+		"device_resource_anomaly": true,
 	}
 	for r, k := range vmanageAlarmKinds {
 		if !allowed[k.Kind] {

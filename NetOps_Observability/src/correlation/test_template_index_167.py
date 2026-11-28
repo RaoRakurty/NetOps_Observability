@@ -483,8 +483,10 @@ def test_MUTANT_no_fast_path_drives_the_ratio_to_one(counters, monkeypatch):
     # ap-down-power (no wireless_ap_down) and private-interconnect-bgp-down (its
     # BGP anchor is DEVICE-level; this bgp signal is interface-typed) sit out, and
     # (owner 2026-11-24) dia-egress-corroborated, both of whose clauses are
-    # anchors — this evidence carries no probe.
-    anchored_out = 5
+    # anchors — this evidence carries no probe. ENGINE_SEMVER 3.9.0 added
+    # sdwan-controller-resource-sustained, anchored on device_resource_anomaly with
+    # node_role=controller — absent here, so it sits out too.
+    anchored_out = 6
     assert st_mutant["candidates"] == len(ALL_TEMPLATES)
     assert st_mutant["scored"] + st_mutant["ungrounded"] == len(ALL_TEMPLATES) - anchored_out
     assert st_mutant["scored"] > st_indexed["scored"], (

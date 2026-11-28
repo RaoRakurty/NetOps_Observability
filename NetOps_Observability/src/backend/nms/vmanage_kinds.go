@@ -33,11 +33,24 @@ type vmAlarmKind struct {
 	Kind      string
 	StateKind string // the ControllerState kind it also feeds ("" = none)
 	Recovery  bool
+	// Resource names the resource a THRESHOLD alarm is about ("cpu" | "memory"),
+	// riding to the engine as correlation_hints.resource: stage [1]
+	// (controller_events.py) lifts it into the signal's `resource` attr, so the
+	// resource dwell (resource_dwell.py, tracker 489 / ENGINE_SEMVER 3.9.0) holds
+	// a controller-relayed raise exactly like the device's own trap or syslog.
+	Resource string
 }
 
 func down(kind, state string) vmAlarmKind { return vmAlarmKind{Kind: kind, StateKind: state} }
 func up(kind, state string) vmAlarmKind {
 	return vmAlarmKind{Kind: kind, StateKind: state, Recovery: true}
+}
+
+// resourceThreshold is a CPU / memory threshold alarm: canonical
+// device_resource_anomaly evidence (owner 2026-11-25), its clear the alarm
+// clearing (active=false → `_clear`, like every other rule).
+func resourceThreshold(res string) vmAlarmKind {
+	return vmAlarmKind{Kind: "device_resource_anomaly", Resource: res}
 }
 
 // vmanageAlarmKinds maps a vManage alarm rule to its canonical kind.
@@ -97,13 +110,17 @@ var vmanageAlarmKinds = map[string]vmAlarmKind{
 	"Org_Name_Change":      down("controller_policy_change", ""),
 	// Physical layer.
 	"Unsupported_SFP_Detected": down("transceiver_unsupported", ""),
+	// Resource thresholds (owner 2026-11-25, ENGINE_SEMVER 3.9.0): canonical
+	// device_resource_anomaly evidence, held by the engine's resource dwell like
+	// the device's own threshold trap / syslog. Until then they stayed
+	// controller_alarm and a 4-second flap opened its own case.
+	"CPU_Usage":    resourceThreshold("cpu"),
+	"Memory_Usage": resourceThreshold("memory"),
 }
 
 // vmanageUnclassifiedAlarms are the rules that stay `controller_alarm` on
 // purpose, each with the reason it is not (yet) canonical state evidence.
 var vmanageUnclassifiedAlarms = map[string]string{
-	"CPU_Usage":                                 "resource threshold — canonical resource evidence is the metric episode (E3)",
-	"Memory_Usage":                              "resource threshold — canonical resource evidence is the metric episode (E3)",
 	"Disk_Usage":                                "resource threshold — canonical resource evidence is the metric episode (E3)",
 	"Vmanage_Critical_Space_Usage":              "the controller's own disk, not the managed network",
 	"vManage_Queue_State":                       "the controller's own processing queue",
@@ -179,6 +196,13 @@ type vmEventKind struct {
 	// into the signal's `link_cause` attr, so stages [5]/[6] treat it like the
 	// syslog lane's admin-down (tracker 385/388c). "" = the name does not say.
 	LinkCause string
+	// Resource: see vmAlarmKind.Resource ("cpu" | "memory").
+	Resource string
+	// RecoveryText marks a recovery for an event with no state key: a details
+	// VALUE containing it (case-insensitive) is the recovery. vManage's
+	// cpu-usage event says "warning=System cpu usage back to normal level"
+	// (recorded: testdata/vmanage_20.6/events.json).
+	RecoveryText string
 }
 
 // vmanageEventKinds maps /dataservice/event names to canonical kinds.
@@ -196,6 +220,11 @@ var vmanageEventKinds = map[string]vmEventKind{
 	"omp-peer-state-change":           {Kind: "controller_control_connection_loss", StateKind: "omp", StateKey: "new-state", Up: []string{"up"}},
 	"system-reboot-complete":          {Kind: "device_restart"},
 	"system-reboot-issued":            {Kind: "device_restart"},
+	// Resource thresholds (owner 2026-11-25, ENGINE_SEMVER 3.9.0). cpu-usage is
+	// lab-recorded (above N% / critically high / back to normal); memory-usage
+	// follows the same grammar (3 lab rows in 7 days, "is above N%").
+	"cpu-usage":    {Kind: "device_resource_anomaly", Resource: "cpu", RecoveryText: "back to normal"},
+	"memory-usage": {Kind: "device_resource_anomaly", Resource: "memory", RecoveryText: "back to normal"},
 }
 
 // vmanageEventKind returns the canonical kind for a device event and whether
@@ -214,7 +243,32 @@ func vmanageEventKind(name string, det map[string]string) (vmEventKind, bool, bo
 			}
 		}
 	}
+	if k.StateKey == "" && k.RecoveryText != "" {
+		needle := strings.ToLower(k.RecoveryText)
+		for _, v := range det {
+			if strings.Contains(strings.ToLower(v), needle) {
+				recovery = true
+				break
+			}
+		}
+	}
 	return k, recovery, true
+}
+
+// vmNodeRole is the SD-WAN role of the device an event concerns, from its
+// `device_type` (recorded: vedge | vmanage; documented: vsmart | vbond). A
+// controller node's own resource is the controller's health, not an edge's —
+// the engine's sustained-controller-resource template reads it (stage [1]
+// lifts correlation_hints.node_role into the signal's `node_role` attr). ""
+// when the type names neither.
+func vmNodeRole(deviceType string) string {
+	switch strings.ToLower(strings.TrimSpace(deviceType)) {
+	case "vmanage", "vsmart", "vbond":
+		return "controller"
+	case "vedge", "cedge":
+		return "edge"
+	}
+	return ""
 }
 
 // vmValue returns the first non-empty string value for any of keys across a

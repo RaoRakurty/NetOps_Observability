@@ -396,7 +396,11 @@ def fidelity_of(sig: Signal) -> str:
 # rank_memo projection (rank_memo.signal_projection walks this set). The catalog
 # validator, the scorer and the memo key all read through `clause_attr`, so what
 # is keyed cannot drift from what is scored.
-CLAUSE_ATTR_KEYS: frozenset[str] = frozenset({"link_cause"})
+# ENGINE_SEMVER 3.9.0 (owner 2026-11-25): `node_role` — the SD-WAN role a
+# controller connector STATES for the node an event concerns ("controller" |
+# "edge"; controller_events.controller_node_role), read by the
+# sustained-controller-resource template.
+CLAUSE_ATTR_KEYS: frozenset[str] = frozenset({"link_cause", "node_role"})
 CLAUSE_ATTR_MAX_LEN = 64
 
 

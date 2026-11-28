@@ -177,6 +177,9 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 			SystemIP  string `json:"system_ip"`
 			HostName  string `json:"host_name"`
 			Details   string `json:"details"`
+			// vedge | vmanage (recorded) · vsmart | vbond (documented): the
+			// SD-WAN role of the node the event concerns (vmNodeRole).
+			DeviceType string `json:"device_type"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -222,10 +225,10 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 		recovery := false
 		// Canonical kind from the event name (vmanage_kinds.go); direction from
 		// the event's own new-state detail, never from polling.
-		linkCause := ""
+		linkCause, resource := "", ""
 		if k, rec, ok := vmanageEventKind(r.EventName, det); ok {
 			normType, stateKind, recovery = k.Kind, k.StateKind, rec
-			linkCause = k.LinkCause
+			linkCause, resource = k.LinkCause, k.Resource
 			if !recovery && k.StateKey != "" {
 				severity = "high" // a session / link going down — the trap rules' severity
 			}
@@ -269,6 +272,14 @@ func vmanageEventsTransform(tenant, integrationID string, raw []byte, mem *vmBGP
 			// The event's own name states the cause (vmanage_kinds.go LinkCause):
 			// an admin shutdown is an operator change, not a fault (tracker 388c).
 			e.CorrelationHints["link_cause"] = linkCause
+		}
+		if resource != "" {
+			// A CPU / memory threshold event (owner 2026-11-25): the engine's
+			// resource dwell keys on it, so a 4-second flap is held, not a case.
+			e.CorrelationHints["resource"] = resource
+		}
+		if role := vmNodeRole(r.DeviceType); role != "" {
+			e.CorrelationHints["node_role"] = role
 		}
 		if recovery {
 			e.NormalizedEventType += "_clear"

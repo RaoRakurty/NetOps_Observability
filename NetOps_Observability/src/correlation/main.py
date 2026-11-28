@@ -179,7 +179,11 @@ from path_assembly import (
     measured_run_from_observation,
 )
 from path_direction import resolve_path_order, traceroute_direction_source
-from path_graph import PathGraphView
+from path_graph import (
+    PathGraphView,
+    path_hop_hub_metric_lines,
+    path_hop_hub_skipped_total,
+)
 from proactive import (
     ProactiveEvent,
     ProactiveMonitor,
@@ -1390,6 +1394,46 @@ def _storm_state(buffered: int, maxlen: int, oldest_pending_age_s: float = 0.0) 
         buffer_arm = frac >= STORM_BUFFER_FRACTION
     _STORM_ACTIVE = buffer_arm or backlog_arm
     return _STORM_ACTIVE
+
+
+# 3.9.0 (owner 2026-11-25) stage [3]: the backlog-age arm measures ENGINE backlog,
+# so it ignores evidence that is old ON ARRIVAL — a polled lane's record (vManage
+# events: mean lag 280 s on the lab; cloud APIs) and an episode stamped at its
+# CUSUM onset. Each made the arm read "behind" while the engine was current: one
+# 5-minute poll alone is past the 120 s threshold, so the lab sat in storm mode
+# (smaller cohorts, noise objects) on a quiet fabric. Pure function of window
+# content, so the recorded flag stays replay-deterministic. Kill switch
+# CORR_STORM_BACKLOG_EXCLUDE_LAGGING=0 restores 3.8.0 (every pending signal counts).
+STORM_LAGGING_PATHS: frozenset[str] = frozenset({"via_controller", "via_cloud_api"})
+CORR_STORM_BACKLOG_EXCLUDE_LAGGING = os.environ.get(
+    "CORR_STORM_BACKLOG_EXCLUDE_LAGGING", "1").strip().lower() not in ("0", "false", "no", "off")
+STORM_BACKLOG_LAGGING_IGNORED = 0   # pending signals the arm ignored (cumulative, per epoch)
+
+
+def lagging_on_arrival(sig: Signal) -> bool:
+    """True when `sig` is old by construction, not by engine backlog: a polled
+    lane's record (collection path, any `:instance` suffix ignored) or an
+    onset-stamped episode."""
+    path = (sig.observer.collection_path or "").split(":", 1)[0]
+    return path in STORM_LAGGING_PATHS or sig.attrs.get("phase") == "onset"
+
+
+def backlog_age_s(pending: list[Signal], window: Iterable[Signal]) -> float:
+    """The backlog-age arm's input: the event-time age of the oldest pending
+    signal that counts, against the newest retained one. 0.0 when nothing counts."""
+    global STORM_BACKLOG_LAGGING_IGNORED
+    if not pending:
+        return 0.0
+    counted = pending
+    if CORR_STORM_BACKLOG_EXCLUDE_LAGGING:
+        counted = [s for s in pending if not lagging_on_arrival(s)]
+        STORM_BACKLOG_LAGGING_IGNORED += len(pending) - len(counted)
+    if not counted:
+        return 0.0
+    newest = max((s.ts.timestamp() for s in window), default=None)
+    if newest is None:
+        return 0.0
+    return max(0.0, newest - min(s.ts.timestamp() for s in counted))
 # Path-causality RCA P2 (design §2.4): assemble the tenant's typed causal paths from
 # the LIVE measured path observations and hand them to run_window for the on-path
 # attribution enrichment. Additive + killable; a pure no-op when no path is observed.
@@ -2262,6 +2306,11 @@ def buffer_signal(sig: Signal, *, dwell_released: bool = False) -> None:
     # counted; its raw row is already in corr_signals), and a busy-poll platform's
     # CPU signal is recast to context. Keyed by the tenant-canonical device, so a
     # trap (`vedge-20-…`) and its syslog twin (`vEdge-20`) are one condition.
+    # 3.9.0 (owner 2026-11-25): a controller-relayed threshold is dwelled on EVENT
+    # time — every controller signal advances its integration's lane watermark
+    # first, the clock that proves a polled raise stood.
+    if not dwell_released:
+        RESOURCE_DWELL.observe(sig)
     if threshold_resource(sig) is not None or is_cpu_signal(sig):
         resolver = cached_identity_resolver_for(sig.tenant_id)
         device = resolver.canonical_device(sig.entity_id) or sig.entity_id
@@ -4417,11 +4466,9 @@ async def _begin_epoch(now: datetime) -> _EngineEpoch:
         # Backlog-age arm (design §"Detection tuning"): the event-time age of the oldest
         # still-unevaluated signal, measured against the newest retained event — pure
         # event-time, no wall-clock, so the recorded storm flag stays replay-deterministic.
-        _pend = pending_signals()
-        _oldest_pending_age_s = 0.0
-        if _pend and WINDOW_BUFFER:
-            _newest_ts = max(s.ts.timestamp() for s in WINDOW_BUFFER)
-            _oldest_pending_age_s = max(0.0, _newest_ts - min(s.ts.timestamp() for s in _pend))
+        # 3.9.0: evidence old on arrival (polled lanes, onset-stamped episodes) is
+        # not backlog (backlog_age_s; kill switch CORR_STORM_BACKLOG_EXCLUDE_LAGGING).
+        _oldest_pending_age_s = backlog_age_s(pending_signals(), WINDOW_BUFFER)
         ep.storm = _storm_state(len(WINDOW_BUFFER), WINDOW_BUFFER.maxlen or 1,
                                 _oldest_pending_age_s)
         if ep.topo_stale or ep.storm:
@@ -13416,6 +13463,8 @@ async def handle_controller_event(ev: dict) -> None:
     not_failure = controller_events_mod.bgp_not_a_session_failure(sig)
     if not_failure:
         controller_events_mod.count_bgp_not_a_session_failure(not_failure)
+        # Still advances the lane's event-time clock (3.9.0 polled dwell).
+        RESOURCE_DWELL.observe(dc_replace(sig, tenant_id=canon_tenant(sig.tenant_id)))
         return
     buffer_signal(sig)
     log.info("controller signal %s: %s", sig.kind, sig.entity_id)
@@ -15407,6 +15456,10 @@ def _metrics_text(health: dict | None = None) -> str:
         "# HELP corr_storm_mode_active 1 while the engine has DECLARED storm mode.",
         "# TYPE corr_storm_mode_active gauge",
         f"corr_storm_mode_active {1 if _STORM_ACTIVE else 0}",
+        ("# HELP corr_storm_backlog_lagging_ignored_total Pending signals the backlog-age "
+         "arm ignored because they were old on arrival (polled lane / onset episode; 3.9.0)."),
+        "# TYPE corr_storm_backlog_lagging_ignored_total counter",
+        f"corr_storm_backlog_lagging_ignored_total {STORM_BACKLOG_LAGGING_IGNORED}",
         "# HELP corr_storm_deduped_total Signal instances collapsed by storm dedup (per-cycle work).",
         "# TYPE corr_storm_deduped_total counter",
         f"corr_storm_deduped_total {STORM_DEDUPED_TOTAL}",
@@ -15651,6 +15704,8 @@ def _metrics_text(health: dict | None = None) -> str:
         *cpu_context_metric_lines(),
         # Tracker 489: the CPU/memory threshold dwell (suppressed flaps, releases).
         *RESOURCE_DWELL.metric_lines(),
+        # 3.9.0: shared observations skipped at a vantage's hub hop.
+        *path_hop_hub_metric_lines(),
         # A7 parser-fidelity weighting (flag CORR_FIDELITY_WEIGHTING). Declared
         # whether or not the flag is on: the pair (enabled gauge, capped
         # counter) is only readable together — a 0 counter means nothing until
@@ -16343,6 +16398,10 @@ def _health_payload() -> dict:
             "metrics_not_scored": METRICS_NOT_SCORED,
             # Tracker 489: CPU/memory threshold raises held, suppressed and released.
             "resource_dwell": RESOURCE_DWELL.health(),
+            # 3.9.0: the storm backlog arm's ignored lagging evidence; the path-hop
+            # hub cap's skipped shared observations.
+            "storm_backlog_lagging_ignored": STORM_BACKLOG_LAGGING_IGNORED,
+            "path_hop_hub_skipped": path_hop_hub_skipped_total(),
             # P6 PR-E stage [1] canonicalisation (CORR_IDENTITY_CANON): calls by
             # overall outcome across lanes; the per-lane/axis split is
             # corr_identity_canon_total on /metrics.

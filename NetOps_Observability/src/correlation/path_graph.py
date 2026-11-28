@@ -53,6 +53,55 @@ CONTRACT_VERSION = 1
 # (§8 "stale observations").
 DEFAULT_FRESHNESS_S = 900.0
 
+# ── path-hop hub cap (owner 2026-11-25, ENGINE_SEMVER 3.9.0) ─────────────────
+#
+# THE DEFECT. Two nodes sharing a path observation relate at rank 3 (§3). A
+# vantage's shared transit hop — its gateway into the fabric — is on EVERY path it
+# measures, so a node on that hop related to every node on every one of them: the
+# lab prober reaches all 7 edges through vEdge-20 (7 of 8 observations), and
+# vEdge-20's CPU flap welded with cEdge-81's BGP flap and every other edge's
+# events into one rolling object. Same class as the rank-7 token hub
+# (engine.CORR_TOKEN_HUB_CAP): a relation every node shares says nothing specific.
+#
+# THE RULE. A responding TRANSIT hop (not an observation's last responding hop) on
+# the paths to more than CORR_PATH_HOP_HUB_CAP distinct destinations of ONE
+# vantage is a hub hop. A membership AT a hub hop grounds a pair through that
+# observation only when one of the two nodes declares the path — its own signal
+# is about that path (a probe on it, §6 rule 5). So the hub failing still grounds
+# to the path symptoms it causes; its unrelated events no longer weld onto every
+# node behind it. Other hops of the same observation are untouched, and so is
+# every other rung (containment, adjacency, seams).
+#
+# VALUE: 3, from data. Destinations are counted, not observations (a path
+# re-observed over time, or one target probed over ICMP + TCP:443 + UDP, is one
+# destination). On the lab the welding hub's fan-out is 7 and every other resolved
+# transit hop's is 0 (path_graph.json, 2026-11-25), so any cap in 1..6 splits it; 3
+# keeps a hop shared by a handful of targets (a site router on the paths to its own
+# few services, a dual-homed pair) grounding as before. Env-overridable; 0 = off
+# (3.8.0, byte-identical). Deterministic: a pure function of the view.
+CORR_PATH_HOP_HUB_CAP = max(0, int(os.environ.get("CORR_PATH_HOP_HUB_CAP", "3")))
+
+# Pairs whose shared observation was skipped at a hub hop (cumulative). Counted by
+# relate_memberships; exposition owned here (path_hop_hub_metric_lines).
+_PATH_HOP_HUB_SKIPPED_TOTAL = 0
+
+
+def path_hop_hub_skipped_total() -> int:
+    return _PATH_HOP_HUB_SKIPPED_TOTAL
+
+
+def path_hop_hub_metric_lines() -> tuple[str, ...]:
+    return (
+        ("# HELP corr_path_hop_hub_skipped_total Pair checks whose shared path "
+         "observation was not a relation because one node sat at a vantage's hub hop "
+         "and neither node's signal was about that path (3.9.0)."),
+        "# TYPE corr_path_hop_hub_skipped_total counter",
+        f"corr_path_hop_hub_skipped_total {_PATH_HOP_HUB_SKIPPED_TOTAL}",
+        "# HELP corr_path_hop_hub_cap Destinations past which a transit hop is a hub.",
+        "# TYPE corr_path_hop_hub_cap gauge",
+        f"corr_path_hop_hub_cap {CORR_PATH_HOP_HUB_CAP}",
+    )
+
 
 # ── §1 provenance ────────────────────────────────────────────────────────────
 
@@ -862,6 +911,47 @@ class _Membership:
     network_context: str
     endpoint_id: str = ""
     is_service: bool = False
+    # 3.9.0 hub cap: the membership sits at a hub hop of its vantage / the node
+    # declares this path (its own signal is about it).
+    hub: bool = False
+    declared: bool = False
+
+
+def _hop_identity(hop: PathHop) -> str:
+    return hop.resolved_entity_ref or hop.observed_address
+
+
+def _destination(obs: PathObservation) -> str:
+    """What an observation measures the way TO: its declared destination, else its
+    last responding hop, else its path id."""
+    if obs.definition and obs.definition.dst_endpoint_ref:
+        return obs.definition.dst_endpoint_ref
+    resp = [h for h in obs.ordered_hops() if h.responding]
+    return _hop_identity(resp[-1]) if resp and _hop_identity(resp[-1]) else obs.path_id
+
+
+def hub_hops(observations: tuple[PathObservation, ...] | list[PathObservation],
+             cap: int) -> dict[str, frozenset[int]]:
+    """observation id → the hop indices that are hub hops in it (see
+    CORR_PATH_HOP_HUB_CAP). Empty when cap <= 0."""
+    if cap <= 0:
+        return {}
+    fan: dict[tuple[str, str], set[str]] = {}
+    transit: dict[str, list[tuple[int, str]]] = {}
+    for obs in observations:
+        resp = [h for h in obs.ordered_hops() if h.responding and _hop_identity(h)]
+        dest = _destination(obs)
+        rows = [(h.hop_index, _hop_identity(h)) for h in resp[:-1]]
+        transit[obs.observation_id] = rows
+        for _idx, ident in rows:
+            fan.setdefault((obs.vantage_id, ident), set()).add(dest)
+    out: dict[str, frozenset[int]] = {}
+    for obs in observations:
+        hubs = frozenset(idx for idx, ident in transit.get(obs.observation_id, ())
+                         if len(fan.get((obs.vantage_id, ident), ())) > cap)
+        if hubs:
+            out[obs.observation_id] = hubs
+    return out
 
 
 class PathIndex:
@@ -873,12 +963,16 @@ class PathIndex:
     run that produced it.
     """
 
-    def __init__(self, view: PathGraphView, tenant_id: str) -> None:
+    def __init__(self, view: PathGraphView, tenant_id: str,
+                 hub_cap: int | None = None) -> None:
         if not tenant_id:
             raise ValueError("PathIndex requires a tenant (§6 rule 1)")
         self.tenant_id = tenant_id
         # §6 rule 1 enforced at construction — nothing from another tenant is reachable.
         self.view = view.for_tenant(tenant_id)
+        # 3.9.0 hub cap, over THIS tenant's observations only.
+        self.hub_cap = CORR_PATH_HOP_HUB_CAP if hub_cap is None else max(0, hub_cap)
+        self._hub_hops = hub_hops(self.view.observations, self.hub_cap)
         self._by_endpoint = {e.endpoint_id: e for e in self.view.endpoints}
         self._svc_by_service: dict[str, list[ServiceBinding]] = {}
         for b in self.view.service_bindings:
@@ -989,6 +1083,13 @@ class PathIndex:
                                        b.evidence_ref, network_context=svc_ep.network_context,
                                        endpoint_id=svc_ep.endpoint_id, is_service=True))
             if best is not None:
+                hubs = self._hub_hops.get(obs.observation_id)
+                if hubs or path_ids:
+                    best = _Membership(
+                        best.observation, best.hop_index, best.method, best.confidence,
+                        best.evidence_ref, best.network_context, best.endpoint_id,
+                        best.is_service, hub=bool(hubs and best.hop_index in hubs),
+                        declared=bool(path_ids))
                 out.append(best)
         return out
 
@@ -1042,9 +1143,15 @@ class PathIndex:
         """relate() over PRECOMPUTED per-node memberships (see node_memberships).
         Byte-identical result to relate(); exists so an O(n²) pair loop does not
         recompute each node's memberships O(n) times."""
+        global _PATH_HOP_HUB_SKIPPED_TOTAL
         best: Relation | None = None
         for oid in sorted(set(ma) & set(mb)):
-            rel = self._relation_from(ma[oid], mb[oid], a_window, b_window)
+            a_m, b_m = ma[oid], mb[oid]
+            # 3.9.0 hub cap: a hub hop relates only to a node that is about the path.
+            if (a_m.hub or b_m.hub) and not (a_m.declared or b_m.declared):
+                _PATH_HOP_HUB_SKIPPED_TOTAL += 1
+                continue
+            rel = self._relation_from(a_m, b_m, a_window, b_window)
             if rel is None:
                 continue
             if best is None or _better(rel, best):

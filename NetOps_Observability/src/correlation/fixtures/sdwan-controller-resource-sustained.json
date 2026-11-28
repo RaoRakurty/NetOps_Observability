@@ -1,0 +1,22 @@
+{
+  "name": "vBond's CPU stood above its threshold past the dwell (lab, 2026-11-25: 976 s), relayed by vManage: a controller overloaded, not an edge fault",
+  "signals": [
+    {
+      "kind": "device_resource_anomaly",
+      "entity_type": "device",
+      "entity_id": "10.255.255.3",
+      "observer_id": "vmanage:nmsi-1",
+      "observer_type": "controller",
+      "collection_path": "via_controller",
+      "modality": "management_plane",
+      "attrs": {"resource": "cpu", "node_role": "controller", "dwell_onset": "2026-11-25T05:43:06+00:00"},
+      "ts_offset_s": 0
+    }
+  ],
+  "expect": {
+    "top": "sig.ent.wan-edge.sdwan-controller-resource-sustained",
+    "tier": "suspected",
+    "min_confidence": 1.0,
+    "owner": "netops"
+  }
+}
